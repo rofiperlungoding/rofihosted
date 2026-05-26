@@ -276,7 +276,7 @@ pub fn annotateBan(cfg: *Config, allocator: std.mem.Allocator, ctx: BanContext) 
         \\"Targeting .env and AWS credentials, likely commodity botnet."
         \\"Censys-style researcher, low-risk."
         \\Output the sentence only, no preamble.
-        ,
+    ,
         prompt.items,
         80,
     );
@@ -319,7 +319,7 @@ pub fn explainIp(cfg: *Config, allocator: std.mem.Allocator, ctx: IpExplainConte
         \\(2) confidence level, (3) recommended action (allow, monitor, block).
         \\No markdown, no headings, plain prose. Be concrete. Do not hedge if the
         \\evidence is clear.
-        ,
+    ,
         prompt.items,
         180,
     );
@@ -362,8 +362,8 @@ pub fn dailyDigest(cfg: *Config, allocator: std.mem.Allocator, ctx: DigestContex
         \\Uptime probes: {d} total, {d} failures
         \\
     , .{
-        ctx.window_hours, ctx.total_visits, ctx.self_visits, ctx.bot_visits,
-        ctx.scanner_visits, ctx.unknown_visits, ctx.distinct_ips, ctx.auto_bans_24h,
+        ctx.window_hours,          ctx.total_visits,      ctx.self_visits,        ctx.bot_visits,
+        ctx.scanner_visits,        ctx.unknown_visits,    ctx.distinct_ips,       ctx.auto_bans_24h,
         ctx.successful_logins_24h, ctx.failed_logins_24h, ctx.uptime_probe_count, ctx.uptime_failures,
     }) catch return null;
     if (ctx.top_scanner_paths.len > 0) {
@@ -383,7 +383,7 @@ pub fn dailyDigest(cfg: *Config, allocator: std.mem.Allocator, ctx: DigestContex
         \\Lead with the headline number. Mention scanner pressure if it is interesting.
         \\Mention any auto-bans. Note login activity only if non-zero.
         \\End with a one-line take. No markdown, no bullet points, no headings.
-        ,
+    ,
         prompt.items,
         260,
     );

@@ -54,11 +54,21 @@ pub fn readBattery(arena: std.mem.Allocator) ?Battery {
     if (parsed != .object) return b;
     const obj = parsed.object;
 
-    if (obj.get("percentage")) |v| if (v == .integer) { b.percentage = @intCast(v.integer); };
-    if (obj.get("status")) |v| if (v == .string) { b.status = v.string; };
-    if (obj.get("plugged")) |v| if (v == .string) { b.plugged = v.string; };
-    if (obj.get("health")) |v| if (v == .string) { b.health = v.string; };
-    if (obj.get("technology")) |v| if (v == .string) { b.technology = v.string; };
+    if (obj.get("percentage")) |v| if (v == .integer) {
+        b.percentage = @intCast(v.integer);
+    };
+    if (obj.get("status")) |v| if (v == .string) {
+        b.status = v.string;
+    };
+    if (obj.get("plugged")) |v| if (v == .string) {
+        b.plugged = v.string;
+    };
+    if (obj.get("health")) |v| if (v == .string) {
+        b.health = v.string;
+    };
+    if (obj.get("technology")) |v| if (v == .string) {
+        b.technology = v.string;
+    };
     if (obj.get("temperature")) |v| {
         switch (v) {
             .float => b.temperature_c = @floatCast(v.float),
@@ -66,8 +76,12 @@ pub fn readBattery(arena: std.mem.Allocator) ?Battery {
             else => {},
         }
     }
-    if (obj.get("voltage")) |v| if (v == .integer) { b.voltage_mv = @intCast(v.integer); };
-    if (obj.get("current")) |v| if (v == .integer) { b.current_ma = @intCast(v.integer); };
+    if (obj.get("voltage")) |v| if (v == .integer) {
+        b.voltage_mv = @intCast(v.integer);
+    };
+    if (obj.get("current")) |v| if (v == .integer) {
+        b.current_ma = @intCast(v.integer);
+    };
     return b;
 }
 
@@ -91,13 +105,27 @@ pub fn readWifi(arena: std.mem.Allocator) ?Wifi {
     if (parsed != .object) return w;
     const obj = parsed.object;
 
-    if (obj.get("ssid")) |v| if (v == .string) { w.ssid = v.string; };
-    if (obj.get("bssid")) |v| if (v == .string) { w.bssid = v.string; };
-    if (obj.get("ip")) |v| if (v == .string) { w.ip = v.string; };
-    if (obj.get("link_speed_mbps")) |v| if (v == .integer) { w.link_speed_mbps = @intCast(v.integer); };
-    if (obj.get("rssi")) |v| if (v == .integer) { w.rssi = @intCast(v.integer); };
-    if (obj.get("frequency_mhz")) |v| if (v == .integer) { w.frequency_mhz = @intCast(v.integer); };
-    if (obj.get("network_id")) |v| if (v == .integer) { w.network_id = @intCast(v.integer); };
+    if (obj.get("ssid")) |v| if (v == .string) {
+        w.ssid = v.string;
+    };
+    if (obj.get("bssid")) |v| if (v == .string) {
+        w.bssid = v.string;
+    };
+    if (obj.get("ip")) |v| if (v == .string) {
+        w.ip = v.string;
+    };
+    if (obj.get("link_speed_mbps")) |v| if (v == .integer) {
+        w.link_speed_mbps = @intCast(v.integer);
+    };
+    if (obj.get("rssi")) |v| if (v == .integer) {
+        w.rssi = @intCast(v.integer);
+    };
+    if (obj.get("frequency_mhz")) |v| if (v == .integer) {
+        w.frequency_mhz = @intCast(v.integer);
+    };
+    if (obj.get("network_id")) |v| if (v == .integer) {
+        w.network_id = @intCast(v.integer);
+    };
     return w;
 }
 

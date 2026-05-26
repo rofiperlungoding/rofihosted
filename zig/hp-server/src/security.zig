@@ -38,35 +38,29 @@ pub const RequestSignals = struct {
 };
 
 const SCANNER_PATH_FRAGMENTS = [_][]const u8{
-    "/wp-admin",     "/wp-login",     "/wp-content",     "/wordpress",     "/wp-includes",
-    "/.env",         "/.git",         "/.aws",           "/.ssh",          "/.htaccess",
-    "/.svn",         "/.DS_Store",    "/.config",
-    "/phpmyadmin",   "/pma/",         "/myadmin",        "/mysql",
-    "/admin/login",  "/administrator","/cpanel",         "/webmail",
-    "/cgi-bin",      "/shell",        "/backup",         "/backup.sql",    "/db.sql",       "/dump.sql",
-    "/config.php",   "/config.json",  "/config.yml",     "/credentials",   "/secret",       "/secrets",
-    "/etc/passwd",   "/etc/shadow",
-    "/server-status","/server-info",
-    "/actuator/",    "/prometheus",   "/grafana",
-    "/owa/",         "/exchange/",
-    "/manager/html", "/host-manager",
-    "/jenkins",      "/gitlab",
-    "/vendor/phpunit","/laravel",
-    "/struts",       "/solr/",        "/elasticsearch",
-    "/eval",         "/exec",         "/cmd?",
-    "/.well-known/openid-configuration",
+    "/wp-admin",      "/wp-login",       "/wp-content",   "/wordpress",     "/wp-includes",
+    "/.env",          "/.git",           "/.aws",         "/.ssh",          "/.htaccess",
+    "/.svn",          "/.DS_Store",      "/.config",      "/phpmyadmin",    "/pma/",
+    "/myadmin",       "/mysql",          "/admin/login",  "/administrator", "/cpanel",
+    "/webmail",       "/cgi-bin",        "/shell",        "/backup",        "/backup.sql",
+    "/db.sql",        "/dump.sql",       "/config.php",   "/config.json",   "/config.yml",
+    "/credentials",   "/secret",         "/secrets",      "/etc/passwd",    "/etc/shadow",
+    "/server-status", "/server-info",    "/actuator/",    "/prometheus",    "/grafana",
+    "/owa/",          "/exchange/",      "/manager/html", "/host-manager",  "/jenkins",
+    "/gitlab",        "/vendor/phpunit", "/laravel",      "/struts",        "/solr/",
+    "/elasticsearch", "/eval",           "/exec",         "/cmd?",          "/.well-known/openid-configuration",
     "//",
 };
 
 const BOT_UA_PATTERNS = [_][]const u8{
-    "bot",      "crawler", "spider",   "scraper",  "fetch",
-    "curl/",    "wget/",   "python-",  "httpx",    "go-http-client",
-    "okhttp",   "aiohttp", "node-fetch", "axios",   "java/",
-    "facebookexternalhit", "twitterbot", "slackbot", "telegrambot",
-    "whatsapp", "linkedinbot", "discordbot",
-    "googlebot", "bingbot", "duckduckbot", "yandexbot", "baiduspider",
-    "ahrefsbot", "semrushbot", "mj12bot", "dotbot", "petalbot", "applebot",
-    "censys", "shodan", "zoomeye", "masscan", "nmap", "nuclei", "nikto",
+    "bot",                 "crawler",       "spider",     "scraper",     "fetch",
+    "curl/",               "wget/",         "python-",    "httpx",       "go-http-client",
+    "okhttp",              "aiohttp",       "node-fetch", "axios",       "java/",
+    "facebookexternalhit", "twitterbot",    "slackbot",   "telegrambot", "whatsapp",
+    "linkedinbot",         "discordbot",    "googlebot",  "bingbot",     "duckduckbot",
+    "yandexbot",           "baiduspider",   "ahrefsbot",  "semrushbot",  "mj12bot",
+    "dotbot",              "petalbot",      "applebot",   "censys",      "shodan",
+    "zoomeye",             "masscan",       "nmap",       "nuclei",      "nikto",
     "internetmeasurement", "cloudflarebot",
 };
 
@@ -526,13 +520,13 @@ pub fn applyHeaders(res: anytype) void {
     res.header(
         "Content-Security-Policy",
         "default-src 'self' https://rofihosted.space https://*.rofihosted.space; " ++
-        "style-src 'self' https://rofihosted.space https://*.rofihosted.space 'unsafe-inline'; " ++
-        "font-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
-        "script-src 'self' https://rofihosted.space https://*.rofihosted.space https://static.cloudflareinsights.com 'unsafe-inline'; " ++
-        "img-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
-        "connect-src 'self' https://rofihosted.space https://*.rofihosted.space https://cloudflareinsights.com; " ++
-        "frame-ancestors 'none'; " ++
-        "base-uri 'self'; " ++
-        "form-action 'self' https://rofihosted.space https://*.rofihosted.space",
+            "style-src 'self' https://rofihosted.space https://*.rofihosted.space 'unsafe-inline'; " ++
+            "font-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
+            "script-src 'self' https://rofihosted.space https://*.rofihosted.space https://static.cloudflareinsights.com 'unsafe-inline'; " ++
+            "img-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
+            "connect-src 'self' https://rofihosted.space https://*.rofihosted.space https://cloudflareinsights.com; " ++
+            "frame-ancestors 'none'; " ++
+            "base-uri 'self'; " ++
+            "form-action 'self' https://rofihosted.space https://*.rofihosted.space",
     );
 }

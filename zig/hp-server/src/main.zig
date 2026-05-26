@@ -703,12 +703,7 @@ fn apiSecurity(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
         if (now - v.visited_at < 3600) requests_last_hour += 1;
         if (now - v.visited_at < 86400) requests_last_24h += 1;
 
-        if (std.mem.eql(u8, v.classification, "self")) totals.self += 1
-        else if (std.mem.eql(u8, v.classification, "unknown")) totals.unknown += 1
-        else if (std.mem.eql(u8, v.classification, "bot")) totals.bot += 1
-        else if (std.mem.eql(u8, v.classification, "scanner")) totals.scanner += 1
-        else if (std.mem.eql(u8, v.classification, "blocked")) totals.blocked += 1
-        else totals.legacy += 1;
+        if (std.mem.eql(u8, v.classification, "self")) totals.self += 1 else if (std.mem.eql(u8, v.classification, "unknown")) totals.unknown += 1 else if (std.mem.eql(u8, v.classification, "bot")) totals.bot += 1 else if (std.mem.eql(u8, v.classification, "scanner")) totals.scanner += 1 else if (std.mem.eql(u8, v.classification, "blocked")) totals.blocked += 1 else totals.legacy += 1;
 
         if (v.status >= 400 and v.status < 500) totals.@"4xx" += 1;
         if (v.status >= 500) totals.@"5xx" += 1;
@@ -823,7 +818,9 @@ fn topIps(arena: std.mem.Allocator, map: *std.StringHashMap(IpAgg), limit: usize
         });
     }
     std.mem.sort(TopIp, entries.items, {}, struct {
-        fn cmp(_: void, a: TopIp, b: TopIp) bool { return a.count > b.count; }
+        fn cmp(_: void, a: TopIp, b: TopIp) bool {
+            return a.count > b.count;
+        }
     }.cmp);
     const n = @min(limit, entries.items.len);
     return entries.items[0..n];
@@ -836,7 +833,9 @@ fn topStrCount(arena: std.mem.Allocator, map: *std.StringHashMap(u32), limit: us
         try entries.append(.{ .value = e.key_ptr.*, .count = e.value_ptr.* });
     }
     std.mem.sort(StrCount, entries.items, {}, struct {
-        fn cmp(_: void, a: StrCount, b: StrCount) bool { return a.count > b.count; }
+        fn cmp(_: void, a: StrCount, b: StrCount) bool {
+            return a.count > b.count;
+        }
     }.cmp);
     const n = @min(limit, entries.items.len);
     return entries.items[0..n];
@@ -1009,7 +1008,13 @@ fn apiBadge(app: *App, _: *httpz.Request, res: *httpz.Response, target_name: []c
         label = target_name;
         for (records) |r| {
             if (std.mem.eql(u8, r.target, target_name)) {
-                if (r.ok) { message = "up"; style = .up; } else { message = "down"; style = .down; }
+                if (r.ok) {
+                    message = "up";
+                    style = .up;
+                } else {
+                    message = "down";
+                    style = .down;
+                }
                 break;
             }
         }

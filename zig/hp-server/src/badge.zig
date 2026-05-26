@@ -36,10 +36,11 @@ pub fn render(allocator: std.mem.Allocator, label: []const u8, message: []const 
         \\  </g>
         \\</svg>
     , .{
-        total_w,    label,         message,
-        total_w,    label_w,       label_w,
-        msg_w,      right_color,   total_w,
-        label_w / 2, label,        label_w / 2, label,
-        label_w + msg_w / 2, message, label_w + msg_w / 2, message,
+        total_w,             label,               message,
+        total_w,             label_w,             label_w,
+        msg_w,               right_color,         total_w,
+        label_w / 2,         label,               label_w / 2,
+        label,               label_w + msg_w / 2, message,
+        label_w + msg_w / 2, message,
     });
 }
