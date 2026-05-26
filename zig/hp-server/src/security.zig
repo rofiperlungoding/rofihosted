@@ -186,6 +186,19 @@ pub const Blocklist = struct {
         }
     }
 
+    /// Update the reason of an existing blocklist entry. Used by the AI annotation
+    /// pipeline to enrich auto-ban reasons after the fact. Idempotent: silently no-ops
+    /// if the IP is no longer blocked (e.g. unblocked in the meantime).
+    pub fn updateReason(self: *Blocklist, ip: []const u8, new_reason: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const entry = self.ips.getPtr(ip) orelse return;
+        const dup = try self.allocator.dupe(u8, new_reason);
+        self.allocator.free(entry.reason);
+        entry.reason = dup;
+        try self.persistLocked();
+    }
+
     pub const PublicEntry = struct {
         ip: []const u8,
         blocked_at: i64,
@@ -300,18 +313,18 @@ pub const AutoBan = struct {
         return ab;
     }
 
-    pub fn recordScannerHit(self: *AutoBan, ip: []const u8) void {
+    pub fn recordScannerHit(self: *AutoBan, ip: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const now = std.time.timestamp();
 
-        const gop = self.counts.getOrPut(ip) catch return;
+        const gop = self.counts.getOrPut(ip) catch return false;
         if (!gop.found_existing) {
-            const dup = self.allocator.dupe(u8, ip) catch return;
+            const dup = self.allocator.dupe(u8, ip) catch return false;
             gop.key_ptr.* = dup;
             gop.value_ptr.* = .{ .scanner_hits = 1, .first_hit = now, .last_hit = now };
-            return;
+            return false;
         }
 
         // Reset window if too old
@@ -319,7 +332,7 @@ pub const AutoBan = struct {
             gop.value_ptr.scanner_hits = 1;
             gop.value_ptr.first_hit = now;
             gop.value_ptr.last_hit = now;
-            return;
+            return false;
         }
 
         gop.value_ptr.scanner_hits += 1;
@@ -331,10 +344,12 @@ pub const AutoBan = struct {
                 ip,
                 "auto: scanner attempts exceeded threshold",
                 SCANNER_BAN_TTL,
-            ) catch {};
+            ) catch return false;
             // Reset counter
             gop.value_ptr.scanner_hits = 0;
+            return true;
         }
+        return false;
     }
 };
 

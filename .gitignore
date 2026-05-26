@@ -21,10 +21,13 @@ b63b2262-*.json
 data/
 *.jsonl
 
-# Environment
+# Environment files (any naming)
 .env
 .env.*
+*.env
 !.env.example
+.hp-server.env
+.hp-server-*.env
 
 # Editor / OS
 .DS_Store

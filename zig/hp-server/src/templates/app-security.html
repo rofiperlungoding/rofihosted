@@ -8,8 +8,8 @@
 <title>Security / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=10">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=10">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=11">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=11">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
@@ -152,6 +152,67 @@
   }
   .info-banner strong { color: var(--text); font-weight: 600; }
   .info-banner [class^="icon-"] { color: var(--accent); margin-right: .35rem; }
+
+  /* AI digest panel */
+  .digest-panel {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 1.1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow);
+  }
+  .digest-head {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;
+    margin-bottom: .9rem; flex-wrap: wrap;
+  }
+  .digest-title {
+    font-size: .92rem; font-weight: 600; color: var(--text); letter-spacing: -0.018em;
+  }
+  .digest-sub {
+    font-size: .72rem; color: var(--text-3); margin-top: .25rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .digest-body {
+    color: var(--text-2); font-size: .9rem; line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  .digest-body.muted { color: var(--text-3); font-style: italic; }
+  .digest-loading { display: inline-flex; gap: .35rem; align-items: center; color: var(--text-3); }
+  .digest-loading::before {
+    content: ""; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); opacity: .7;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .25; transform: scale(.85); } 50% { opacity: 1; transform: scale(1.15); } }
+
+  /* AI explain modal */
+  .ai-modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 1000; padding: 1rem;
+  }
+  .ai-modal-bg.open { display: flex; }
+  .ai-modal {
+    background: var(--surface); border: 1px solid var(--border-soft); border-radius: 14px;
+    padding: 1.4rem 1.5rem; max-width: 540px; width: 100%;
+    box-shadow: 0 24px 48px rgba(0,0,0,.5);
+  }
+  .ai-modal-head { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
+  .ai-modal-title { font-size: .98rem; font-weight: 600; color: var(--text); }
+  .ai-modal-ip { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); }
+  .ai-modal-meta { font-size: .73rem; color: var(--text-3); margin-bottom: 1rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .ai-modal-body { color: var(--text-2); font-size: .92rem; line-height: 1.65; white-space: pre-wrap; }
+  .ai-modal-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1.2rem; }
+  .ai-modal-close {
+    background: transparent; border: none; color: var(--text-3); cursor: pointer;
+    font-size: 1.2rem; line-height: 1; padding: 0; width: 24px; height: 24px;
+  }
+  .ai-modal-close:hover { color: var(--text); }
+  .ai-disabled-note {
+    color: var(--text-3); font-size: .76rem; margin-top: .35rem;
+    font-style: italic;
+  }
 </style>
 </head>
 <body>
@@ -198,6 +259,18 @@
       <strong>scanner</strong> means probing known vulnerable paths (auto-banned 24h after 3 hits in 10 min).
       <strong>bot</strong> means a non-browser client or known crawler UA.
       <strong>unknown</strong> means a browser-like fingerprint that has not signed in. Cannot guarantee it is a real human.
+    </div>
+
+    <!-- AI digest panel -->
+    <div class="digest-panel" id="digest-panel">
+      <div class="digest-head">
+        <div>
+          <div class="digest-title">Daily digest</div>
+          <div class="digest-sub" id="digest-meta">Loading the latest digest...</div>
+        </div>
+        <button class="btn btn-sm" id="digest-run-btn"><i class="icon-refresh"></i><span>Generate now</span></button>
+      </div>
+      <div class="digest-body" id="digest-body">No digest yet. Click <strong>Generate now</strong> to make one.</div>
     </div>
 
     <!-- Summary -->
@@ -273,8 +346,27 @@
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=10"></script>
-<script src="https://rofihosted.space/app.js?v=10"></script>
+<!-- AI explain modal -->
+<div class="ai-modal-bg" id="ai-modal-bg">
+  <div class="ai-modal">
+    <div class="ai-modal-head">
+      <div>
+        <div class="ai-modal-title">IP profile <span class="ai-modal-ip" id="ai-modal-ip">—</span></div>
+        <div class="ai-modal-meta" id="ai-modal-meta">—</div>
+      </div>
+      <button class="ai-modal-close" data-ai-close="1" aria-label="Close">&times;</button>
+    </div>
+    <div class="ai-modal-body" id="ai-modal-body">
+      <span class="digest-loading">Asking the model...</span>
+    </div>
+    <div class="ai-modal-actions">
+      <button class="btn btn-sm" data-ai-close="1"><span>Close</span></button>
+    </div>
+  </div>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=11"></script>
+<script src="https://rofihosted.space/app.js?v=11"></script>
 <script>
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function fmtAgo(ts) {
@@ -334,6 +426,7 @@ async function refresh() {
             : (blocked
               ? '<button class="btn btn-sm" data-unblock="' + escapeAttr(r.ip) + '"><i class="icon-check"></i><span>Unblock</span></button>'
               : '<button class="btn btn-sm btn-danger" data-block="' + escapeAttr(r.ip) + '"><i class="icon-ban"></i><span>Block</span></button>'))
+          + (isLocal ? '' : ' <button class="btn btn-sm" data-explain="' + escapeAttr(r.ip) + '"><i class="icon-magnifier"></i><span>Explain</span></button>')
           + '</span>'
           + '</div>';
       }).join('');
@@ -415,7 +508,97 @@ document.addEventListener('click', function(e) {
     unblockIp(unblockBtn.getAttribute('data-unblock'));
     return;
   }
+  const explainBtn = e.target.closest('[data-explain]');
+  if (explainBtn) {
+    e.preventDefault();
+    openExplain(explainBtn.getAttribute('data-explain'));
+    return;
+  }
+  const closeBtn = e.target.closest('[data-ai-close]');
+  if (closeBtn || e.target.id === 'ai-modal-bg') {
+    document.getElementById('ai-modal-bg').classList.remove('open');
+  }
 });
+
+async function openExplain(ip) {
+  const bg = document.getElementById('ai-modal-bg');
+  document.getElementById('ai-modal-ip').textContent = ip;
+  document.getElementById('ai-modal-meta').textContent = 'Gathering visit history...';
+  document.getElementById('ai-modal-body').innerHTML = '<span class="digest-loading">Asking the model...</span>';
+  bg.classList.add('open');
+  try {
+    const fd = new FormData();
+    fd.append('ip', ip);
+    const r = await fetch('/api/ai/explain', { method: 'POST', body: fd });
+    if (!r.ok) {
+      const errJ = await r.json().catch(function () { return {}; });
+      document.getElementById('ai-modal-body').textContent =
+        errJ.err === 'ai_disabled'
+          ? 'AI features are disabled. Set MISTRAL_API_KEY in ~/.hp-server.env and restart.'
+          : 'Could not generate profile (' + (errJ.err || ('http ' + r.status)) + ').';
+      return;
+    }
+    const j = await r.json();
+    document.getElementById('ai-modal-meta').textContent =
+      j.visit_count + ' visits observed . country ' + (j.country || '—');
+    document.getElementById('ai-modal-body').textContent = j.profile;
+  } catch (err) {
+    document.getElementById('ai-modal-body').textContent = 'Network error.';
+  }
+}
+
+// Daily digest panel
+async function loadDigest() {
+  const meta = document.getElementById('digest-meta');
+  const body = document.getElementById('digest-body');
+  try {
+    const r = await fetch('/api/ai/digest/latest');
+    const j = await r.json();
+    if (!j.latest) {
+      meta.textContent = 'No digest yet';
+      body.classList.add('muted');
+      body.innerHTML = 'No digest yet. The first auto-digest runs ~5 minutes after server start, then every 24 hours. You can also click <strong>Generate now</strong>.';
+      return;
+    }
+    const d = j.latest;
+    const when = new Date(d.generated_at * 1000).toLocaleString();
+    const m = d.metrics || {};
+    meta.textContent = 'Generated ' + when + ' . ' + d.window_hours + 'h window . ' + (m.total_visits || 0) + ' visits . ' + (m.distinct_ips || 0) + ' IPs . ' + (m.auto_bans || 0) + ' auto-bans';
+    body.classList.remove('muted');
+    body.textContent = d.summary;
+  } catch (e) {
+    meta.textContent = 'Could not load digest';
+  }
+}
+
+async function runDigestNow() {
+  const btn = document.getElementById('digest-run-btn');
+  const body = document.getElementById('digest-body');
+  if (!btn) return;
+  btn.disabled = true;
+  body.innerHTML = '<span class="digest-loading">Running digest...</span>';
+  try {
+    const r = await fetch('/api/ai/digest/run');
+    const j = await r.json().catch(function () { return {}; });
+    if (!j.ok) {
+      body.classList.add('muted');
+      body.textContent = j.err === 'ai_disabled'
+        ? 'AI features are disabled. Set MISTRAL_API_KEY in ~/.hp-server.env and restart.'
+        : 'Digest failed (' + (j.err || ('http ' + r.status)) + ').';
+      return;
+    }
+    await loadDigest();
+  } catch (e) {
+    body.classList.add('muted');
+    body.textContent = 'Network error.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('digest-run-btn').addEventListener('click', runDigestNow);
+loadDigest();
+RH.on('digest_ready', loadDigest);
 
 document.getElementById('block-form').addEventListener('submit', function(e) {
   e.preventDefault();

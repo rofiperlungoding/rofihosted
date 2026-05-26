@@ -16,6 +16,7 @@ pub const EventType = enum {
     blocklist_change,
     uptime_probe,
     stats_tick,
+    digest_ready,
 
     pub fn label(self: EventType) []const u8 {
         return switch (self) {
@@ -24,6 +25,7 @@ pub const EventType = enum {
             .blocklist_change => "blocklist_change",
             .uptime_probe => "uptime_probe",
             .stats_tick => "stats_tick",
+            .digest_ready => "digest_ready",
         };
     }
 };

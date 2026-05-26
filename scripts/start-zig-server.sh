@@ -1,8 +1,12 @@
 #!/data/data/com.termux/files/usr/bin/sh
 mkdir -p ~/logs
 
-# Load auth creds if set
-[ -f ~/.hp-server.env ] && . ~/.hp-server.env
+# Auto-export everything sourced from env file so children inherit it.
+if [ -f ~/.hp-server.env ]; then
+  set -a
+  . ~/.hp-server.env
+  set +a
+fi
 
 pkill -f 'hp-server' 2>/dev/null
 sleep 1
@@ -18,5 +22,7 @@ echo "=== HEALTH ==="
 curl -s http://127.0.0.1:8080/health
 echo "=== AUTH USER ==="
 echo "${HP_AUTH_USER:-admin (default - run ~/set-creds.sh to change)}"
+echo "=== AI ==="
+[ -n "$MISTRAL_API_KEY" ] && echo "mistral: key loaded (length=${#MISTRAL_API_KEY})" || echo "mistral: no key"
 echo "=== MEM USAGE ==="
 ps -o pid,rss,cmd -p $(pgrep hp-server | head -1) 2>/dev/null || echo "(can't get rss)"

@@ -7,11 +7,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 ## [Unreleased]
 
 ### Added
+- **AI features** powered by Mistral (`mistral-small-latest`). Three opt-in capabilities:
+  - **Auto-ban annotation**: when an IP gets auto-banned for scanning, a background thread enriches the ban reason with a human-readable summary based on the recent paths probed. The classic generic reason ("auto: scanner attempts exceeded threshold") becomes something like "auto: probing WordPress and PHP exploits, generic mass scanner".
+  - **"Explain this IP" on Security page**: per-IP button opens a modal where Mistral profiles the IP based on its access pattern (visit count, paths, UAs, country) and recommends allow/monitor/block.
+  - **Daily digest**: every 24h (and on-demand via "Generate now" button), the server aggregates the past 24h of visits, logins, uptime, and bans, sends those metrics to Mistral, and stores a one-paragraph natural-language summary at `~/data/digests.jsonl`. Surfaced at the top of the Security page.
+- New `ai.zig` module with per-feature token-bucket rate limit (1 annotate/min, 1 explain/6s, 1 digest/hour) so a runaway loop cannot drain quota.
+- New endpoints (auth-required): `GET /api/ai/digest/latest`, `GET /api/ai/digest/run`, `POST /api/ai/explain`.
+- New SSE event: `digest_ready`.
 - Real-time UI updates via Server-Sent Events at `/api/stream`. Replaces all polling on Overview, Status, and Security pages.
 - New `events.zig` module with thread-safe pub/sub bus + 25s heartbeat.
 - Backend publishes events for every visit, login attempt, blocklist mutation, uptime probe result, and a stats tick every 2 seconds.
 - `ws-status` indicator on every authenticated page (live / connecting / offline).
 - `LICENSE` (MIT), `docs/SECURITY.md`, `.gitignore`, public GitHub repo.
+
+### Privacy / safety notes for AI
+- API key lives only in `~/.hp-server.env` on the device (mode 600). Never in git, never in logs, never returned to clients. `.gitignore` matches `*.env`, `*-server.env`, `.env*`.
+- All AI features degrade gracefully: if no key or network fails, server keeps running with the classic non-AI behavior.
+- Data sent to Mistral: only IP, country, UA, paths, and aggregated counts. Never visit log content beyond what the operator explicitly requests (e.g. clicking Explain). Never credentials.
 
 ### Fixed
 - Memory values were displayed as bytes when they're actually kibibytes from `/proc/meminfo`. 8 GB of RAM rendered as 8 MB. New `fmtKB()` formatter handles all `*_kb` fields (process RSS/VSZ, system memory, swap). `fmtSize()` continues to handle raw byte counts (file sizes on `/files`).

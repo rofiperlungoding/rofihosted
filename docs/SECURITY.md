@@ -101,12 +101,25 @@ Files that **never** leave the device:
 | --- | --- | --- |
 | `~/.hp-server-creds.txt` | username + password (line 1: user, line 2: pass) | 0600 |
 | `~/.hp-server-blocklist.txt` | persistent IP blocklist | 0600 |
+| `~/.hp-server.env` | environment variables (Mistral API key, optional Telegram tokens) | 0600 |
 | `~/.cloudflared/<tunnel-id>.json` | tunnel credentials issued by Cloudflare | 0600 |
 | `~/.cloudflared/cert.pem` | account cert for `cloudflared tunnel` operations | 0600 |
 
-None of these are tracked in git. The `.gitignore` excludes the `~/data/`, `~/.hp-server-*`, and `~/.cloudflared/` paths even if the workspace ever picks them up by accident.
+None of these are tracked in git. The `.gitignore` excludes the `~/data/`, `~/.hp-server-*`, `*.env`, and `~/.cloudflared/` paths even if the workspace ever picks them up by accident.
 
 The HMAC session key is derived in memory only. It is never persisted.
+
+## AI features and data flow
+
+When `MISTRAL_API_KEY` is set in `~/.hp-server.env`, three features call out to `https://api.mistral.ai/v1/chat/completions` with model `mistral-small-latest`. What gets sent:
+
+- **Auto-ban annotation**: the banned IP, its country, its UA, and up to 8 recent paths it requested.
+- **Explain IP**: the queried IP, country, distinct UAs (up to 6), classification breakdown, and up to 20 recent paths.
+- **Daily digest**: only aggregated counts (totals, classification breakdown, distinct IP count, login counts, top scanner paths, top countries). No per-request data.
+
+Per-feature rate limits prevent quota drain from a buggy loop: 1 annotate/minute, 1 explain/6s, 1 digest/hour. If the key is unset, all features no-op silently and the server keeps serving normal traffic.
+
+The key is read once at startup, held in memory, and never logged. The Settings page does not display or accept it (rotate via SSH if needed). All AI endpoints require an authenticated session.
 
 ## Known limitations / not defended against
 

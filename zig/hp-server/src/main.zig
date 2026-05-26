@@ -11,9 +11,11 @@ const badge = @import("badge.zig");
 const telegram = @import("telegram.zig");
 const security = @import("security.zig");
 const events = @import("events.zig");
+const ai = @import("ai.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
+const digests_path = "/data/data/com.termux/files/home/data/digests.jsonl";
 
 const App = struct {
     allocator: std.mem.Allocator,
@@ -26,6 +28,7 @@ const App = struct {
     autoban: *security.AutoBan,
     login_tracker: *security.LoginTracker,
     bus: *events.Bus,
+    ai_cfg: *ai.Config,
 };
 
 pub fn main() !void {
@@ -43,6 +46,8 @@ pub fn main() !void {
     const autoban = try security.AutoBan.init(allocator, blocklist);
     const login_tracker = try security.LoginTracker.init(allocator, blocklist);
     const bus = try events.Bus.init(allocator);
+    const ai_cfg = try allocator.create(ai.Config);
+    ai_cfg.* = ai.Config.fromEnv(allocator);
 
     var app = App{
         .allocator = allocator,
@@ -55,6 +60,7 @@ pub fn main() !void {
         .autoban = autoban,
         .login_tracker = login_tracker,
         .bus = bus,
+        .ai_cfg = ai_cfg,
     };
 
     // Heartbeat thread keeps SSE clients alive
@@ -86,7 +92,16 @@ pub fn main() !void {
     router.post("/*", hostRouter, .{});
 
     std.log.info("hp-server listening on http://127.0.0.1:8080", .{});
-    std.log.info("auth user='{s}', telegram={s}", .{ app.auth_cfg.user, if (tg_cfg.enabled()) "ENABLED" else "disabled" });
+    std.log.info("auth user='{s}', telegram={s}, ai={s}", .{
+        app.auth_cfg.user,
+        if (tg_cfg.enabled()) "ENABLED" else "disabled",
+        if (ai_cfg.enabled()) "ENABLED" else "disabled",
+    });
+
+    // Daily digest loop
+    const digest_thread = try std.Thread.spawn(.{}, digestLoop, .{&app});
+    digest_thread.detach();
+
     try server.listen();
 }
 
@@ -128,7 +143,17 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     // Auto-ban: scanner hits get tracked even if request itself is rejected later
     if (cls == .scanner and !is_local) {
-        app.autoban.recordScannerHit(ip);
+        const did_ban = app.autoban.recordScannerHit(ip);
+        if (did_ban) {
+            app.bus.publish(.blocklist_change, .{
+                .action = "block",
+                .ip = ip,
+                .reason = "auto: scanner attempts exceeded threshold",
+                .timestamp = std.time.timestamp(),
+            });
+            // Fire-and-forget AI annotation
+            spawnAnnotateBan(app, ip, ua) catch {};
+        }
     }
 
     // Rate limit (skip /health, skip self)
@@ -251,6 +276,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/security/block")) return apiSecurityBlock(app, req, res);
     if (std.mem.eql(u8, path, "/api/security/unblock")) return apiSecurityUnblock(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/files/list")) return apiFilesList(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/explain")) return apiAiExplain(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/digest/latest")) return apiDigestLatest(app, res);
+    if (std.mem.eql(u8, path, "/api/ai/digest/run")) return apiDigestRun(app, res);
 
     // Status badges (private, auth-gated)
     if (std.mem.startsWith(u8, path, "/badge/") and std.mem.endsWith(u8, path, ".svg")) {
@@ -870,4 +898,360 @@ fn apiBadge(app: *App, _: *httpz.Request, res: *httpz.Response, target_name: []c
     res.content_type = .SVG;
     res.header("Cache-Control", "max-age=60");
     res.body = svg;
+}
+
+// =================================================================
+// AI: BAN ANNOTATION (async, fire-and-forget)
+// =================================================================
+const AnnotateArgs = struct {
+    app: *App,
+    ip: []u8,
+    ua: []u8,
+};
+
+fn spawnAnnotateBan(app: *App, ip: []const u8, ua: []const u8) !void {
+    if (!app.ai_cfg.enabled()) return;
+    const args = try app.allocator.create(AnnotateArgs);
+    args.* = .{
+        .app = app,
+        .ip = try app.allocator.dupe(u8, ip),
+        .ua = try app.allocator.dupe(u8, ua),
+    };
+    const t = try std.Thread.spawn(.{}, annotateBanThread, .{args});
+    t.detach();
+}
+
+fn annotateBanThread(args: *AnnotateArgs) void {
+    defer {
+        args.app.allocator.free(args.ip);
+        args.app.allocator.free(args.ua);
+        args.app.allocator.destroy(args);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(args.app.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Pull recent paths probed by this IP from visits.jsonl
+    args.app.store_mutex.lock();
+    const visits = store.readVisits(a, visits_path, 500) catch {
+        args.app.store_mutex.unlock();
+        return;
+    };
+    args.app.store_mutex.unlock();
+
+    var recent_paths = std.ArrayList([]const u8).init(a);
+    var country: []const u8 = "—";
+    for (visits) |v| {
+        if (std.mem.eql(u8, v.ip, args.ip)) {
+            if (v.country.len > 0) country = v.country;
+            recent_paths.append(v.path) catch {};
+            if (recent_paths.items.len >= 8) break;
+        }
+    }
+    if (recent_paths.items.len == 0) return; // nothing to base annotation on
+
+    const annotated = ai.annotateBan(args.app.ai_cfg, a, .{
+        .ip = args.ip,
+        .paths = recent_paths.items,
+        .user_agent = args.ua,
+        .country = country,
+    }) orelse return;
+
+    // Prepend "auto: " so the source is still visible after enrichment.
+    const final = std.fmt.allocPrint(a, "auto: {s}", .{annotated}) catch return;
+    args.app.blocklist.updateReason(args.ip, final) catch {};
+    args.app.bus.publish(.blocklist_change, .{
+        .action = "annotate",
+        .ip = args.ip,
+        .reason = final,
+        .timestamp = std.time.timestamp(),
+    });
+}
+
+// =================================================================
+// AI: EXPLAIN AN IP (synchronous, on-demand)
+// =================================================================
+fn apiAiExplain(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
+        return;
+    }
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const ip = form.get("ip") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_ip" }, .{});
+        return;
+    };
+
+    app.store_mutex.lock();
+    const visits = store.readVisits(res.arena, visits_path, 2000) catch {
+        app.store_mutex.unlock();
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "read_failed" }, .{});
+        return;
+    };
+    app.store_mutex.unlock();
+
+    var paths = std.ArrayList([]const u8).init(res.arena);
+    var ua_set = std.StringHashMap(void).init(res.arena);
+    var classification_counts = std.StringHashMap(u32).init(res.arena);
+    var country: []const u8 = "—";
+    var visit_count: u32 = 0;
+    for (visits) |v| {
+        if (!std.mem.eql(u8, v.ip, ip)) continue;
+        visit_count += 1;
+        if (v.country.len > 0) country = v.country;
+        if (paths.items.len < 20) paths.append(v.path) catch {};
+        if (ua_set.count() < 6 and v.ua.len > 0) ua_set.put(v.ua, {}) catch {};
+        if (v.classification.len > 0) {
+            const gop = classification_counts.getOrPut(v.classification) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+    }
+    if (visit_count == 0) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "no_visits_for_ip" }, .{});
+        return;
+    }
+
+    var ua_list = std.ArrayList([]const u8).init(res.arena);
+    var ua_it = ua_set.keyIterator();
+    while (ua_it.next()) |k| ua_list.append(k.*) catch {};
+
+    var cls_buf = std.ArrayList(u8).init(res.arena);
+    var cls_it = classification_counts.iterator();
+    var first = true;
+    while (cls_it.next()) |e| {
+        if (!first) cls_buf.appendSlice(", ") catch {};
+        first = false;
+        cls_buf.writer().print("{s}: {d}", .{ e.key_ptr.*, e.value_ptr.* }) catch {};
+    }
+
+    const profile = ai.explainIp(app.ai_cfg, res.arena, .{
+        .ip = ip,
+        .country = country,
+        .visit_count = visit_count,
+        .classifications = cls_buf.items,
+        .paths = paths.items,
+        .user_agents = ua_list.items,
+    }) orelse {
+        res.status = 502;
+        try res.json(.{ .ok = false, .err = "ai_call_failed" }, .{});
+        return;
+    };
+
+    try res.json(.{
+        .ok = true,
+        .ip = ip,
+        .visit_count = visit_count,
+        .country = country,
+        .profile = profile,
+    }, .{});
+}
+
+// =================================================================
+// AI: DAILY DIGEST
+// =================================================================
+const DigestRecord = struct {
+    generated_at: i64,
+    window_hours: u32,
+    summary: []const u8,
+    metrics: DigestMetrics,
+};
+
+const DigestMetrics = struct {
+    total_visits: u64,
+    self_visits: u64,
+    bot_visits: u64,
+    scanner_visits: u64,
+    unknown_visits: u64,
+    distinct_ips: u32,
+    auto_bans: u32,
+    failed_logins: u32,
+    successful_logins: u32,
+    uptime_failures: u32,
+};
+
+fn digestLoop(app: *App) void {
+    // Wait 5 minutes after boot before the first digest, so we have data.
+    std.Thread.sleep(5 * 60 * std.time.ns_per_s);
+    while (true) {
+        runDigest(app) catch {};
+        // Sleep 24 hours
+        std.Thread.sleep(24 * 60 * 60 * std.time.ns_per_s);
+    }
+}
+
+fn runDigest(app: *App) !void {
+    if (!app.ai_cfg.enabled()) return;
+    var arena = std.heap.ArenaAllocator.init(app.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    app.store_mutex.lock();
+    const visits = store.readVisits(a, visits_path, 50000) catch {
+        app.store_mutex.unlock();
+        return;
+    };
+    const uptime_records = store.readLatestUptime(a, uptime_path) catch &.{};
+    app.store_mutex.unlock();
+
+    const window_hours: u32 = 24;
+    const since = std.time.timestamp() - @as(i64, @intCast(window_hours)) * 3600;
+
+    var metrics = DigestMetrics{
+        .total_visits = 0,
+        .self_visits = 0,
+        .bot_visits = 0,
+        .scanner_visits = 0,
+        .unknown_visits = 0,
+        .distinct_ips = 0,
+        .auto_bans = 0,
+        .failed_logins = 0,
+        .successful_logins = 0,
+        .uptime_failures = 0,
+    };
+
+    var ips = std.StringHashMap(void).init(a);
+    var path_counts = std.StringHashMap(u32).init(a);
+    var country_counts = std.StringHashMap(u32).init(a);
+
+    for (visits) |v| {
+        if (v.visited_at < since) continue;
+        metrics.total_visits += 1;
+        if (v.ip.len > 0) ips.put(v.ip, {}) catch {};
+        if (std.mem.eql(u8, v.classification, "self")) metrics.self_visits += 1;
+        if (std.mem.eql(u8, v.classification, "bot")) metrics.bot_visits += 1;
+        if (std.mem.eql(u8, v.classification, "scanner")) {
+            metrics.scanner_visits += 1;
+            const gop = path_counts.getOrPut(v.path) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+        if (std.mem.eql(u8, v.classification, "unknown")) metrics.unknown_visits += 1;
+        if (v.country.len > 0) {
+            const gop = country_counts.getOrPut(v.country) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+    }
+    metrics.distinct_ips = @intCast(ips.count());
+
+    for (uptime_records) |r| {
+        if (r.checked_at >= since and !r.ok) metrics.uptime_failures += 1;
+    }
+
+    const logins = security.readLoginAttempts(a, 500) catch &.{};
+    for (logins) |la| {
+        if (la.timestamp < since) continue;
+        if (la.success) metrics.successful_logins += 1 else metrics.failed_logins += 1;
+    }
+
+    const bl_snapshot = app.blocklist.snapshot(a) catch &.{};
+    for (bl_snapshot) |b| {
+        if (b.blocked_at >= since and std.mem.startsWith(u8, b.reason, "auto:")) {
+            metrics.auto_bans += 1;
+        }
+    }
+
+    const top_paths = topN(a, &path_counts, 5);
+    const top_countries = topN(a, &country_counts, 5);
+
+    const summary = ai.dailyDigest(app.ai_cfg, a, .{
+        .window_hours = window_hours,
+        .total_visits = metrics.total_visits,
+        .self_visits = metrics.self_visits,
+        .bot_visits = metrics.bot_visits,
+        .scanner_visits = metrics.scanner_visits,
+        .unknown_visits = metrics.unknown_visits,
+        .distinct_ips = metrics.distinct_ips,
+        .auto_bans_24h = metrics.auto_bans,
+        .failed_logins_24h = metrics.failed_logins,
+        .successful_logins_24h = metrics.successful_logins,
+        .uptime_probe_count = @intCast(uptime_records.len),
+        .uptime_failures = metrics.uptime_failures,
+        .top_scanner_paths = top_paths,
+        .top_countries = top_countries,
+    }) orelse return;
+
+    const rec = DigestRecord{
+        .generated_at = std.time.timestamp(),
+        .window_hours = window_hours,
+        .summary = summary,
+        .metrics = metrics,
+    };
+    store.appendJson(digests_path, rec) catch {};
+    app.bus.publish(.digest_ready, .{ .timestamp = rec.generated_at, .summary = rec.summary });
+}
+
+fn topN(allocator: std.mem.Allocator, map: *std.StringHashMap(u32), n: usize) [][]const u8 {
+    const Pair = struct { k: []const u8, c: u32 };
+    var pairs = std.ArrayList(Pair).init(allocator);
+    var it = map.iterator();
+    while (it.next()) |e| pairs.append(.{ .k = e.key_ptr.*, .c = e.value_ptr.* }) catch {};
+    std.mem.sort(Pair, pairs.items, {}, struct {
+        fn less(_: void, a: Pair, b: Pair) bool {
+            return a.c > b.c;
+        }
+    }.less);
+    const take = @min(n, pairs.items.len);
+    var out = allocator.alloc([]const u8, take) catch return &.{};
+    for (pairs.items[0..take], 0..) |p, i| {
+        out[i] = std.fmt.allocPrint(allocator, "{s} ({d})", .{ p.k, p.c }) catch p.k;
+    }
+    return out;
+}
+
+fn apiDigestLatest(_: *App, res: *httpz.Response) !void {
+    const file = std.fs.cwd().openFile(digests_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            try res.json(.{ .ok = true, .latest = null }, .{});
+            return;
+        },
+        else => return err,
+    };
+    defer file.close();
+    const data = try file.readToEndAlloc(res.arena, 4 * 1024 * 1024);
+
+    // Find last newline-delimited record
+    var last_start: usize = 0;
+    var i: usize = data.len;
+    while (i > 0) {
+        i -= 1;
+        if (data[i] == '\n' and i + 1 < data.len) {
+            last_start = i + 1;
+            break;
+        }
+    }
+    const last_line = std.mem.trim(u8, data[last_start..], " \t\r\n");
+    if (last_line.len == 0) {
+        try res.json(.{ .ok = true, .latest = null }, .{});
+        return;
+    }
+    const parsed = std.json.parseFromSlice(DigestRecord, res.arena, last_line, .{ .ignore_unknown_fields = true }) catch {
+        try res.json(.{ .ok = true, .latest = null }, .{});
+        return;
+    };
+    try res.json(.{ .ok = true, .latest = parsed.value }, .{});
+}
+
+fn apiDigestRun(app: *App, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
+        return;
+    }
+    runDigest(app) catch {
+        res.status = 502;
+        try res.json(.{ .ok = false, .err = "digest_failed" }, .{});
+        return;
+    };
+    try res.json(.{ .ok = true }, .{});
 }
