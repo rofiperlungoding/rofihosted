@@ -14,6 +14,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - `LICENSE` (MIT), `docs/SECURITY.md`, `.gitignore`, public GitHub repo.
 
 ### Fixed
+- Memory values were displayed as bytes when they're actually kibibytes from `/proc/meminfo`. 8 GB of RAM rendered as 8 MB. New `fmtKB()` formatter handles all `*_kb` fields (process RSS/VSZ, system memory, swap). `fmtSize()` continues to handle raw byte counts (file sizes on `/files`).
 - Stale browser cache referencing `RH.fetchInitialStats` from the pre-SSE `app.js`. Bumped all asset query strings to `?v=9` uniformly across every template.
 - CSP blocked Cloudflare's auto-injected Web Analytics beacon (`static.cloudflareinsights.com/beacon.min.js`). Allowed it explicitly in `script-src` and `connect-src` since the toggle is account-scoped on Cloudflare's side and not exposed in the zone dashboard.
 

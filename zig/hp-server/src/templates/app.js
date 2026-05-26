@@ -31,6 +31,14 @@ window.RH = (function () {
     if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + ' MB';
     return (b/1024/1024/1024).toFixed(2) + ' GB';
   }
+  // Memory values from /proc come in KIBIBYTES (1 unit = 1024 bytes).
+  // Use fmtKB() for those; fmtSize() is for raw byte counts (file sizes, etc).
+  function fmtKB(kb) {
+    if (kb == null) return null;
+    if (kb < 1024) return kb + ' KB';
+    if (kb < 1024 * 1024) return (kb / 1024).toFixed(1) + ' MB';
+    return (kb / 1024 / 1024).toFixed(2) + ' GB';
+  }
   function fmtTime(ts) {
     if (!ts) return '';
     return new Date(ts * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -128,9 +136,9 @@ window.RH = (function () {
 
   function applyTickToOverview(s) {
     if (s.process) {
-      setText('proc-rss', fmtSize(s.process.rss_kb));
-      setText('proc-rss-sub', 'virtual ' + fmtSize(s.process.vsz_kb) + ' . uptime ' + fmtUptime(s.process.uptime_seconds));
-      setText('proc-vsz', fmtSize(s.process.vsz_kb));
+      setText('proc-rss', fmtKB(s.process.rss_kb));
+      setText('proc-rss-sub', 'virtual ' + fmtKB(s.process.vsz_kb) + ' . uptime ' + fmtUptime(s.process.uptime_seconds));
+      setText('proc-vsz', fmtKB(s.process.vsz_kb));
       setText('proc-threads', s.process.threads);
       setText('proc-fds', s.process.open_fds);
     }
@@ -141,13 +149,13 @@ window.RH = (function () {
         bar.style.width = s.memory.percent + '%';
         bar.parentElement.className = barClass(s.memory.percent, 'bar');
       }
-      setText('mem-sub', fmtSize(s.memory.used_kb) + ' of ' + fmtSize(s.memory.total_kb));
-      setText('mem-avail', fmtSize(s.memory.available_kb));
-      setText('mem-free', fmtSize(s.memory.free_kb));
-      setText('mem-cached', fmtSize(s.memory.cached_kb));
-      setText('swap-used', fmtSize(s.memory.swap_used_kb));
-      setText('swap-free', fmtSize(s.memory.swap_free_kb));
-      setText('swap-total', fmtSize(s.memory.swap_total_kb));
+      setText('mem-sub', fmtKB(s.memory.used_kb) + ' of ' + fmtKB(s.memory.total_kb));
+      setText('mem-avail', fmtKB(s.memory.available_kb));
+      setText('mem-free', fmtKB(s.memory.free_kb));
+      setText('mem-cached', fmtKB(s.memory.cached_kb));
+      setText('swap-used', fmtKB(s.memory.swap_used_kb));
+      setText('swap-free', fmtKB(s.memory.swap_free_kb));
+      setText('swap-total', fmtKB(s.memory.swap_total_kb));
       const swapPct = s.memory.swap_total_kb > 0 ? (s.memory.swap_used_kb / s.memory.swap_total_kb * 100) : 0;
       setText('swap-percent', swapPct.toFixed(1));
       const sbar = document.getElementById('swap-bar');
@@ -370,7 +378,7 @@ window.RH = (function () {
   }
 
   return {
-    fmtUptime: fmtUptime, fmtAgo: fmtAgo, fmtSize: fmtSize, fmtTime: fmtTime,
+    fmtUptime: fmtUptime, fmtAgo: fmtAgo, fmtSize: fmtSize, fmtKB: fmtKB, fmtTime: fmtTime,
     escapeHtml: escapeHtml, setText: setText, barClass: barClass,
     on: on,
     loadCurrentUser: loadCurrentUser,
