@@ -11,6 +11,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - New `events.zig` module with thread-safe pub/sub bus + 25s heartbeat.
 - Backend publishes events for every visit, login attempt, blocklist mutation, uptime probe result, and a stats tick every 2 seconds.
 - `ws-status` indicator on every authenticated page (live / connecting / offline).
+- `LICENSE` (MIT), `docs/SECURITY.md`, `.gitignore`, public GitHub repo.
+
+### Fixed
+- Stale browser cache referencing `RH.fetchInitialStats` from the pre-SSE `app.js`. Bumped all asset query strings to `?v=9` uniformly across every template.
 
 ### Changed
 - Removed obsolete files: Node app skeleton, glances/postgres/nginx setup scripts, Zig hello/sqltest playgrounds.
