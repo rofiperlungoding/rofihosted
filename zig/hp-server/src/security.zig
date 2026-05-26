@@ -505,14 +505,17 @@ pub fn applyHeaders(res: anytype) void {
     res.header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=(), payment=(), usb=()");
 
     // CSP: tight enough to prevent XSS, loose enough for our font CDN + inline styles/scripts.
+    // We also allow the Cloudflare Web Analytics beacon (auto-injected at the account level
+    // by Cloudflare on every proxied site, no way to disable from the zone dashboard).
+    // It is cookie-less and aggregated per Cloudflare's docs.
     res.header(
         "Content-Security-Policy",
         "default-src 'self' https://rofihosted.space https://*.rofihosted.space; " ++
         "style-src 'self' https://rofihosted.space https://*.rofihosted.space https://cdnjs.cloudflare.com 'unsafe-inline'; " ++
         "font-src 'self' https://rofihosted.space https://*.rofihosted.space https://cdnjs.cloudflare.com data:; " ++
-        "script-src 'self' https://rofihosted.space https://*.rofihosted.space 'unsafe-inline'; " ++
+        "script-src 'self' https://rofihosted.space https://*.rofihosted.space https://static.cloudflareinsights.com 'unsafe-inline'; " ++
         "img-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
-        "connect-src 'self' https://rofihosted.space https://*.rofihosted.space; " ++
+        "connect-src 'self' https://rofihosted.space https://*.rofihosted.space https://cloudflareinsights.com; " ++
         "frame-ancestors 'none'; " ++
         "base-uri 'self'; " ++
         "form-action 'self' https://rofihosted.space https://*.rofihosted.space",

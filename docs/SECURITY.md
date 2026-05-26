@@ -84,7 +84,7 @@ Token bucket per source IP, refilled continuously. The bucket is bypassed for `1
 - `X-Frame-Options: DENY` (clickjacking prevention)
 - `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=(), payment=(), usb=()`
-- `Content-Security-Policy`: scoped to `'self' https://rofihosted.space https://*.rofihosted.space`, plus `cdnjs.cloudflare.com` for the icon font. `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self' + own subdomains`.
+- `Content-Security-Policy`: scoped to `'self' https://rofihosted.space https://*.rofihosted.space`, plus `cdnjs.cloudflare.com` for the icon font, plus `static.cloudflareinsights.com` and `cloudflareinsights.com` for the Cloudflare Web Analytics beacon (auto-injected at the account level, cannot be disabled from the zone dashboard, cookieless per Cloudflare's docs). `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self' + own subdomains`.
 
 ### Audit logs
 - `~/data/visits.jsonl`: every request with `visited_at`, `ua`, `ip`, `path`, `method`, `host`, `status`, `referer`, `country`, `classification`.

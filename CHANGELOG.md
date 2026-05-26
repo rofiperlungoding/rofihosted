@@ -15,6 +15,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ### Fixed
 - Stale browser cache referencing `RH.fetchInitialStats` from the pre-SSE `app.js`. Bumped all asset query strings to `?v=9` uniformly across every template.
+- CSP blocked Cloudflare's auto-injected Web Analytics beacon (`static.cloudflareinsights.com/beacon.min.js`). Allowed it explicitly in `script-src` and `connect-src` since the toggle is account-scoped on Cloudflare's side and not exposed in the zone dashboard.
 
 ### Changed
 - Removed obsolete files: Node app skeleton, glances/postgres/nginx setup scripts, Zig hello/sqltest playgrounds.
