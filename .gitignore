@@ -1,0 +1,49 @@
+# Zig build artifacts
+zig-out/
+.zig-cache/
+zig-cache/
+
+# Secrets and runtime state (would only end up here if someone copied them off the phone)
+.hp-server-creds.txt
+.hp-server-creds.txt.tmp
+.hp-server-blocklist.txt
+.hp-server-blocklist.txt.tmp
+*-creds.txt
+*-blocklist.txt
+
+# Cloudflare tunnel credentials
+.cloudflared/
+cert.pem
+*.tunnel.json
+b63b2262-*.json
+
+# Append-only data (visits, uptime, logins)
+data/
+*.jsonl
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# Node leftovers (project no longer uses Node, but in case anyone scaffolds something)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build/temp
+*.tmp
+*.bak
+*.log

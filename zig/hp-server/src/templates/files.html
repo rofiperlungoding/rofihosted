@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Files</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=4">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  a, a:link, a:visited, a:hover { text-decoration: none !important; }
+  a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus,
+  button.btn, button.btn:hover, button.btn:focus {
+    text-decoration: none !important;
+    display: inline-flex !important;
+    align-items: center; justify-content: center;
+    gap: .5rem; height: 38px; padding: 0 1.05rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; font: inherit; font-size: .87rem; font-weight: 500;
+    color: var(--text); cursor: pointer; white-space: nowrap;
+    box-shadow: var(--shadow);
+    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+  }
+  a.btn:hover, button.btn:hover { background: var(--surface-2); border-color: var(--text-3); }
+  a.btn-sm, button.btn-sm { height: 34px; padding: 0 .9rem; font-size: .82rem; }
+  a.btn [class^="icon-"], a.btn svg { font-size: 13px; vertical-align: 0; flex-shrink: 0; }
+
+  .wrap { max-width: 920px; }
+  @media (min-width: 1280px) { .wrap { max-width: 1080px; } }
+  @media (min-width: 1920px) { .wrap { max-width: 1300px; } }
+
+  .page-title { font-size: 1.5rem; margin: 0; letter-spacing: -0.025em; color: var(--text); font-weight: 700; }
+  .page-subtitle { color: var(--text-3); font-size: .87rem; margin: .25rem 0 1.5rem; }
+
+  .breadcrumb {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    padding: .7rem 1rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .82rem;
+    margin-bottom: .9rem;
+    word-break: break-all;
+    color: var(--text-2);
+    box-shadow: var(--shadow);
+  }
+  .breadcrumb a { color: var(--accent); transition: opacity .12s ease; }
+  .breadcrumb a:hover { opacity: .75; }
+  .breadcrumb .sep { color: var(--text-3); margin: 0 .3rem; }
+
+  .file-list { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .head, .row {
+    display: grid;
+    grid-template-columns: 1fr 110px 160px;
+    gap: 1rem;
+    padding: .8rem 1.3rem;
+    align-items: center;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  @media (max-width: 600px) {
+    .head, .row { grid-template-columns: 1fr 90px; }
+    .head .mtime, .row .mtime { display: none; }
+  }
+  .head { font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; background: var(--surface-2); font-weight: 600; }
+  .row:last-child { border-bottom: 0; }
+  .row.parent .name a { color: var(--text-3); font-style: italic; }
+
+  .name { display: flex; align-items: center; gap: .7rem; min-width: 0; }
+  .name a, .name span[title] { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .87rem; min-width: 0; transition: color .12s ease; }
+  .name a:hover { color: var(--accent); }
+  .name [class^="icon-"] { font-size: 14px; color: var(--text-3); width: 16px; text-align: center; vertical-align: 0; }
+  .name [class^="icon-"].dir { color: var(--accent); }
+  .size, .mtime { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .76rem; color: var(--text-3); }
+
+  .empty { padding: 2.5rem 1rem; text-align: center; color: var(--text-3); font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page-header">
+    <a href="https://rofihosted.space" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted&nbsp;/&nbsp;files</span></a>
+    <div class="actions">
+      <a href="https://rofihosted.space" class="btn btn-sm">
+        <i class="icon-home"></i><span>Home</span>
+      </a>
+      <a href="/logout" class="btn btn-sm">
+        <i class="icon-logout"></i><span>Sign out</span>
+      </a>
+      <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+        <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <h1 class="page-title">Files</h1>
+  <p class="page-subtitle">Read only browser scoped to home directory.</p>
+
+  <div class="breadcrumb" id="crumbs">~</div>
+  <div class="file-list" id="rows">
+    <div class="empty">Loading</div>
+  </div>
+
+  <footer class="site-footer">
+    <span>read only, scoped to home</span>
+    <span>rofihosted.space</span>
+  </footer>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=4"></script>
+<script>
+function fmtSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024*1024) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1024*1024*1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+  return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+function fmtTime(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+function getPath() { return new URLSearchParams(location.search).get('path') || '/'; }
+function buildCrumb(path) {
+  const parts = path.split('/').filter(Boolean);
+  let acc = '';
+  let html = '<a href="?path=/">~</a>';
+  for (const p of parts) {
+    acc += '/' + p;
+    html += '<span class="sep">/</span><a href="?path=' + encodeURIComponent(acc) + '">' + p + '</a>';
+  }
+  return html;
+}
+async function load() {
+  const path = getPath();
+  document.getElementById('crumbs').innerHTML = buildCrumb(path);
+  try {
+    const data = await (await fetch('/api/list?path=' + encodeURIComponent(path))).json();
+    const root = document.getElementById('rows');
+    let html = '<div class="head"><span>Name</span><span class="size">Size</span><span class="mtime">Modified</span></div>';
+    const parent = path === '/' ? null : path.replace(/\/[^/]+$/, '') || '/';
+    if (parent !== null) {
+      html += '<div class="row parent">'
+        + '<span class="name"><i class="icon-arrow-up"></i><a href="?path=' + encodeURIComponent(parent) + '">..</a></span>'
+        + '<span class="size"></span><span class="mtime"></span>'
+        + '</div>';
+    }
+    if (!data.entries.length) {
+      html += '<div class="empty">empty directory</div>';
+    } else {
+      for (const e of data.entries) {
+        const subpath = (path === '/' ? '' : path) + '/' + e.name;
+        if (e.is_dir) {
+          html += '<div class="row">'
+            + '<span class="name"><i class="icon-folder dir"></i><a href="?path=' + encodeURIComponent(subpath) + '">' + e.name + '/</a></span>'
+            + '<span class="size"></span>'
+            + '<span class="mtime">' + fmtTime(e.mtime) + '</span>'
+            + '</div>';
+        } else {
+          html += '<div class="row">'
+            + '<span class="name"><i class="icon-doc"></i><span title="' + e.name + '">' + e.name + '</span></span>'
+            + '<span class="size">' + fmtSize(e.size) + '</span>'
+            + '<span class="mtime">' + fmtTime(e.mtime) + '</span>'
+            + '</div>';
+        }
+      }
+    }
+    root.innerHTML = html;
+  } catch (e) {
+    document.getElementById('rows').innerHTML = '<div class="empty">failed to load</div>';
+  }
+}
+load();
+</script>
+</body>
+</html>

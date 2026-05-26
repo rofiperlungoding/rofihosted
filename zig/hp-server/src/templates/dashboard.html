@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=4">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  /* === Force buttons + kill underlines === */
+  a, a:link, a:visited, a:hover { text-decoration: none !important; }
+  a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus,
+  button.btn, button.btn:hover, button.btn:focus {
+    text-decoration: none !important;
+    display: inline-flex !important;
+    align-items: center; justify-content: center;
+    gap: .5rem;
+    height: 38px;
+    padding: 0 1.05rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font: inherit;
+    font-size: .87rem;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    box-shadow: var(--shadow);
+    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+  }
+  a.btn:hover, button.btn:hover { background: var(--surface-2); border-color: var(--text-3); }
+  a.btn:active, button.btn:active { transform: scale(.98); }
+  a.btn-accent, a.btn-accent:link, a.btn-accent:visited, a.btn-accent:hover,
+  button.btn-accent, button.btn-accent:hover {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent-fg) !important;
+  }
+  a.btn-accent:hover, button.btn-accent:hover { background: var(--accent-2) !important; border-color: var(--accent-2) !important; }
+  a.btn-sm, button.btn-sm { height: 34px; padding: 0 .9rem; font-size: .82rem; }
+  a.btn-lg, button.btn-lg { height: 46px; padding: 0 1.5rem; font-size: .95rem; }
+  a.btn [class^="icon-"], a.btn svg, button.btn [class^="icon-"], button.btn svg {
+    font-size: 13px; vertical-align: 0; flex-shrink: 0;
+  }
+
+  /* === Layout === */
+  .layout { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  @media (min-width: 1600px) { .layout { grid-template-columns: 260px 1fr; } }
+  @media (min-width: 1920px) { .layout { grid-template-columns: 280px 1fr; } }
+  @media (min-width: 2560px) { .layout { grid-template-columns: 320px 1fr; } }
+  @media (max-width: 1023px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar {
+      position: fixed; top: 0; left: 0;
+      width: 280px; max-width: 85vw;
+      height: 100dvh;
+      transform: translateX(-105%);
+      transition: transform .22s cubic-bezier(.4, 0, .2, 1);
+      z-index: 100;
+      box-shadow: var(--shadow-lg);
+    }
+    .sidebar.open { transform: translateX(0); }
+  }
+
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border-soft);
+    padding: 1.2rem .85rem;
+    height: 100vh;
+    position: sticky; top: 0;
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  .sidebar .brand { margin-bottom: 1.5rem; padding: .35rem .6rem; }
+  .nav-section { font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; padding: 1rem .6rem .4rem; font-weight: 600; }
+  .nav-link {
+    display: flex; align-items: center; gap: .7rem;
+    padding: .55rem .65rem;
+    border-radius: 6px;
+    color: var(--text-2);
+    font-size: .87rem;
+    text-decoration: none !important;
+    transition: background .12s ease, color .12s ease;
+  }
+  .nav-link:hover { background: var(--surface-2); color: var(--text); }
+  .nav-link.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  .nav-link [class^="icon-"] { font-size: 14px; vertical-align: 0; width: 16px; text-align: center; }
+  .nav-spacer { flex: 1; }
+
+  .main { padding: 1.4rem clamp(1rem, 3vw, 2.2rem) 4rem; min-width: 0; }
+  @media (min-width: 1600px) { .main { padding: 1.8rem 2.5rem 5rem; } }
+  @media (min-width: 2560px) { .main { padding: 3rem 4rem 6rem; max-width: 1900px; } }
+
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+  .topbar-left { display: flex; align-items: center; gap: 1rem; min-width: 0; flex: 1; }
+  .topbar-text { min-width: 0; }
+  .page-title { font-size: 1.5rem; margin: 0; letter-spacing: -0.025em; color: var(--text); font-weight: 700; }
+  .page-subtitle { color: var(--text-3); font-size: .87rem; margin: .2rem 0 0; }
+  .topbar-actions { display: flex; gap: .5rem; align-items: center; }
+
+  .ws-badge {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .35rem .75rem; border-radius: 999px;
+    font-size: .72rem; font-weight: 500;
+    border: 1px solid var(--border-soft);
+    background: var(--surface);
+    color: var(--text-3);
+  }
+  .ws-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+  .ws-badge.live { color: var(--success); border-color: var(--success-soft); background: var(--success-soft); }
+  .ws-badge.live .dot { background: var(--success); }
+  .ws-badge.poll { color: var(--warning); }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr; gap: .85rem; }
+  @media (min-width: 540px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 1280px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
+  @media (min-width: 2560px) { .stat-grid { gap: 1.4rem; } }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 1.3rem 1.4rem;
+    box-shadow: var(--shadow);
+  }
+  .stat-label { display: flex; justify-content: space-between; align-items: center; }
+  .stat-label .name { font-size: .72rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+  .stat-label .badge { font-size: .62rem; padding: .15rem .45rem; border-radius: 4px; background: var(--accent-soft); color: var(--accent); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+  .stat-value { font-size: clamp(1.9rem, 3vw, 2.3rem); font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; margin: .9rem 0 .25rem; color: var(--text); }
+  .stat-value .unit { font-size: .9rem; color: var(--text-3); margin-left: .25rem; font-weight: 400; }
+  .stat-sub { font-size: .77rem; color: var(--text-3); display: flex; gap: .9rem; margin-top: .15rem; flex-wrap: wrap; }
+  .stat-sub span b { color: var(--text-2); font-weight: 500; }
+  .stat-bar { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-top: .9rem; }
+  .stat-bar > div { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .4s ease; }
+  .stat-bar.warn > div { background: linear-gradient(90deg, var(--warning), #d97706); }
+  .stat-bar.crit > div { background: linear-gradient(90deg, var(--error), #dc2626); }
+  .stat-chart { width: 100%; height: 50px; margin-top: .8rem; display: block; }
+  .stat-chart path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+  .stat-chart .fill { fill: var(--accent-soft); stroke: none; }
+
+  .section-head { margin: 2.5rem 0 1.2rem; }
+  .section-head h2 { font-size: 1.05rem; margin: 0; color: var(--text); letter-spacing: -0.02em; font-weight: 600; }
+  .section-head p { margin: .25rem 0 0; color: var(--text-3); font-size: .85rem; }
+
+  .visits-card { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .visit-row { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; padding: .85rem 1.3rem; border-bottom: 1px solid var(--border-soft); align-items: center; font-size: .82rem; }
+  .visit-row:last-child { border-bottom: 0; }
+  .visit-row .ip { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .76rem; color: var(--text-2); white-space: nowrap; }
+  .visit-row .path { color: var(--text); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .visit-row .ago { font-size: .72rem; color: var(--text-3); white-space: nowrap; }
+  @media (max-width: 480px) {
+    .visit-row { grid-template-columns: 1fr auto; }
+    .visit-row .ip { display: none; }
+  }
+  .empty { padding: 2rem; text-align: center; color: var(--text-3); font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+
+    <div class="nav-section">Monitoring</div>
+    <a class="nav-link active" href="/"><i class="icon-graph"></i>Dashboard</a>
+    <a class="nav-link" href="https://status.rofihosted.space"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="https://api.rofihosted.space"><i class="icon-energy"></i>API</a>
+
+    <div class="nav-section">Tools</div>
+    <a class="nav-link" href="https://files.rofihosted.space"><i class="icon-folder"></i>Files</a>
+
+    <div class="nav-section">External</div>
+    <a class="nav-link" href="https://rofihosted.space"><i class="icon-home"></i>Home</a>
+
+    <div class="nav-spacer"></div>
+
+    <div class="nav-section">Account</div>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu">
+          <i class="icon-menu"></i>
+        </button>
+        <div class="topbar-text">
+          <h1 class="page-title">Dashboard</h1>
+          <p class="page-subtitle">Live system metrics. Updated <span id="updated">never</span></p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="ws-status" class="ws-badge poll"><span class="dot"></span> connecting</span>
+        <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme" title="Toggle theme">
+          <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="stat-label">
+          <span class="name">CPU Usage</span>
+          <span class="badge" id="cpu-tag" style="display:none">live</span>
+        </div>
+        <div class="stat-value"><span id="cpu">0</span><span class="unit">%</span></div>
+        <div class="stat-bar"><div id="cpu-bar" style="width:0%"></div></div>
+        <svg class="stat-chart" id="cpu-chart" preserveAspectRatio="none" viewBox="0 0 100 30">
+          <path class="fill" d=""/><path d=""/>
+        </svg>
+      </div>
+      <div class="stat">
+        <div class="stat-label">
+          <span class="name">Memory</span>
+          <span class="badge">live</span>
+        </div>
+        <div class="stat-value"><span id="mem">0</span><span class="unit">%</span></div>
+        <div class="stat-bar"><div id="mem-bar" style="width:0%"></div></div>
+        <div class="stat-sub">
+          <span><b id="mem-used">0</b> used</span>
+          <span><b id="mem-total">0</b> total</span>
+        </div>
+        <svg class="stat-chart" id="mem-chart" preserveAspectRatio="none" viewBox="0 0 100 30">
+          <path class="fill" d=""/><path d=""/>
+        </svg>
+      </div>
+      <div class="stat">
+        <div class="stat-label"><span class="name">Load Average</span></div>
+        <div class="stat-value" id="load1" style="font-size:1.7rem">0.00</div>
+        <div class="stat-sub">
+          <span>5m <b id="load5">0</b></span>
+          <span>15m <b id="load15">0</b></span>
+        </div>
+      </div>
+      <div class="stat">
+        <div class="stat-label"><span class="name">System</span></div>
+        <div class="stat-value" id="uptime" style="font-size:1.4rem">restricted</div>
+        <div class="stat-sub">
+          <span><b id="procs">0</b> proc</span>
+          <span>swap <b id="swap">0</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <h2>Recent visits</h2>
+      <p>Last 12 requests across all hosts.</p>
+    </div>
+    <div class="visits-card" id="visits"><div class="empty">Loading visits</div></div>
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=4"></script>
+<script>
+const cpuHist = [], memHist = [], HIST = 60;
+function fmtUptime(secs) {
+  if (!secs) return 'restricted';
+  const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60);
+  const parts = [];
+  if (d) parts.push(d + 'd');
+  if (h || d) parts.push(h + 'h');
+  parts.push(m + 'm');
+  return parts.join(' ');
+}
+function barClass(pct, prefix) { return pct > 90 ? prefix + ' crit' : pct > 70 ? prefix + ' warn' : prefix; }
+function plotChart(svgId, history) {
+  if (history.length < 2) return;
+  const svg = document.getElementById(svgId);
+  const paths = svg.querySelectorAll('path');
+  const w = 100, h = 30;
+  const max = Math.max(100, ...history);
+  const pts = history.map(function (v, i) {
+    const x = (i / (HIST - 1)) * w;
+    const y = h - (v / max) * h;
+    return [x.toFixed(2), y.toFixed(2)];
+  });
+  const linePath = pts.map(function (p, i) { return (i === 0 ? 'M' : 'L') + p[0] + ' ' + p[1]; }).join(' ');
+  const fillPath = linePath + ' L' + pts[pts.length - 1][0] + ' ' + h + ' L' + pts[0][0] + ' ' + h + ' Z';
+  paths[0].setAttribute('d', fillPath);
+  paths[1].setAttribute('d', linePath);
+}
+function fmtAgo(ts) {
+  const ago = Math.floor(Date.now() / 1000 - ts);
+  if (ago < 60) return ago + 's ago';
+  if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+  return Math.floor(ago / 86400) + 'd ago';
+}
+function applyStats(s) {
+  if (s.has_cpu_stats) {
+    document.getElementById('cpu').textContent = (s.cpu_percent || 0).toFixed(1);
+    document.getElementById('cpu-bar').style.width = s.cpu_percent + '%';
+    document.getElementById('cpu-bar').parentElement.className = barClass(s.cpu_percent, 'stat-bar');
+    document.getElementById('cpu-tag').style.display = '';
+    cpuHist.push(s.cpu_percent);
+    if (cpuHist.length > HIST) cpuHist.shift();
+    plotChart('cpu-chart', cpuHist);
+  } else {
+    document.getElementById('cpu').textContent = 'n/a';
+  }
+  const memPct = s.memory ? s.memory.percent : s.mem_percent;
+  const memUsed = s.memory ? s.memory.used_mb : s.mem_used_mb;
+  const memTotal = s.memory ? s.memory.total_mb : s.mem_total_mb;
+  document.getElementById('mem').textContent = (memPct || 0).toFixed(1);
+  document.getElementById('mem-bar').style.width = memPct + '%';
+  document.getElementById('mem-bar').parentElement.className = barClass(memPct, 'stat-bar');
+  document.getElementById('mem-used').textContent = memUsed + ' MB';
+  document.getElementById('mem-total').textContent = memTotal + ' MB';
+  memHist.push(memPct);
+  if (memHist.length > HIST) memHist.shift();
+  plotChart('mem-chart', memHist);
+  if (s.load) {
+    document.getElementById('load1').textContent = s.load[0].toFixed(2);
+    document.getElementById('load5').textContent = s.load[1].toFixed(2);
+    document.getElementById('load15').textContent = s.load[2].toFixed(2);
+  }
+  if (s.uptime_seconds !== undefined) document.getElementById('uptime').textContent = fmtUptime(s.uptime_seconds);
+  if (s.processes !== undefined) document.getElementById('procs').textContent = s.processes || '0';
+  if (s.swap) document.getElementById('swap').textContent = s.swap.used_mb + '/' + s.swap.total_mb + 'MB';
+  else if (s.swap_used_mb !== undefined) document.getElementById('swap').textContent = s.swap_used_mb + 'MB';
+  document.getElementById('updated').textContent = new Date().toLocaleTimeString();
+}
+let ws = null;
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  ws.onopen = function () {
+    const el = document.getElementById('ws-status');
+    el.className = 'ws-badge live';
+    el.innerHTML = '<span class="dot"></span> live';
+    ws.send('tick');
+  };
+  ws.onmessage = function (e) {
+    try { applyStats(JSON.parse(e.data)); } catch (err) {}
+    setTimeout(function () { if (ws.readyState === 1) ws.send('tick'); }, 1500);
+  };
+  ws.onclose = function () {
+    const el = document.getElementById('ws-status');
+    el.className = 'ws-badge poll';
+    el.innerHTML = '<span class="dot"></span> polling';
+    setTimeout(connectWS, 3000);
+  };
+  ws.onerror = function () { ws.close(); };
+}
+async function pollFallback() {
+  if (ws && ws.readyState === 1) return;
+  try { applyStats(await (await fetch('/api/stats')).json()); } catch (e) {}
+}
+async function loadVisits() {
+  try {
+    const visits = await (await fetch('https://api.rofihosted.space/visits')).json();
+    const root = document.getElementById('visits');
+    if (!visits.length) { root.innerHTML = '<div class="empty">No visits yet</div>'; return; }
+    root.innerHTML = visits.slice(0, 12).map(function (v) {
+      return '<div class="visit-row">'
+        + '<span class="ip">' + (v.ip || 'local') + '</span>'
+        + '<span class="path">' + v.path + '</span>'
+        + '<span class="ago">' + fmtAgo(v.visited_at) + '</span>'
+        + '</div>';
+    }).join('');
+  } catch (e) {}
+}
+connectWS();
+setInterval(pollFallback, 3000);
+setInterval(loadVisits, 10000);
+pollFallback();
+loadVisits();
+</script>
+</body>
+</html>

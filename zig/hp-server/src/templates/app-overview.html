@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Overview / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=6">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=6">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  /* Group panels for transparency */
+  .group { margin-bottom: 1.6rem; }
+  .group-head { margin: 0 0 .8rem; display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  .group-head h2 { font-size: .95rem; margin: 0; color: var(--text); letter-spacing: -0.018em; font-weight: 600; }
+  .group-head .src { color: var(--text-3); font-size: .72rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .group-head .src code { background: var(--surface-2); border: 1px solid var(--border-soft); padding: .1rem .4rem; border-radius: 4px; }
+
+  .kv-grid { display: grid; gap: .6rem; grid-template-columns: 1fr; }
+  @media (min-width: 540px) { .kv-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 1280px) { .kv-grid { grid-template-columns: repeat(4, 1fr); } }
+  .kv {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    box-shadow: var(--shadow);
+  }
+  .kv .label { font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+  .kv .value { font-size: 1.4rem; font-weight: 600; color: var(--text); margin-top: .35rem; line-height: 1.2; letter-spacing: -0.018em; }
+  .kv .unit { font-size: .85rem; color: var(--text-3); margin-left: .2rem; font-weight: 400; }
+  .kv .sub { font-size: .73rem; color: var(--text-3); margin-top: .35rem; }
+  .kv .value.null { color: var(--text-3); font-weight: 400; font-size: .92rem; font-style: italic; }
+  .kv .bar { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-top: .7rem; }
+  .kv .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 2px; transition: width .4s ease; }
+  .kv .bar.warn > div { background: linear-gradient(90deg, var(--warning), #d97706); }
+  .kv .bar.crit > div { background: linear-gradient(90deg, var(--error), #dc2626); }
+
+  .pill-status {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .12rem .55rem; border-radius: 999px;
+    font-size: .68rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .pill-status.ok { background: var(--success-soft); color: var(--success); }
+  .pill-status.warn { background: rgba(245,158,11,.12); color: var(--warning); }
+  .pill-status.bad { background: var(--error-soft); color: var(--error); }
+  .pill-status.muted { background: var(--surface-2); color: var(--text-3); }
+
+  .edge-badges { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .35rem; }
+  .edge-badge {
+    background: var(--accent-soft); color: var(--accent);
+    padding: .15rem .5rem; border-radius: 4px;
+    font-size: .7rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600;
+  }
+
+  .codes-table { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .4rem; }
+  .code-cell {
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    padding: .25rem .55rem;
+    border-radius: 5px;
+    font-size: .72rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text-2);
+  }
+  .code-cell .code { font-weight: 600; color: var(--text); }
+  .code-cell .count { margin-left: .35rem; color: var(--text-3); }
+
+  .caps-row { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .cap {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .25rem .6rem; border-radius: 6px;
+    font-size: .72rem; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    border: 1px solid var(--border-soft); background: var(--surface);
+  }
+  .cap.on { color: var(--success); }
+  .cap.off { color: var(--text-3); }
+  .cap-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .cap.on .cap-dot { background: var(--success); }
+  .cap.off .cap-dot { background: var(--text-4); }
+
+  .note {
+    font-size: .78rem; color: var(--text-3);
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    border-radius: 8px; padding: .7rem 1rem;
+    margin-top: .8rem; line-height: 1.55;
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link active" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
+    <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Overview</h1>
+          <p class="page-subtitle">Updated <span id="updated">never</span>. Refresh every 5 seconds.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="ws-status" class="ws-badge poll"><span class="dot"></span> connecting</span>
+        <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+          <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- This server -->
+    <section class="group">
+      <div class="group-head">
+        <h2>This server (hp-server process)</h2>
+        <div class="src">source <code>/proc/self/status</code></div>
+      </div>
+      <div class="kv-grid">
+        <div class="kv"><div class="label">Resident memory</div><div class="value" id="proc-rss">—</div><div class="sub" id="proc-rss-sub"></div></div>
+        <div class="kv"><div class="label">Virtual memory</div><div class="value" id="proc-vsz">—</div></div>
+        <div class="kv"><div class="label">Threads</div><div class="value" id="proc-threads">—</div></div>
+        <div class="kv"><div class="label">Open file descriptors</div><div class="value" id="proc-fds">—</div></div>
+      </div>
+    </section>
+
+    <!-- System memory -->
+    <section class="group">
+      <div class="group-head">
+        <h2>System memory</h2>
+        <div class="src">source <code>/proc/meminfo</code></div>
+      </div>
+      <div class="kv-grid">
+        <div class="kv">
+          <div class="label">Used</div>
+          <div class="value"><span id="mem-percent">—</span><span class="unit">%</span></div>
+          <div class="bar"><div id="mem-bar" style="width:0%"></div></div>
+          <div class="sub" id="mem-sub">—</div>
+        </div>
+        <div class="kv"><div class="label">Available</div><div class="value" id="mem-avail">—</div></div>
+        <div class="kv"><div class="label">Free</div><div class="value" id="mem-free">—</div></div>
+        <div class="kv"><div class="label">Cached</div><div class="value" id="mem-cached">—</div></div>
+      </div>
+    </section>
+
+    <!-- Swap -->
+    <section class="group">
+      <div class="group-head">
+        <h2>Swap</h2>
+        <div class="src">source <code>/proc/meminfo</code></div>
+      </div>
+      <div class="kv-grid">
+        <div class="kv">
+          <div class="label">Used</div>
+          <div class="value" id="swap-used">—</div>
+          <div class="bar"><div id="swap-bar" style="width:0%"></div></div>
+        </div>
+        <div class="kv"><div class="label">Free</div><div class="value" id="swap-free">—</div></div>
+        <div class="kv"><div class="label">Total</div><div class="value" id="swap-total">—</div></div>
+        <div class="kv"><div class="label">Utilization</div><div class="value"><span id="swap-percent">—</span><span class="unit">%</span></div></div>
+      </div>
+    </section>
+
+    <!-- Battery -->
+    <section class="group">
+      <div class="group-head">
+        <h2>Battery</h2>
+        <div class="src">source <code>termux-battery-status</code></div>
+      </div>
+      <div class="kv-grid">
+        <div class="kv">
+          <div class="label">Charge</div>
+          <div class="value"><span id="bat-pct">—</span><span class="unit">%</span></div>
+          <div class="bar"><div id="bat-bar" style="width:0%"></div></div>
+          <div class="sub" id="bat-status">—</div>
+        </div>
+        <div class="kv"><div class="label">Plugged</div><div class="value" id="bat-plugged" style="font-size:1rem">—</div></div>
+        <div class="kv"><div class="label">Temperature</div><div class="value" id="bat-temp">—</div></div>
+        <div class="kv"><div class="label">Voltage</div><div class="value" id="bat-voltage">—</div></div>
+      </div>
+    </section>
+
+    <!-- Network -->
+    <section class="group">
+      <div class="group-head">
+        <h2>Network (WiFi)</h2>
+        <div class="src">source <code>termux-wifi-connectioninfo</code></div>
+      </div>
+      <div class="kv-grid">
+        <div class="kv"><div class="label">SSID</div><div class="value" id="wifi-ssid" style="font-size:1rem">—</div></div>
+        <div class="kv"><div class="label">IP address</div><div class="value" id="wifi-ip" style="font-size:1rem; font-family: ui-monospace, monospace">—</div></div>
+        <div class="kv"><div class="label">Link speed</div><div class="value"><span id="wifi-speed">—</span><span class="unit">Mbps</span></div></div>
+        <div class="kv"><div class="label">Signal (RSSI)</div><div class="value"><span id="wifi-rssi">—</span><span class="unit">dBm</span></div></div>
+      </div>
+    </section>
+
+    <!-- Cloudflare Tunnel -->
+    <section class="group">
+      <div class="group-head">
+        <h2>Cloudflare Tunnel</h2>
+        <div class="src">source <code>cloudflared:20241/metrics</code></div>
+      </div>
+      <div class="kv-grid">
+        <div class="kv">
+          <div class="label">HA Connections</div>
+          <div class="value" id="tun-connections">—</div>
+          <div class="edge-badges" id="tun-edges"></div>
+        </div>
+        <div class="kv"><div class="label">Total requests</div><div class="value" id="tun-total">—</div></div>
+        <div class="kv"><div class="label">Request errors</div><div class="value" id="tun-errors">—</div></div>
+        <div class="kv">
+          <div class="label">Response codes</div>
+          <div class="codes-table" id="tun-codes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Capabilities (transparency) -->
+    <section class="group">
+      <div class="group-head">
+        <h2>Sandbox capabilities</h2>
+        <div class="src">what we can and cannot read on Android 12</div>
+      </div>
+      <div class="caps-row" id="caps">
+        <span class="cap"><span class="cap-dot"></span><span>loading</span></span>
+      </div>
+      <p class="note" id="caps-note">SELinux on Android restricts non-root access to global system stats. We only display what is actually readable. No fake CPU% or load average.</p>
+    </section>
+
+    <div class="section-head">
+      <h2>Recent visits</h2>
+      <p>Last 12 incoming requests across all hosts. Append-only JSONL on disk.</p>
+    </div>
+    <div class="visits-card" id="visits"><div class="empty">Loading visits</div></div>
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=8"></script>
+<script src="https://rofihosted.space/app.js?v=8"></script>
+<script>
+  // Initial load
+  RH.loadCurrentUser();
+  RH.fetchInitialStats();
+  RH.fetchHost();
+  RH.fetchTunnel();
+  RH.loadVisits();
+
+  // Realtime
+  RH.on('stats_tick', function (s) { RH.applyTickToOverview(s); });
+  RH.on('visit', function (v) { RH.prependVisit(v); });
+  RH.on('uptime_probe', function () { RH.fetchTunnel(); });
+  RH.on('blocklist_change', function () { /* could surface a toast */ });
+
+  // Battery + WiFi only update via /api/host (not in stream). Refresh periodically.
+  setInterval(RH.fetchHost, 30000);
+  setInterval(RH.fetchTunnel, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Settings / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=5">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=5">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
+    <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
+    <a class="nav-link active" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Settings</h1>
+          <p class="page-subtitle">Manage your account credentials.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="ws-status" class="ws-badge poll"><span class="dot"></span> connecting</span>
+        <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+          <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="alert" class="alert" style="display:none"></div>
+
+    <div class="form-card">
+      <h2>Change credentials</h2>
+      <p class="lead">Update your username or password. Existing sessions on other devices stay signed in until they expire (7 days) or you sign out from there.</p>
+      <form method="POST" action="/settings/change" autocomplete="off">
+        <div class="form-row">
+          <label class="input-label" for="current_password">Current password</label>
+          <input class="input" type="password" id="current_password" name="current_password" required>
+        </div>
+        <div class="form-row">
+          <label class="input-label" for="new_username">New username</label>
+          <input class="input" type="text" id="new_username" name="new_username" required>
+        </div>
+        <div class="form-row">
+          <label class="input-label" for="new_password">New password</label>
+          <input class="input" type="password" id="new_password" name="new_password" required>
+        </div>
+        <div class="submit-row">
+          <button type="submit" class="btn btn-accent">
+            <span>Save changes</span>
+            <i class="icon-arrow-right"></i>
+          </button>
+          <a href="/" class="btn"><span>Cancel</span></a>
+        </div>
+      </form>
+    </div>
+
+    <div class="session-card">
+      <div class="row"><span class="k">Current user</span><span class="v" id="cur-user-2">loading</span></div>
+      <div class="row"><span class="k">Session</span><span class="v">cookie based, 7 day TTL</span></div>
+      <div class="row"><span class="k">Cookie</span><span class="v">HttpOnly, Secure, SameSite=Lax</span></div>
+    </div>
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=5"></script>
+<script src="https://rofihosted.space/app.js?v=5"></script>
+<script>
+  (function () {
+    const params = new URLSearchParams(location.search);
+    const alertEl = document.getElementById('alert');
+    if (params.get('ok') === '1') {
+      alertEl.className = 'alert success';
+      alertEl.innerHTML = '<i class="icon-check"></i> Credentials updated. Your session is renewed.';
+      alertEl.style.display = '';
+    } else if (params.get('error') === '1') {
+      alertEl.className = 'alert error';
+      alertEl.innerHTML = '<i class="icon-exclamation"></i> Current password incorrect, or new fields invalid.';
+      alertEl.style.display = '';
+    }
+    fetch('/api/me').then(function (r) { return r.json(); }).then(function (j) {
+      document.getElementById('cur-user').textContent = j.username || 'unknown';
+      document.getElementById('cur-user-2').textContent = j.username || 'unknown';
+    }).catch(function () {});
+  })();
+</script>
+</body>
+</html>

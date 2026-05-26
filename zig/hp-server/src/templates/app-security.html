@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Security / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=8">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=8">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
+  @media (min-width: 800px) { .summary-grid { grid-template-columns: repeat(4, 1fr); } }
+  @media (min-width: 1280px) { .summary-grid { grid-template-columns: repeat(6, 1fr); } }
+  .sum-card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    box-shadow: var(--shadow);
+  }
+  .sum-card .label { font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+  .sum-card .value { font-size: 1.5rem; font-weight: 600; color: var(--text); margin-top: .35rem; line-height: 1.2; letter-spacing: -0.018em; }
+  .sum-card .value.success { color: var(--success); }
+  .sum-card .value.warn { color: var(--warning); }
+  .sum-card .value.error { color: var(--error); }
+  .sum-card .value.muted { color: var(--text-3); }
+
+  .ip-table-wrap, .listing {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    margin-bottom: 1.5rem;
+  }
+  .listing-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    padding: .65rem 1.15rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: .85rem;
+    align-items: center;
+    gap: 1rem;
+  }
+  .listing-row:last-child { border-bottom: 0; }
+  .listing-row .v {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .listing-row .c {
+    color: var(--text-3);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .8rem;
+  }
+  .listing-row.success-row .v { color: var(--success); }
+  .listing-row.fail-row .v { color: var(--error); }
+
+  .ip-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) auto auto auto auto auto;
+    gap: 1rem;
+    padding: .8rem 1.15rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: .82rem;
+    align-items: center;
+  }
+  .ip-row.head { background: var(--surface-2); font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3); font-weight: 600; }
+  .ip-row:last-child { border-bottom: 0; }
+  .ip-row .ip {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .ip-row .num { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-2); font-size: .8rem; }
+  .ip-row .country { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-3); font-size: .76rem; }
+  .ip-row .last { font-size: .76rem; color: var(--text-3); white-space: nowrap; }
+  @media (max-width: 720px) {
+    .ip-row { grid-template-columns: 1fr auto auto; }
+    .ip-row .country, .ip-row .last { display: none; }
+  }
+
+  .cls-pill {
+    display: inline-block;
+    padding: .12rem .5rem;
+    border-radius: 4px;
+    font-size: .68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .cls-pill.self { background: var(--accent-soft); color: var(--accent); }
+  .cls-pill.unknown { background: rgba(245,158,11,.12); color: var(--warning); }
+  .cls-pill.bot { background: var(--surface-3); color: var(--text-3); }
+  .cls-pill.scanner { background: var(--error-soft); color: var(--error); }
+  .cls-pill.blocked { background: var(--error-soft); color: var(--error); }
+  .cls-pill.legacy { background: var(--surface-3); color: var(--text-4); }
+
+  .block-form {
+    display: flex; gap: .5rem; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 10px; padding: 1rem 1.15rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow);
+  }
+  .block-form input { flex: 1; min-width: 180px; }
+
+  .block-actions { display: flex; gap: .35rem; }
+  .btn-danger {
+    background: var(--error-soft) !important;
+    border-color: var(--error-soft) !important;
+    color: var(--error) !important;
+  }
+  .btn-danger:hover { background: rgba(248,113,113,.18) !important; }
+
+  .blocklist-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: .75rem;
+    padding: .7rem 1.15rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: .82rem;
+    align-items: center;
+  }
+  .blocklist-row:last-child { border-bottom: 0; }
+  .blocklist-row .ip { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); font-weight: 500; }
+  .blocklist-row .reason { color: var(--text-3); font-size: .76rem; }
+  .blocklist-row .ttl { color: var(--text-3); font-size: .76rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  @media (max-width: 600px) {
+    .blocklist-row { grid-template-columns: 1fr auto; }
+    .blocklist-row .reason, .blocklist-row .ttl { display: none; }
+  }
+
+  .empty { padding: 2rem; text-align: center; color: var(--text-3); font-size: .85rem; }
+
+  .info-banner {
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    padding: .85rem 1.1rem;
+    margin-bottom: 1.5rem;
+    color: var(--text-2);
+    font-size: .82rem;
+    line-height: 1.55;
+  }
+  .info-banner strong { color: var(--text); font-weight: 600; }
+  .info-banner [class^="icon-"] { color: var(--accent); margin-right: .35rem; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
+    <a class="nav-link active" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Security</h1>
+          <p class="page-subtitle">Access analysis, login attempts, IP blocklist. Refreshes every 10 seconds.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="ws-status" class="ws-badge poll"><span class="dot"></span> connecting</span>
+        <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+          <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="info-banner">
+      <i class="icon-info"></i>
+      <strong>Classification model.</strong>
+      <strong>self</strong> means an authenticated request from your session.
+      <strong>scanner</strong> means probing known vulnerable paths (auto-banned 24h after 3 hits in 10 min).
+      <strong>bot</strong> means a non-browser client or known crawler UA.
+      <strong>unknown</strong> means a browser-like fingerprint that has not signed in. Cannot guarantee it is a real human.
+    </div>
+
+    <!-- Summary -->
+    <div class="summary-grid">
+      <div class="sum-card"><div class="label">Total requests</div><div class="value" id="s-total">—</div></div>
+      <div class="sum-card"><div class="label">Last hour</div><div class="value" id="s-hour">—</div></div>
+      <div class="sum-card"><div class="label">Last 24h</div><div class="value" id="s-day">—</div></div>
+      <div class="sum-card"><div class="label">Self</div><div class="value success" id="s-self">—</div></div>
+      <div class="sum-card"><div class="label">Unknown</div><div class="value warn" id="s-unknown">—</div></div>
+      <div class="sum-card"><div class="label">Scanners</div><div class="value error" id="s-scanner">—</div></div>
+    </div>
+
+    <!-- IP table -->
+    <div class="section-head">
+      <h2>Top source IPs</h2>
+      <p>Aggregated from the last 1000 logged requests.</p>
+    </div>
+    <div class="ip-table-wrap" id="ip-table">
+      <div class="empty">Loading</div>
+    </div>
+
+    <!-- Block form + blocklist -->
+    <div class="section-head">
+      <h2>IP blocklist</h2>
+      <p>Manual entries are permanent. Auto-bans expire (scanner: 24h, login brute force: 1h).</p>
+    </div>
+    <form class="block-form" id="block-form">
+      <input class="input" type="text" id="block-ip" placeholder="e.g. 1.2.3.4" pattern="[0-9a-fA-F:.]+" required>
+      <input class="input" type="text" id="block-reason" placeholder="reason (optional)" style="flex:0.7">
+      <button type="submit" class="btn btn-danger">
+        <i class="icon-ban"></i><span>Block IP</span>
+      </button>
+    </form>
+    <div class="ip-table-wrap" id="blocklist">
+      <div class="empty">No blocked IPs yet.</div>
+    </div>
+
+    <!-- Login attempts -->
+    <div class="section-head">
+      <h2>Recent login attempts</h2>
+      <p>5 failed attempts within 15 min auto-ban the source IP for 1 hour.</p>
+    </div>
+    <div class="listing" id="login-table">
+      <div class="empty">No login attempts yet.</div>
+    </div>
+
+    <!-- Top user-agents -->
+    <div class="section-head">
+      <h2>Top user agents</h2>
+    </div>
+    <div class="listing" id="ua-table">
+      <div class="empty">Loading</div>
+    </div>
+
+    <!-- Top paths -->
+    <div class="section-head">
+      <h2>Most requested paths</h2>
+      <p>Watch unfamiliar paths and 4xx clusters.</p>
+    </div>
+    <div class="listing" id="path-table">
+      <div class="empty">Loading</div>
+    </div>
+
+    <!-- Top countries -->
+    <div class="section-head">
+      <h2>Top countries</h2>
+      <p>From Cloudflare cf-ipcountry header. Local requests have no country.</p>
+    </div>
+    <div class="listing" id="country-table">
+      <div class="empty">Loading</div>
+    </div>
+
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=8"></script>
+<script src="https://rofihosted.space/app.js?v=8"></script>
+<script>
+function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+function fmtAgo(ts) {
+  const ago = Math.floor(Date.now() / 1000 - ts);
+  if (ago < 60) return ago + 's ago';
+  if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+  return Math.floor(ago / 86400) + 'd ago';
+}
+function fmtTtl(expires) {
+  if (!expires || expires === 0) return 'permanent';
+  const left = expires - Math.floor(Date.now() / 1000);
+  if (left <= 0) return 'expired';
+  if (left < 60) return left + 's left';
+  if (left < 3600) return Math.floor(left/60) + 'm left';
+  if (left < 86400) return Math.floor(left/3600) + 'h left';
+  return Math.floor(left/86400) + 'd left';
+}
+function escapeHtml(s) {
+  return (s || '').replace(/[<>&"']/g, function(c) {
+    return { '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c];
+  });
+}
+function escapeAttr(s) { return escapeHtml(s); }
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/security');
+    const j = await r.json();
+
+    setText('s-total', j.total_requests);
+    setText('s-hour', j.requests_last_hour);
+    setText('s-day', j.requests_last_24h);
+    setText('s-self', j.classification.self);
+    setText('s-unknown', j.classification.unknown);
+    setText('s-scanner', j.classification.scanner);
+
+    const blockedIps = j.blocklist.map(function(b) { return b.ip; });
+
+    // Top IPs
+    const ipTable = document.getElementById('ip-table');
+    if (!j.top_ips.length) {
+      ipTable.innerHTML = '<div class="empty">No traffic yet.</div>';
+    } else {
+      let html = '<div class="ip-row head"><span>IP</span><span>Hits</span><span>Country</span><span class="last">Last seen</span><span>Class</span><span>Action</span></div>';
+      html += j.top_ips.map(function(r) {
+        const blocked = blockedIps.indexOf(r.ip) >= 0;
+        const isLocal = r.ip === 'local';
+        return '<div class="ip-row">'
+          + '<span class="ip">' + escapeHtml(r.ip) + '</span>'
+          + '<span class="num">' + r.count + '</span>'
+          + '<span class="country">' + escapeHtml(r.country || '—') + '</span>'
+          + '<span class="last">' + fmtAgo(r.last_seen) + '</span>'
+          + '<span><span class="cls-pill ' + escapeAttr(r.last_classification || 'legacy') + '">' + escapeHtml(r.last_classification || 'legacy') + '</span></span>'
+          + '<span class="block-actions">'
+          + (isLocal ? ''
+            : (blocked
+              ? '<button class="btn btn-sm" data-unblock="' + escapeAttr(r.ip) + '"><i class="icon-check"></i><span>Unblock</span></button>'
+              : '<button class="btn btn-sm btn-danger" data-block="' + escapeAttr(r.ip) + '"><i class="icon-ban"></i><span>Block</span></button>'))
+          + '</span>'
+          + '</div>';
+      }).join('');
+      ipTable.innerHTML = html;
+    }
+
+    // Blocklist
+    const blEl = document.getElementById('blocklist');
+    if (!j.blocklist.length) {
+      blEl.innerHTML = '<div class="empty">No blocked IPs.</div>';
+    } else {
+      blEl.innerHTML = j.blocklist.map(function(b) {
+        return '<div class="blocklist-row">'
+          + '<span class="ip">' + escapeHtml(b.ip) + '</span>'
+          + '<span class="reason">' + escapeHtml(b.reason || '—') + '</span>'
+          + '<span class="ttl">' + fmtTtl(b.expires_at) + '</span>'
+          + '<button class="btn btn-sm" data-unblock="' + escapeAttr(b.ip) + '"><i class="icon-check"></i><span>Unblock</span></button>'
+          + '</div>';
+      }).join('');
+    }
+
+    // Login attempts
+    const lEl = document.getElementById('login-table');
+    if (!j.recent_logins || !j.recent_logins.length) {
+      lEl.innerHTML = '<div class="empty">No login attempts logged yet.</div>';
+    } else {
+      lEl.innerHTML = j.recent_logins.map(function(la) {
+        const cls = la.success ? 'success-row' : 'fail-row';
+        const status = la.success ? 'success' : 'failed';
+        return '<div class="listing-row ' + cls + '">'
+          + '<span class="v">' + escapeHtml(la.ip) + ' &middot; ' + escapeHtml(la.username || '?') + ' &middot; ' + status + '</span>'
+          + '<span class="c">' + fmtAgo(la.timestamp) + '</span>'
+          + '</div>';
+      }).join('');
+    }
+
+    // UA, paths, countries
+    const renderList = function(elId, items, emptyMsg) {
+      const root = document.getElementById(elId);
+      if (!root) return;
+      if (!items || !items.length) {
+        root.innerHTML = '<div class="empty">' + emptyMsg + '</div>';
+        return;
+      }
+      root.innerHTML = items.map(function(r) {
+        return '<div class="listing-row"><span class="v" title="' + escapeAttr(r.value) + '">' + escapeHtml(r.value) + '</span><span class="c">' + r.count + '</span></div>';
+      }).join('');
+    };
+    renderList('ua-table', j.top_user_agents, 'No traffic yet.');
+    renderList('path-table', j.top_paths, 'No traffic yet.');
+    renderList('country-table', j.top_countries, 'No country data yet.');
+  } catch (e) {}
+}
+
+async function blockIp(ip, reason) {
+  const fd = new FormData();
+  fd.append('ip', ip);
+  if (reason) fd.append('reason', reason);
+  await fetch('/api/security/block', { method: 'POST', body: fd });
+  refresh();
+}
+async function unblockIp(ip) {
+  const fd = new FormData();
+  fd.append('ip', ip);
+  await fetch('/api/security/unblock', { method: 'POST', body: fd });
+  refresh();
+}
+
+document.addEventListener('click', function(e) {
+  const blockBtn = e.target.closest('[data-block]');
+  if (blockBtn) {
+    e.preventDefault();
+    blockIp(blockBtn.getAttribute('data-block'), 'manual from security page');
+    return;
+  }
+  const unblockBtn = e.target.closest('[data-unblock]');
+  if (unblockBtn) {
+    e.preventDefault();
+    unblockIp(unblockBtn.getAttribute('data-unblock'));
+    return;
+  }
+});
+
+document.getElementById('block-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  const ip = document.getElementById('block-ip').value.trim();
+  const reason = document.getElementById('block-reason').value.trim() || 'manual';
+  if (ip) {
+    blockIp(ip, reason);
+    document.getElementById('block-ip').value = '';
+    document.getElementById('block-reason').value = '';
+  }
+});
+
+RH.loadCurrentUser();
+refresh();
+RH.on('visit', function () { refresh(); });
+RH.on('login_attempt', function () { refresh(); });
+RH.on('blocklist_change', function () { refresh(); });
+// Periodic safety refresh in case SSE drops without us noticing
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

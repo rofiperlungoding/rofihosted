@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Status</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=4">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  a, a:link, a:visited, a:hover { text-decoration: none !important; }
+  a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus,
+  button.btn, button.btn:hover, button.btn:focus {
+    text-decoration: none !important;
+    display: inline-flex !important;
+    align-items: center; justify-content: center;
+    gap: .5rem; height: 38px; padding: 0 1.05rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; font: inherit; font-size: .87rem; font-weight: 500;
+    color: var(--text); cursor: pointer; white-space: nowrap;
+    box-shadow: var(--shadow);
+    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+  }
+  a.btn:hover, button.btn:hover { background: var(--surface-2); border-color: var(--text-3); }
+  a.btn-sm, button.btn-sm { height: 34px; padding: 0 .9rem; font-size: .82rem; }
+  a.btn [class^="icon-"], a.btn svg { font-size: 13px; vertical-align: 0; flex-shrink: 0; }
+
+  .wrap { max-width: 760px; }
+  @media (min-width: 1280px) { .wrap { max-width: 880px; } }
+  @media (min-width: 1920px) { .wrap { max-width: 1100px; } }
+
+  .hero {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 1.7rem 1.9rem;
+    margin-bottom: 1.5rem;
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem; flex-wrap: wrap;
+    box-shadow: var(--shadow);
+  }
+  .hero-text h1 { font-size: 1.55rem; margin: 0; letter-spacing: -0.025em; color: var(--text); font-weight: 700; }
+  .hero-text p { color: var(--text-3); font-size: .87rem; margin: .25rem 0 0; }
+  .hero-stats { display: flex; gap: 1.75rem; }
+  .hero-stat { text-align: right; }
+  .hero-stat .num { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.025em; }
+  .hero-stat .num.up { color: var(--success); }
+  .hero-stat .num.down { color: var(--error); }
+  .hero-stat .lbl { font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+  @media (max-width: 540px) { .hero-stats { gap: 1rem; } }
+
+  .targets { display: flex; flex-direction: column; gap: .55rem; }
+  .target {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 1rem;
+    align-items: center;
+    padding: 1rem 1.3rem;
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+  }
+  @media (max-width: 480px) {
+    .target { grid-template-columns: auto 1fr auto; padding: .9rem 1rem; }
+    .target .code { display: none; }
+  }
+  .dot-wrap { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; }
+  .dot-wrap.up { background: var(--success-soft); }
+  .dot-wrap.down { background: var(--error-soft); }
+  .dot-wrap.unknown { background: var(--surface-2); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot.up { background: var(--success); }
+  .dot.down { background: var(--error); }
+  .dot.unknown { background: var(--text-3); }
+  .info { min-width: 0; }
+  .info .name { font-weight: 600; font-size: .95rem; letter-spacing: -0.013em; color: var(--text); }
+  .info .meta { font-size: .73rem; color: var(--text-3); margin-top: .15rem; }
+  .code { font-size: .7rem; padding: .25rem .55rem; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 5px; font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-2); }
+  .latency { font-size: .82rem; color: var(--text-2); font-family: ui-monospace, "SF Mono", Menlo, monospace; min-width: 50px; text-align: right; white-space: nowrap; }
+  .empty { padding: 3rem 1rem; text-align: center; color: var(--text-3); background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; }
+
+  .badges { margin-top: 2.5rem; }
+  .badges h3 { font-size: 1.05rem; margin: 0 0 .25rem; color: var(--text); letter-spacing: -0.02em; font-weight: 600; }
+  .badges p.lead { color: var(--text-3); font-size: .85rem; margin: 0 0 1rem; }
+  .badges-card { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 1.3rem 1.4rem; box-shadow: var(--shadow); }
+  .badges-card pre { background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px; padding: .85rem 1rem; overflow-x: auto; font-size: .78rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-2); margin: 0; }
+  .badges-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+  .badges-row img { display: block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page-header">
+    <a href="https://rofihosted.space" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted&nbsp;/&nbsp;status</span></a>
+    <div class="actions">
+      <a href="https://rofihosted.space" class="btn btn-sm">
+        <i class="icon-home"></i><span>Home</span>
+      </a>
+      <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme" title="Toggle theme">
+        <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="hero">
+    <div class="hero-text">
+      <h1 id="hero-title">Loading</h1>
+      <p id="hero-sub">Probing endpoints every 60 seconds</p>
+    </div>
+    <div class="hero-stats">
+      <div class="hero-stat"><div class="num up" id="ups">0</div><div class="lbl">up</div></div>
+      <div class="hero-stat"><div class="num down" id="downs">0</div><div class="lbl">down</div></div>
+    </div>
+  </div>
+
+  <div class="targets" id="targets"><div class="empty">Loading checks</div></div>
+
+  <div class="badges">
+    <h3>Embed status badge</h3>
+    <p class="lead">Drop these badges in any markdown to surface live status.</p>
+    <div class="badges-card">
+      <pre>![status](https://status.rofihosted.space/badge.svg)</pre>
+      <div class="badges-row">
+        <img src="/badge.svg" alt="overall">
+        <img src="/badge/self-health.svg" alt="self-health">
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <span>auto refresh every 10 seconds</span>
+    <span>rofihosted.space</span>
+  </footer>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=4"></script>
+<script>
+function fmtAgo(ts) {
+  const ago = Math.floor(Date.now() / 1000 - ts);
+  if (ago < 60) return ago + 's ago';
+  if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+  return Math.floor(ago / 86400) + 'd ago';
+}
+async function tick() {
+  try {
+    const list = await (await fetch('/api/uptime')).json();
+    const root = document.getElementById('targets');
+    if (!list.length) {
+      root.innerHTML = '<div class="empty">No probe data yet, waiting for first check</div>';
+      return;
+    }
+    let ups = 0, downs = 0;
+    list.sort(function (a, b) { return a.target.localeCompare(b.target); });
+    root.innerHTML = list.map(function (t) {
+      if (t.ok) ups++; else downs++;
+      const cls = t.ok ? 'up' : 'down';
+      return '<div class="target">'
+        + '<div class="dot-wrap ' + cls + '"><div class="dot ' + cls + '"></div></div>'
+        + '<div class="info">'
+        + '<div class="name">' + t.target + '</div>'
+        + '<div class="meta">checked ' + fmtAgo(t.checked_at) + ', ' + (t.ok ? 'operational' : 'unreachable') + '</div>'
+        + '</div>'
+        + '<span class="code">' + (t.status_code || 'ERR') + '</span>'
+        + '<span class="latency">' + t.latency_ms + 'ms</span>'
+        + '</div>';
+    }).join('');
+    document.getElementById('ups').textContent = ups;
+    document.getElementById('downs').textContent = downs;
+    const title = downs === 0 ? 'All systems operational' : (ups === 0 ? 'Major outage' : 'Partial outage');
+    document.getElementById('hero-title').textContent = title;
+    document.getElementById('hero-sub').textContent = 'Probing ' + list.length + ' endpoints every 60 seconds';
+  } catch (e) {}
+}
+tick();
+setInterval(tick, 10000);
+</script>
+</body>
+</html>

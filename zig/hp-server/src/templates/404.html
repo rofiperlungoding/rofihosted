@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>404 Not Found</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=4">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  a, a:link, a:visited, a:hover { text-decoration: none !important; }
+  a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus,
+  button.btn, button.btn:hover, button.btn:focus {
+    text-decoration: none !important;
+    display: inline-flex !important;
+    align-items: center; justify-content: center;
+    gap: .5rem; height: 38px; padding: 0 1.05rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; font: inherit; font-size: .87rem; font-weight: 500;
+    color: var(--text); cursor: pointer; white-space: nowrap;
+    box-shadow: var(--shadow);
+    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+  }
+  a.btn:hover, button.btn:hover { background: var(--surface-2); border-color: var(--text-3); }
+  a.btn:active, button.btn:active { transform: scale(.98); }
+  a.btn-accent, a.btn-accent:link, a.btn-accent:visited, a.btn-accent:hover {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent-fg) !important;
+  }
+  a.btn-accent:hover { background: var(--accent-2) !important; border-color: var(--accent-2) !important; }
+  a.btn-lg, button.btn-lg { height: 46px; padding: 0 1.5rem; font-size: .95rem; }
+  a.btn [class^="icon-"], button.btn [class^="icon-"] { font-size: 13px; vertical-align: 0; flex-shrink: 0; }
+
+  body { display: grid; place-items: center; padding: 1.5rem; text-align: center; }
+  .card-404 { max-width: 480px; }
+  .num { font-size: 7rem; font-weight: 700; line-height: 1; background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; margin: 0 0 .9rem; letter-spacing: -0.05em; }
+  h1 { font-size: 1.45rem; margin: 0 0 .8rem; letter-spacing: -0.025em; font-weight: 700; }
+  p { color: var(--text-3); line-height: 1.6; max-width: 380px; margin: 0 auto 1.6rem; font-size: .92rem; }
+  .top-actions { position: fixed; top: 1rem; right: 1rem; }
+  .footer { margin-top: 2rem; color: var(--text-3); font-size: .75rem; }
+  @media (min-width: 1920px) { .num { font-size: 9rem; } h1 { font-size: 1.7rem; } p { font-size: 1rem; max-width: 480px; } }
+</style>
+</head>
+<body>
+<div class="top-actions">
+  <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+    <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
+</div>
+<div class="card-404">
+  <div class="num">404</div>
+  <h1>Page not found</h1>
+  <p>The path you requested does not match any handler. Check the URL or return to home.</p>
+  <a class="btn btn-accent btn-lg" href="https://rofihosted.space">
+    <i class="icon-arrow-left"></i>
+    <span>Back to home</span>
+  </a>
+  <div class="footer">rofihosted, powered by Zig</div>
+</div>
+<script src="https://rofihosted.space/theme.js?v=4"></script>
+</body>
+</html>

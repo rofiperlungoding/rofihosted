@@ -1,0 +1,13 @@
+.{
+    .name = .hp_server,
+    .version = "0.1.0",
+    .fingerprint = 0x93d04b896cbca5c7,
+    .minimum_zig_version = "0.14.0",
+    .paths = .{""},
+    .dependencies = .{
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/refs/heads/zig-0.14.tar.gz",
+            .hash = "httpz-0.0.0-PNVzrAvCBgDPm4lE3vCQekPyCKAE2TIsbxly-GeS1_gl",
+        },
+    },
+}
