@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=11">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=11">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=12">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=12">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=12">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
@@ -82,11 +82,33 @@
       <div class="row"><span class="k">Session</span><span class="v">cookie based, 7 day TTL</span></div>
       <div class="row"><span class="k">Cookie</span><span class="v">HttpOnly, Secure, SameSite=Lax</span></div>
     </div>
+
+    <div class="form-card">
+      <h2>Geo-block</h2>
+      <p class="lead">Optionally drop traffic from countries that are not in the allow list. Uses Cloudflare's <code>cf-ipcountry</code> header. Authenticated requests (you) and local requests are never blocked. Self-locking is impossible.</p>
+      <form id="geoblock-form" autocomplete="off">
+        <div class="form-row inline">
+          <label class="switch">
+            <input type="checkbox" id="geo-enabled" name="enabled">
+            <span>Enable geo-block</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="input-label" for="geo-allow">Allowed country codes</label>
+          <input class="input" type="text" id="geo-allow" name="allow" placeholder="ID, SG, JP" autocapitalize="characters">
+          <p class="hint">Comma or space separated ISO 3166-1 alpha-2 codes. Leave empty to block all (except your authenticated session).</p>
+        </div>
+        <div class="submit-row">
+          <button type="submit" class="btn btn-accent"><span>Save geo policy</span><i class="icon-arrow-right"></i></button>
+        </div>
+      </form>
+      <div id="geo-alert" class="alert" style="display:none; margin-top: 1rem"></div>
+    </div>
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=11"></script>
-<script src="https://rofihosted.space/app.js?v=11"></script>
+<script src="https://rofihosted.space/theme.js?v=12"></script>
+<script src="https://rofihosted.space/app.js?v=12"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -104,6 +126,40 @@
       document.getElementById('cur-user').textContent = j.username || 'unknown';
       document.getElementById('cur-user-2').textContent = j.username || 'unknown';
     }).catch(function () {});
+
+    // Geo-block load + save
+    const enabledEl = document.getElementById('geo-enabled');
+    const allowEl = document.getElementById('geo-allow');
+    const geoAlert = document.getElementById('geo-alert');
+    fetch('/api/geoblock').then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) return;
+      enabledEl.checked = !!j.enabled;
+      allowEl.value = (j.allow || []).join(', ');
+    }).catch(function () {});
+
+    document.getElementById('geoblock-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const fd = new FormData();
+      fd.append('enabled', enabledEl.checked ? 'on' : 'off');
+      fd.append('allow', allowEl.value);
+      fetch('/api/geoblock/update', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.ok) {
+            geoAlert.className = 'alert success';
+            geoAlert.innerHTML = '<i class="icon-check"></i> Geo policy saved.';
+          } else {
+            geoAlert.className = 'alert error';
+            geoAlert.innerHTML = '<i class="icon-exclamation"></i> Could not save (' + (j.err || 'unknown') + ').';
+          }
+          geoAlert.style.display = '';
+        })
+        .catch(function () {
+          geoAlert.className = 'alert error';
+          geoAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
+          geoAlert.style.display = '';
+        });
+    });
   })();
 </script>
 </body>

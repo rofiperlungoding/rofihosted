@@ -205,6 +205,54 @@ pub const BanContext = struct {
     country: []const u8,
 };
 
+/// Cache of recently-annotated IPs so re-bans within 24h skip the API call.
+/// Keyed by IP, values are owned strings + expiry. Mutex-guarded.
+pub const AnnotationCache = struct {
+    mutex: std.Thread.Mutex = .{},
+    map: std.StringHashMap(Entry),
+    allocator: std.mem.Allocator,
+
+    pub const Entry = struct {
+        annotation: []u8,
+        cached_at: i64,
+    };
+
+    pub const TTL_S: i64 = 24 * 60 * 60;
+
+    pub fn init(allocator: std.mem.Allocator) AnnotationCache {
+        return .{
+            .map = std.StringHashMap(Entry).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn lookup(self: *AnnotationCache, ip: []const u8, allocator: std.mem.Allocator) ?[]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const e = self.map.get(ip) orelse return null;
+        if (std.time.timestamp() - e.cached_at > TTL_S) return null;
+        return allocator.dupe(u8, e.annotation) catch null;
+    }
+
+    pub fn put(self: *AnnotationCache, ip: []const u8, annotation: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.map.fetchRemove(ip)) |kv| {
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value.annotation);
+        }
+        const ip_dup = self.allocator.dupe(u8, ip) catch return;
+        const ann_dup = self.allocator.dupe(u8, annotation) catch {
+            self.allocator.free(ip_dup);
+            return;
+        };
+        self.map.put(ip_dup, .{ .annotation = ann_dup, .cached_at = std.time.timestamp() }) catch {
+            self.allocator.free(ip_dup);
+            self.allocator.free(ann_dup);
+        };
+    }
+};
+
 /// Generate a short, human-readable reason for an auto-ban, given the recent paths
 /// the IP probed and its user-agent. Returns null on any failure.
 pub fn annotateBan(cfg: *Config, allocator: std.mem.Allocator, ctx: BanContext) ?[]u8 {

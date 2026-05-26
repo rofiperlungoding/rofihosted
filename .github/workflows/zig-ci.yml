@@ -1,0 +1,30 @@
+name: zig-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  fmt-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.14.0
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+
+      - name: Format check
+        working-directory: zig/hp-server
+        run: zig fmt --check src/
+
+      - name: Build (Debug)
+        working-directory: zig/hp-server
+        run: zig build -Doptimize=Debug
+
+      - name: Build (ReleaseFast)
+        working-directory: zig/hp-server
+        run: zig build -Doptimize=ReleaseFast

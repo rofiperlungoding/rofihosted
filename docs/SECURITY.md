@@ -101,19 +101,46 @@ Files that **never** leave the device:
 | --- | --- | --- |
 | `~/.hp-server-creds.txt` | username + password (line 1: user, line 2: pass) | 0600 |
 | `~/.hp-server-blocklist.txt` | persistent IP blocklist | 0600 |
-| `~/.hp-server.env` | environment variables (Mistral API key, optional Telegram tokens) | 0600 |
+| `~/.hp-server-secret.bin` | 32-byte random pepper folded into the session HMAC | 0600 |
+| `~/.hp-server-geoblock.txt` | geo-block on/off + allow list | 0600 |
+| `~/.hp-server.env` | environment variables (Mistral API key, optional Telegram tokens, optional `BACKUP_PASSPHRASE`) | 0600 |
 | `~/.cloudflared/<tunnel-id>.json` | tunnel credentials issued by Cloudflare | 0600 |
 | `~/.cloudflared/cert.pem` | account cert for `cloudflared tunnel` operations | 0600 |
 
 None of these are tracked in git. The `.gitignore` excludes the `~/data/`, `~/.hp-server-*`, `*.env`, and `~/.cloudflared/` paths even if the workspace ever picks them up by accident.
 
-The HMAC session key is derived in memory only. It is never persisted.
+The HMAC session key is derived in memory only:
+`SHA-256("rofi.session.v1:" || password || ":" || username || ":" || pepper)`
+where `pepper` is 32 random bytes from `~/.hp-server-secret.bin`. Both the credentials file and the pepper file have to be exfiltrated for an attacker to forge cookies. Changing the password rotates the secret immediately.
+
+## Process supervision and graceful shutdown
+
+`hp-server` installs SIGTERM and SIGINT handlers that call `httpz.Server.stop()`. This drains pending requests, closes SSE streams cleanly, and lets the JSONL append paths finish their writes before the process exits.
+
+A separate `scripts/watchdog.sh` runs as a long-lived sibling process. Every 30 seconds it:
+
+- Restarts `hp-server` if it has died.
+- Restarts `cloudflared` if it has died.
+- Checks `~/data/.tunnel-restart-requested`. The in-process tunnel health watchdog drops this flag after the tunnel has been `degraded` or `offline` for >2 minutes. When `watchdog.sh` sees it, it restarts `cloudflared`.
+
+The tunnel health watchdog is in-process (`tunnel_health.zig`) and polls `cloudflared:20241/metrics` every 30 seconds. State changes (`unknown` → `healthy` / `degraded` / `offline`) are published over SSE so the UI updates live.
+
+## Audit log
+
+`~/data/audit.jsonl` (mode inherited from data dir) records every operator action that mutates security state:
+
+- `block_ip`, `unblock_ip` (manual or via API)
+- `change_credentials`
+- `digest_run`
+- `geoblock_update`
+
+Each entry includes `timestamp`, `actor` (the username from the session cookie at the time), `action`, `target`, optional `detail`, and `ok` (true / false on success / failure). Surfaced on the Security page under "Audit log".
 
 ## AI features and data flow
 
 When `MISTRAL_API_KEY` is set in `~/.hp-server.env`, three features call out to `https://api.mistral.ai/v1/chat/completions` with model `mistral-small-latest`. What gets sent:
 
-- **Auto-ban annotation**: the banned IP, its country, its UA, and up to 8 recent paths it requested.
+- **Auto-ban annotation**: the banned IP, its country, its UA, and up to 8 recent paths it requested. Result is cached per IP for 24 hours so re-bans do not re-spend quota.
 - **Explain IP**: the queried IP, country, distinct UAs (up to 6), classification breakdown, and up to 20 recent paths.
 - **Daily digest**: only aggregated counts (totals, classification breakdown, distinct IP count, login counts, top scanner paths, top countries). No per-request data.
 

@@ -7,18 +7,32 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 ## [Unreleased]
 
 ### Added
+- **Process supervision**: `scripts/watchdog.sh` is a long-lived loop that checks every 30s whether `hp-server` and `cloudflared` are alive, restarts them if not. Also watches for the tunnel-restart flag dropped by the in-process tunnel health watchdog.
+- **Tunnel health watchdog** in-process: polls `cloudflared:20241/metrics` every 30s, classifies as `healthy` / `degraded` / `offline` / `unknown`, broadcasts state changes over SSE, and writes a restart-request flag if the tunnel stays down for more than 2 minutes (consumed by `watchdog.sh`).
+- **Encrypted backup**: `scripts/backup.sh` tarballs `~/data/`, all `~/.hp-server-*` files, and `~/.cloudflared/`, then encrypts with `age` using a passphrase from `BACKUP_PASSPHRASE`. Daily retention of 14 backups. Boot script auto-runs once on every restart.
+- **Graceful shutdown**: SIGTERM and SIGINT handlers call `httpz.Server.stop()` so JSONL flushes complete and SSE streams close cleanly.
+- **Geo-block** (opt-in, off by default): toggle on Settings page, Cloudflare `cf-ipcountry` header drives the policy. Authenticated requests and local requests are never affected, so self-locking is impossible. Persisted at `~/.hp-server-geoblock.txt`.
+- **Audit log**: `~/data/audit.jsonl` records every operator action (block, unblock, change credentials, run digest, update geo policy) with actor, target, detail, and outcome. Rendered at the bottom of the Security page.
+- **Pepper-based session secret**: 32-byte random pepper persisted at `~/.hp-server-secret.bin` (mode 600), folded into the HMAC key. An attacker who steals only the credentials file can no longer forge cookies; they need the pepper file too.
+- **Annotation cache**: AI auto-ban annotations are cached per IP for 24 hours so re-bans of the same IP do not re-spend Mistral quota.
+- **Bundled icon font**: `simple-line-icons.woff2` (30 KB) and a slimmed `icons.css` are now embedded into the hp-server binary and served from `/icons.css` and `/fonts/Simple-Line-Icons.woff2`. cdnjs is no longer a dependency, the CSP no longer needs a cdnjs entry, and the dashboard works offline.
+- **GitHub Actions CI**: `.github/workflows/zig-ci.yml` runs `zig fmt --check` plus Debug and ReleaseFast builds on every push and pull request.
 - **AI features** powered by Mistral (`mistral-small-latest`). Three opt-in capabilities:
   - **Auto-ban annotation**: when an IP gets auto-banned for scanning, a background thread enriches the ban reason with a human-readable summary based on the recent paths probed. The classic generic reason ("auto: scanner attempts exceeded threshold") becomes something like "auto: probing WordPress and PHP exploits, generic mass scanner".
   - **"Explain this IP" on Security page**: per-IP button opens a modal where Mistral profiles the IP based on its access pattern (visit count, paths, UAs, country) and recommends allow/monitor/block.
   - **Daily digest**: every 24h (and on-demand via "Generate now" button), the server aggregates the past 24h of visits, logins, uptime, and bans, sends those metrics to Mistral, and stores a one-paragraph natural-language summary at `~/data/digests.jsonl`. Surfaced at the top of the Security page.
 - New `ai.zig` module with per-feature token-bucket rate limit (1 annotate/min, 1 explain/6s, 1 digest/hour) so a runaway loop cannot drain quota.
-- New endpoints (auth-required): `GET /api/ai/digest/latest`, `GET /api/ai/digest/run`, `POST /api/ai/explain`.
-- New SSE event: `digest_ready`.
+- New endpoints (auth-required): `GET /api/ai/digest/latest`, `GET /api/ai/digest/run`, `POST /api/ai/explain`, `GET /api/audit`, `GET /api/tunnel/health`, `GET /api/geoblock`, `POST /api/geoblock/update`.
+- New SSE events: `digest_ready`, `tunnel_health`.
 - Real-time UI updates via Server-Sent Events at `/api/stream`. Replaces all polling on Overview, Status, and Security pages.
 - New `events.zig` module with thread-safe pub/sub bus + 25s heartbeat.
 - Backend publishes events for every visit, login attempt, blocklist mutation, uptime probe result, and a stats tick every 2 seconds.
 - `ws-status` indicator on every authenticated page (live / connecting / offline).
 - `LICENSE` (MIT), `docs/SECURITY.md`, `.gitignore`, public GitHub repo.
+
+### Changed
+- CSP no longer references `cdnjs.cloudflare.com` (font is now self-hosted).
+- All template asset query strings bumped to `?v=12`.
 
 ### Privacy / safety notes for AI
 - API key lives only in `~/.hp-server.env` on the device (mode 600). Never in git, never in logs, never returned to clients. `.gitignore` matches `*.env`, `*-server.env`, `.env*`.

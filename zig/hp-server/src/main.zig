@@ -12,6 +12,10 @@ const telegram = @import("telegram.zig");
 const security = @import("security.zig");
 const events = @import("events.zig");
 const ai = @import("ai.zig");
+const audit = @import("audit.zig");
+const tunnel_health = @import("tunnel_health.zig");
+const geoblock = @import("geoblock.zig");
+const secret = @import("secret.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -29,7 +33,25 @@ const App = struct {
     login_tracker: *security.LoginTracker,
     bus: *events.Bus,
     ai_cfg: *ai.Config,
+    annotation_cache: *ai.AnnotationCache,
+    tunnel_status: *tunnel_health.Status,
+    geoblock: *geoblock.Config,
+    /// Type-erased pointer to the httpz.Server(*App), set after server init.
+    /// Used only by the SIGTERM handler to call .stop(). Casting back to the
+    /// concrete type avoids a struct-cycle compilation error.
+    server_ptr: ?*anyopaque = null,
 };
+
+/// Global pointer used only by the SIGTERM handler. Set in main(), null otherwise.
+var g_app: ?*App = null;
+
+fn shutdownHandler(_: c_int) callconv(.c) void {
+    std.log.info("hp-server: SIGTERM received, shutting down gracefully", .{});
+    if (g_app) |app| if (app.server_ptr) |ptr| {
+        const s: *httpz.Server(*App) = @ptrCast(@alignCast(ptr));
+        s.stop();
+    };
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
@@ -41,13 +63,23 @@ pub fn main() !void {
     var store_mutex = std.Thread.Mutex{};
     var rl = ratelimit.Limiter.init(allocator, 1.0, 60.0);
     const tg_cfg = telegram.Config.fromEnv(allocator);
-    const auth_cfg = try auth.Config.init(allocator);
+
+    // Persistent random pepper for session HMAC. Generated once on first boot.
+    var pepper: [secret.PEPPER_LEN]u8 = undefined;
+    try secret.loadOrInit(&pepper);
+
+    const auth_cfg = try auth.Config.init(allocator, pepper);
     const blocklist = try security.Blocklist.init(allocator);
     const autoban = try security.AutoBan.init(allocator, blocklist);
     const login_tracker = try security.LoginTracker.init(allocator, blocklist);
     const bus = try events.Bus.init(allocator);
     const ai_cfg = try allocator.create(ai.Config);
     ai_cfg.* = ai.Config.fromEnv(allocator);
+    const annotation_cache = try allocator.create(ai.AnnotationCache);
+    annotation_cache.* = ai.AnnotationCache.init(allocator);
+    const tunnel_status = try allocator.create(tunnel_health.Status);
+    tunnel_status.* = .{};
+    const geo_cfg = try geoblock.Config.init(allocator);
 
     var app = App{
         .allocator = allocator,
@@ -61,7 +93,20 @@ pub fn main() !void {
         .login_tracker = login_tracker,
         .bus = bus,
         .ai_cfg = ai_cfg,
+        .annotation_cache = annotation_cache,
+        .tunnel_status = tunnel_status,
+        .geoblock = geo_cfg,
     };
+    g_app = &app;
+
+    // Install SIGTERM/SIGINT handler for graceful shutdown.
+    var act = std.posix.Sigaction{
+        .handler = .{ .handler = shutdownHandler },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.TERM, &act, null);
+    std.posix.sigaction(std.posix.SIG.INT, &act, null);
 
     // Heartbeat thread keeps SSE clients alive
     const hb = try std.Thread.spawn(.{}, events.heartbeatLoop, .{bus});
@@ -86,6 +131,7 @@ pub fn main() !void {
         },
     }, &app);
     defer server.deinit();
+    app.server_ptr = @ptrCast(&server);
 
     var router = try server.router(.{});
     router.get("/*", hostRouter, .{});
@@ -102,7 +148,12 @@ pub fn main() !void {
     const digest_thread = try std.Thread.spawn(.{}, digestLoop, .{&app});
     digest_thread.detach();
 
+    // Tunnel health watchdog
+    const th = try std.Thread.spawn(.{}, tunnel_health.loop, .{ allocator, tunnel_status, bus });
+    th.detach();
+
     try server.listen();
+    std.log.info("hp-server: server.listen returned, exiting cleanly", .{});
 }
 
 fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
@@ -139,6 +190,19 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         res.body = "blocked\n";
         logVisitFull(app, req, ip, ua, host, method, 403, cls);
         return;
+    }
+
+    // Geo-block: optional, off by default. Cloudflare sets cf-ipcountry on every request.
+    // Skip for self-authenticated, local, and /health.
+    if (!is_authed and !is_local and !std.mem.eql(u8, path, "/health")) {
+        const country = req.header("cf-ipcountry") orelse "";
+        if (app.geoblock.shouldBlock(country)) {
+            res.status = 403;
+            res.content_type = .TEXT;
+            res.body = "blocked by geo-policy\n";
+            logVisitFull(app, req, ip, ua, host, method, 403, cls);
+            return;
+        }
     }
 
     // Auto-ban: scanner hits get tracked even if request itself is rejected later
@@ -235,6 +299,21 @@ fn handleRoot(_: *App, _: *httpz.Request, res: *httpz.Response, path: []const u8
         res.body = @embedFile("templates/app.js");
         return;
     }
+    if (std.mem.eql(u8, path, "/icons.css")) {
+        res.content_type = .CSS;
+        res.header("Cache-Control", "public, max-age=86400");
+        res.header("Access-Control-Allow-Origin", "*");
+        res.body = @embedFile("templates/icons.css");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/fonts/Simple-Line-Icons.woff2")) {
+        res.content_type = .BINARY;
+        res.header("Content-Type", "font/woff2");
+        res.header("Cache-Control", "public, max-age=2592000");
+        res.header("Access-Control-Allow-Origin", "*");
+        res.body = @embedFile("templates/Simple-Line-Icons.woff2");
+        return;
+    }
     if (std.mem.eql(u8, path, "/")) {
         res.content_type = .HTML;
         res.body = @embedFile("templates/public.html");
@@ -278,7 +357,11 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.startsWith(u8, path, "/api/files/list")) return apiFilesList(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/explain")) return apiAiExplain(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/digest/latest")) return apiDigestLatest(app, res);
-    if (std.mem.eql(u8, path, "/api/ai/digest/run")) return apiDigestRun(app, res);
+    if (std.mem.eql(u8, path, "/api/ai/digest/run")) return apiDigestRun(app, req, res);
+    if (std.mem.eql(u8, path, "/api/audit")) return apiAudit(app, res);
+    if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
+    if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
+    if (std.mem.eql(u8, path, "/api/geoblock/update")) return apiGeoblockUpdate(app, req, res);
 
     // Status badges (private, auth-gated)
     if (std.mem.startsWith(u8, path, "/badge/") and std.mem.endsWith(u8, path, ".svg")) {
@@ -401,7 +484,15 @@ fn handleLogout(_: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn handleChangeCreds(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
     const ok = auth.changeCredentials(app.auth_cfg, req, res) catch false;
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "change_credentials",
+        .target = "self",
+        .ok = ok,
+    });
     res.status = 302;
     res.header("Location", if (ok)
         "https://app.rofihosted.space/settings?ok=1"
@@ -765,12 +856,28 @@ fn apiSecurityBlock(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         return;
     };
     const reason = form.get("reason") orelse "manual";
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
     app.blocklist.block(ip, reason, 0) catch {
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "block_ip",
+            .target = ip,
+            .detail = reason,
+            .ok = false,
+        });
         res.status = 500;
         res.content_type = .JSON;
         res.body = "{\"error\":\"failed to write blocklist\"}";
         return;
     };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "block_ip",
+        .target = ip,
+        .detail = reason,
+    });
     app.bus.publish(.blocklist_change, .{ .action = "block", .ip = ip, .reason = reason, .timestamp = std.time.timestamp() });
     try res.json(.{ .ok = true, .blocked = ip }, .{});
 }
@@ -788,12 +895,26 @@ fn apiSecurityUnblock(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         res.body = "{\"error\":\"missing ip\"}";
         return;
     };
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
     app.blocklist.unblock(ip) catch {
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "unblock_ip",
+            .target = ip,
+            .ok = false,
+        });
         res.status = 500;
         res.content_type = .JSON;
         res.body = "{\"error\":\"failed to write blocklist\"}";
         return;
     };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "unblock_ip",
+        .target = ip,
+    });
     app.bus.publish(.blocklist_change, .{ .action = "unblock", .ip = ip, .timestamp = std.time.timestamp() });
     try res.json(.{ .ok = true, .unblocked = ip }, .{});
 }
@@ -932,6 +1053,19 @@ fn annotateBanThread(args: *AnnotateArgs) void {
     defer arena.deinit();
     const a = arena.allocator();
 
+    // Cache hit? Reuse the previous annotation, no API call.
+    if (args.app.annotation_cache.lookup(args.ip, a)) |cached| {
+        const final = std.fmt.allocPrint(a, "auto: {s}", .{cached}) catch return;
+        args.app.blocklist.updateReason(args.ip, final) catch {};
+        args.app.bus.publish(.blocklist_change, .{
+            .action = "annotate",
+            .ip = args.ip,
+            .reason = final,
+            .timestamp = std.time.timestamp(),
+        });
+        return;
+    }
+
     // Pull recent paths probed by this IP from visits.jsonl
     args.app.store_mutex.lock();
     const visits = store.readVisits(a, visits_path, 500) catch {
@@ -957,6 +1091,8 @@ fn annotateBanThread(args: *AnnotateArgs) void {
         .user_agent = args.ua,
         .country = country,
     }) orelse return;
+
+    args.app.annotation_cache.put(args.ip, annotated);
 
     // Prepend "auto: " so the source is still visible after enrichment.
     const final = std.fmt.allocPrint(a, "auto: {s}", .{annotated}) catch return;
@@ -1242,16 +1378,107 @@ fn apiDigestLatest(_: *App, res: *httpz.Response) !void {
     try res.json(.{ .ok = true, .latest = parsed.value }, .{});
 }
 
-fn apiDigestRun(app: *App, res: *httpz.Response) !void {
+fn apiDigestRun(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     if (!app.ai_cfg.enabled()) {
         res.status = 503;
         try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
         return;
     }
-    runDigest(app) catch {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const ok = blk: {
+        runDigest(app) catch break :blk false;
+        break :blk true;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "digest_run",
+        .target = "manual",
+        .ok = ok,
+    });
+    if (!ok) {
         res.status = 502;
         try res.json(.{ .ok = false, .err = "digest_failed" }, .{});
         return;
+    }
+    try res.json(.{ .ok = true }, .{});
+}
+
+// =================================================================
+// AUDIT LOG
+// =================================================================
+fn apiAudit(_: *App, res: *httpz.Response) !void {
+    const entries = audit.read(res.arena, 100) catch &[_]audit.Entry{};
+    try res.json(.{ .ok = true, .entries = entries }, .{});
+}
+
+// =================================================================
+// TUNNEL HEALTH
+// =================================================================
+fn apiTunnelHealth(app: *App, res: *httpz.Response) !void {
+    app.tunnel_status.mutex.lock();
+    const state = app.tunnel_status.state;
+    const last_check = app.tunnel_status.last_check;
+    const state_since = app.tunnel_status.state_since;
+    const conns = app.tunnel_status.connections;
+    const restart_attempted = app.tunnel_status.restart_attempted;
+    app.tunnel_status.mutex.unlock();
+    try res.json(.{
+        .ok = true,
+        .state = tunnel_health.stateLabel(state),
+        .last_check = last_check,
+        .state_since = state_since,
+        .connections = conns,
+        .restart_attempted = restart_attempted,
+    }, .{});
+}
+
+// =================================================================
+// GEOBLOCK
+// =================================================================
+fn apiGeoblockGet(app: *App, res: *httpz.Response) !void {
+    const snap = app.geoblock.snapshot(res.arena) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "snapshot_failed" }, .{});
+        return;
     };
+    try res.json(.{
+        .ok = true,
+        .enabled = snap.enabled,
+        .allow = snap.allow,
+    }, .{});
+}
+
+fn apiGeoblockUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const enabled_str = form.get("enabled") orelse "off";
+    const allow_csv = form.get("allow") orelse "";
+    const enabled = std.mem.eql(u8, enabled_str, "on") or std.mem.eql(u8, enabled_str, "true") or std.mem.eql(u8, enabled_str, "1");
+
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    app.geoblock.update(enabled, allow_csv) catch {
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "geoblock_update",
+            .target = if (enabled) "on" else "off",
+            .detail = allow_csv,
+            .ok = false,
+        });
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "update_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "geoblock_update",
+        .target = if (enabled) "on" else "off",
+        .detail = allow_csv,
+    });
     try res.json(.{ .ok = true }, .{});
 }

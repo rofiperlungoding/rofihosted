@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Security / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/simple-line-icons/2.5.5/css/simple-line-icons.min.css">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=11">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=11">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=12">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=12">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=12">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
@@ -343,6 +343,24 @@
       <div class="empty">Loading</div>
     </div>
 
+    <!-- Tunnel health -->
+    <div class="section-head">
+      <h2>Tunnel health</h2>
+      <p>Watchdog polls cloudflared metrics every 30 seconds. State changes broadcast over SSE.</p>
+    </div>
+    <div class="ip-table-wrap" id="tunnel-health">
+      <div class="listing-row"><span class="v">Loading</span><span class="c"></span></div>
+    </div>
+
+    <!-- Audit log -->
+    <div class="section-head">
+      <h2>Audit log</h2>
+      <p>Operator actions: block/unblock IP, change credentials, run digest, update geo policy. Newest first.</p>
+    </div>
+    <div class="listing" id="audit-table">
+      <div class="empty">No actions yet.</div>
+    </div>
+
   </main>
 </div>
 
@@ -365,8 +383,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=11"></script>
-<script src="https://rofihosted.space/app.js?v=11"></script>
+<script src="https://rofihosted.space/theme.js?v=12"></script>
+<script src="https://rofihosted.space/app.js?v=12"></script>
 <script>
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function fmtAgo(ts) {
@@ -599,6 +617,51 @@ async function runDigestNow() {
 document.getElementById('digest-run-btn').addEventListener('click', runDigestNow);
 loadDigest();
 RH.on('digest_ready', loadDigest);
+
+// Tunnel health
+async function loadTunnelHealth() {
+  try {
+    const j = await (await fetch('/api/tunnel/health')).json();
+    if (!j.ok) return;
+    const root = document.getElementById('tunnel-health');
+    if (!root) return;
+    const cls = j.state === 'healthy' ? 'success' : (j.state === 'degraded' ? 'warn' : 'error');
+    const restartNote = j.restart_attempted ? ' . watchdog requested restart' : '';
+    const since = j.state_since ? fmtAgo(j.state_since) : '—';
+    root.innerHTML =
+      '<div class="listing-row"><span class="v">State <strong class="' + cls + '">' + j.state + '</strong> for ' + since + restartNote + '</span><span class="c">' + j.connections + ' active connection(s)</span></div>'
+      + '<div class="listing-row"><span class="v">Last check</span><span class="c">' + (j.last_check ? fmtAgo(j.last_check) : 'never') + '</span></div>';
+  } catch (e) {}
+}
+loadTunnelHealth();
+RH.on('tunnel_health', loadTunnelHealth);
+setInterval(loadTunnelHealth, 30000);
+
+// Audit log
+async function loadAudit() {
+  try {
+    const j = await (await fetch('/api/audit')).json();
+    const root = document.getElementById('audit-table');
+    if (!root) return;
+    const entries = (j && j.entries) || [];
+    if (!entries.length) {
+      root.innerHTML = '<div class="empty">No actions yet.</div>';
+      return;
+    }
+    root.innerHTML = entries.map(function (e) {
+      const cls = e.ok === false ? 'fail-row' : '';
+      const act = (e.action || '').replace(/_/g, ' ');
+      const detail = e.detail ? ' . ' + escapeHtml(e.detail) : '';
+      return '<div class="listing-row ' + cls + '">'
+        + '<span class="v">' + escapeHtml(act) + ' . ' + escapeHtml(e.target || '—') + ' . by ' + escapeHtml(e.actor || '?') + detail + '</span>'
+        + '<span class="c">' + fmtAgo(e.timestamp) + '</span>'
+        + '</div>';
+    }).join('');
+  } catch (e) {}
+}
+loadAudit();
+RH.on('blocklist_change', loadAudit);
+RH.on('digest_ready', loadAudit);
 
 document.getElementById('block-form').addEventListener('submit', function(e) {
   e.preventDefault();

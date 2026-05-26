@@ -526,8 +526,8 @@ pub fn applyHeaders(res: anytype) void {
     res.header(
         "Content-Security-Policy",
         "default-src 'self' https://rofihosted.space https://*.rofihosted.space; " ++
-        "style-src 'self' https://rofihosted.space https://*.rofihosted.space https://cdnjs.cloudflare.com 'unsafe-inline'; " ++
-        "font-src 'self' https://rofihosted.space https://*.rofihosted.space https://cdnjs.cloudflare.com data:; " ++
+        "style-src 'self' https://rofihosted.space https://*.rofihosted.space 'unsafe-inline'; " ++
+        "font-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
         "script-src 'self' https://rofihosted.space https://*.rofihosted.space https://static.cloudflareinsights.com 'unsafe-inline'; " ++
         "img-src 'self' https://rofihosted.space https://*.rofihosted.space data:; " ++
         "connect-src 'self' https://rofihosted.space https://*.rofihosted.space https://cloudflareinsights.com; " ++

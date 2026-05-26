@@ -1,6 +1,11 @@
 //! Cookie-based session auth. HMAC-signed tokens.
 //! Credentials stored in ~/.hp-server-creds.txt (line 1: user, line 2: pass).
 //! Mutable at runtime via Config.update() so settings page can change password.
+//!
+//! HMAC key is derived as: SHA256("rofi.session.v1:" || password || ":" || username || ":" || pepper)
+//! where `pepper` is a 32-byte random value persisted at ~/.hp-server-secret.bin.
+//! This means an attacker who steals only the credentials file cannot forge cookies;
+//! they also need the pepper file. Both are mode 600 on the device.
 const std = @import("std");
 const httpz = @import("httpz");
 
@@ -13,15 +18,17 @@ pub const Config = struct {
     user: []u8,
     pass: []u8,
     secret: [32]u8,
+    pepper: [32]u8,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) !*Config {
+    pub fn init(allocator: std.mem.Allocator, pepper: [32]u8) !*Config {
         const cfg = try allocator.create(Config);
         cfg.* = .{
             .mutex = .{},
             .user = try allocator.dupe(u8, "admin"),
             .pass = try allocator.dupe(u8, "changeme"),
             .secret = undefined,
+            .pepper = pepper,
             .allocator = allocator,
         };
 
@@ -52,6 +59,8 @@ pub const Config = struct {
         hasher.update(self.pass);
         hasher.update(":");
         hasher.update(self.user);
+        hasher.update(":");
+        hasher.update(&self.pepper);
         hasher.final(&self.secret);
     }
 
