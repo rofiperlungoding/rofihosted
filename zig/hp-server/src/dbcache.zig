@@ -31,6 +31,8 @@ pub const PATH = "/data/data/com.termux/files/home/data/cache.db";
 const SQLITE_BIN = "sqlite3";
 const SCHEMA_VERSION: i32 = 1;
 
+const dbpool = @import("dbpool.zig");
+
 const SCHEMA_SQL =
     \\CREATE TABLE IF NOT EXISTS meta (
     \\  key TEXT PRIMARY KEY,
@@ -77,6 +79,11 @@ pub const Cache = struct {
     allocator: std.mem.Allocator,
     /// Path to visits.jsonl
     visits_jsonl_path: []const u8,
+    /// Optional persistent subprocess pool. When set, query helpers route
+    /// through it instead of spawning a fresh sqlite3 each call. Sync still
+    /// uses one-shot subprocess (it's a single 5-min batch, not latency-
+    /// sensitive, and runs concurrently with reads via WAL).
+    pool: ?*dbpool.Pool = null,
     /// Stats
     sync_count: u64 = 0,
     rows_synced: u64 = 0,
@@ -154,6 +161,15 @@ pub const Cache = struct {
 
     /// Run SQL and capture stdout as owned slice. Caller frees.
     fn execSqlCapture(self: *Cache, allocator: std.mem.Allocator, sql: []const u8) !?[]u8 {
+        // Fast path: persistent pool if attached.
+        if (self.pool) |p| {
+            if (p.execCapture(allocator, sql)) |out| {
+                return out;
+            } else |err| {
+                std.log.warn("dbcache pool query failed: {}, falling back to one-shot", .{err});
+                // Fall through to one-shot below.
+            }
+        }
         var child = std.process.Child.init(
             &.{ SQLITE_BIN, PATH },
             self.allocator,

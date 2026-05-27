@@ -22,6 +22,7 @@ const query = @import("query.zig");
 const writebuf = @import("writebuf.zig");
 const rules = @import("rules.zig");
 const dbcache = @import("dbcache.zig");
+const dbpool = @import("dbpool.zig");
 const pathsafe = @import("pathsafe.zig");
 const hosted = @import("hosted.zig");
 
@@ -51,6 +52,7 @@ const App = struct {
     visit_buf: *writebuf.Buffer,
     rules: *rules.Engine,
     dbcache: *dbcache.Cache,
+    dbpool: *dbpool.Pool,
     hosted: *hosted.Manager,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
@@ -110,6 +112,13 @@ pub fn main() !void {
     visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
     const rules_engine = try rules.Engine.init(allocator, blocklist);
     const db_cache = try dbcache.Cache.init(allocator, visits_path);
+    const db_pool = try dbpool.Pool.init(allocator, .{
+        .db_path = dbcache.PATH,
+        .workers = 3,
+        .query_timeout_ms = 15_000,
+        .max_response_bytes = 8 * 1024 * 1024,
+    });
+    db_cache.pool = db_pool;
     const hosted_mgr = try hosted.Manager.init(allocator);
 
     var app = App{
@@ -133,6 +142,7 @@ pub fn main() !void {
         .visit_buf = visit_buf,
         .rules = rules_engine,
         .dbcache = db_cache,
+        .dbpool = db_pool,
         .hosted = hosted_mgr,
     };
     g_app = &app;
@@ -471,6 +481,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/rules/replace")) return apiRulesReplace(app, req, res);
     if (std.mem.eql(u8, path, "/api/dbcache/stats")) return apiDbCacheStats(app, res);
     if (std.mem.eql(u8, path, "/api/dbcache/sync")) return apiDbCacheSync(app, req, res);
+    if (std.mem.eql(u8, path, "/api/dbpool/stats")) return apiDbPoolStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -2475,4 +2486,17 @@ fn apiHostedRefresh(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
     });
     // No subdomain provided - just succeed; sites lazy-init on next request.
     try res.json(.{ .ok = true, .refreshed = "lazy" }, .{});
+}
+
+fn apiDbPoolStats(app: *App, res: *httpz.Response) !void {
+    const s = app.dbpool.snapshot();
+    try res.json(.{
+        .ok = true,
+        .workers = s.workers,
+        .free = s.free,
+        .total_queries = s.total_queries,
+        .total_errors = s.total_errors,
+        .total_respawns = s.total_respawns,
+        .avg_latency_ms = s.avg_latency_ms,
+    }, .{});
 }
