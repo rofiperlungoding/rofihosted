@@ -95,7 +95,20 @@ All data lives in `~/data/` as append-only JSONL:
 - `policy.jsonl` - weekly AI policy reviews
 - `anomalies.jsonl` - novel pattern detections
 - `ai-calls.jsonl` - every Mistral API call (observability)
+- `scrub.jsonl` - AI log scrub reports
 - `embeddings.bin` - binary file with pattern vectors (custom format)
+- `cache.db` - SQLite read-side cache (rebuildable from JSONL, see Storage v2)
+
+### Storage v2: SQLite read-side cache
+
+Architecture: **JSONL is the source of truth, SQLite is a derived cache** (rebuildable from JSONL). This gives us safe append-only writes plus indexed query performance for the AI features.
+
+- File: `~/data/cache.db` with WAL + `synchronous=NORMAL` (Android-safe pragmas).
+- Schema: `visits` table with indexes on `(visited_at, ip, classification, country, status)`, plus `visits_fts` FTS5 virtual table over `(path, ua, ip)` for the query bar.
+- Sync: every 5 minutes via `dbcache.syncLoop`, reads from last-synced JSONL byte offset (tracked in `meta` table), batches new rows into one transaction.
+- Implementation: spawns `sqlite3` CLI as a subprocess (same pattern as `cloudflared`/`termux-api` elsewhere). Per-query overhead ~10ms, query results <20ms even on 70k+ rows. We tried linking `libsqlite3` directly but Termux's CRT files aren't shipped in standard locations and `linkSystemLibrary` without `linkLibC` silently produces a binary missing the symbols. Subprocess is the reliable, tested path.
+- Endpoints: `GET /api/dbcache/stats`, `GET /api/dbcache/sync` (manual trigger).
+- Query bar uses cache automatically when available, with fallback to JSONL scan if the cache is unhealthy. Response includes `"source":"sqlite"|"jsonl"` for observability.
 
 Config/secrets (all mode 600, never in git):
 - `~/.hp-server-creds.txt` - username + password

@@ -21,6 +21,7 @@ const honeypot = @import("honeypot.zig");
 const query = @import("query.zig");
 const writebuf = @import("writebuf.zig");
 const rules = @import("rules.zig");
+const dbcache = @import("dbcache.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -47,6 +48,7 @@ const App = struct {
     honeypot: *honeypot.Config,
     visit_buf: *writebuf.Buffer,
     rules: *rules.Engine,
+    dbcache: *dbcache.Cache,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -104,6 +106,7 @@ pub fn main() !void {
     const visit_buf = try allocator.create(writebuf.Buffer);
     visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
     const rules_engine = try rules.Engine.init(allocator, blocklist);
+    const db_cache = try dbcache.Cache.init(allocator, visits_path);
 
     var app = App{
         .allocator = allocator,
@@ -125,6 +128,7 @@ pub fn main() !void {
         .honeypot = honey_cfg,
         .visit_buf = visit_buf,
         .rules = rules_engine,
+        .dbcache = db_cache,
     };
     g_app = &app;
 
@@ -192,6 +196,10 @@ pub fn main() !void {
     // Buffered visit writer flush loop (every 5s)
     const vbuf_thread = try std.Thread.spawn(.{}, writebuf.flushLoop, .{visit_buf});
     vbuf_thread.detach();
+
+    // SQLite read-side cache sync loop (every 5 min)
+    const dbsync_thread = try std.Thread.spawn(.{}, dbcache.syncLoop, .{db_cache});
+    dbsync_thread.detach();
 
     try server.listen();
     std.log.info("hp-server: server.listen returned, exiting cleanly", .{});
@@ -449,6 +457,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/honeypot/update")) return apiHoneypotUpdate(app, req, res);
     if (std.mem.eql(u8, path, "/api/rules")) return apiRulesGet(app, res);
     if (std.mem.eql(u8, path, "/api/rules/replace")) return apiRulesReplace(app, req, res);
+    if (std.mem.eql(u8, path, "/api/dbcache/stats")) return apiDbCacheStats(app, res);
+    if (std.mem.eql(u8, path, "/api/dbcache/sync")) return apiDbCacheSync(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/scrub")) return apiAiScrub(app, req, res);
     if (std.mem.eql(u8, path, "/api/audit")) return apiAudit(app, res);
     if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
@@ -1909,6 +1920,7 @@ fn apiAiQuery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     query.execute(res.arena, plan_json, .{
         .blocklist = app.blocklist,
         .store_mutex = app.store_mutex,
+        .dbcache = app.dbcache,
     }, &out) catch {
         res.status = 500;
         try res.json(.{ .ok = false, .err = "execute_failed" }, .{});
@@ -2237,4 +2249,133 @@ fn apiRulesReplace(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .target = "all",
     });
     try res.json(.{ .ok = true }, .{});
+}
+
+// =================================================================
+// DB CACHE (SQLite read-side cache for visits)
+// =================================================================
+fn apiDbCacheStats(app: *App, res: *httpz.Response) !void {
+    const stats = app.dbcache.snapshot();
+    try res.json(.{
+        .ok = true,
+        .row_count = stats.row_count,
+        .sync_count = stats.sync_count,
+        .rows_synced_total = stats.rows_synced_total,
+        .last_sync_at = stats.last_sync_at,
+        .last_sync_duration_ms = stats.last_sync_duration_ms,
+    }, .{});
+}
+
+fn apiDbCacheSync(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    // Operator-triggered manual sync. Useful right after a backup restore or
+    // manual JSONL edit. Audited.
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    // Flush write buffer first so any pending visits land in JSONL
+    app.visit_buf.flush() catch |e| {
+        std.log.warn("dbcache/sync: pre-flush failed: {}", .{e});
+    };
+    const rows = app.dbcache.sync() catch {
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "dbcache_sync",
+            .target = "manual",
+            .ok = false,
+        });
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "sync_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "dbcache_sync",
+        .target = "manual",
+    });
+    try res.json(.{ .ok = true, .rows_synced = rows }, .{});
+}
+
+// =================================================================
+// AI: LOG SCRUBBING (zero-day / unusual pattern detection)
+// =================================================================
+fn apiAiScrub(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
+        return;
+    }
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+
+    // Pull top scanner paths from the dbcache (last 7 days)
+    const top_paths = app.dbcache.topField(
+        res.arena,
+        "path",
+        7 * 24 * 3600, // 7 days
+        "scanner",
+        50,
+    ) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "cache_query_failed" }, .{});
+        return;
+    };
+    if (top_paths.len == 0) {
+        try res.json(.{ .ok = true, .empty = true, .message = "no scanner traffic in last 7 days" }, .{});
+        return;
+    }
+
+    // Pull top scanner UAs too
+    const top_uas = app.dbcache.topField(
+        res.arena,
+        "ua",
+        7 * 24 * 3600,
+        "scanner",
+        10,
+    ) catch &.{};
+
+    // Build the AI context
+    var path_hits = std.ArrayList(ai.ScrubContext.PathHits).init(res.arena);
+    for (top_paths) |row| {
+        try path_hits.append(.{ .path = row.value, .hits = row.count });
+    }
+    var ua_list = std.ArrayList([]const u8).init(res.arena);
+    for (top_uas) |row| try ua_list.append(row.value);
+
+    const result_json = ai.scrubLogs(app.ai_cfg, res.arena, .{
+        .scanner_paths = path_hits.items,
+        .user_agents = ua_list.items,
+    }) orelse {
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "ai_scrub",
+            .target = "manual",
+            .ok = false,
+        });
+        res.status = 502;
+        try res.json(.{ .ok = false, .err = "scrub_failed" }, .{});
+        return;
+    };
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "ai_scrub",
+        .target = "manual",
+    });
+
+    // Persist to ~/data/scrub.jsonl for history
+    const scrub_path = "/data/data/com.termux/files/home/data/scrub.jsonl";
+    store.appendJson(scrub_path, .{
+        .timestamp = std.time.timestamp(),
+        .scanner_paths_analysed = path_hits.items.len,
+        .raw_response = result_json,
+    }) catch {};
+
+    res.content_type = .JSON;
+    // result_json is already a complete JSON object from Mistral, wrap it
+    var envelope = std.ArrayList(u8).init(res.arena);
+    try envelope.appendSlice("{\"ok\":true,\"report\":");
+    try envelope.appendSlice(result_json);
+    try envelope.writer().print(",\"scanner_paths_analysed\":{d}}}", .{path_hits.items.len});
+    res.body = try res.arena.dupe(u8, envelope.items);
 }

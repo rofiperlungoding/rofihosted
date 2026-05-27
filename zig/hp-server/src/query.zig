@@ -5,6 +5,7 @@
 const std = @import("std");
 const store = @import("store.zig");
 const security = @import("security.zig");
+const dbcache = @import("dbcache.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -12,6 +13,7 @@ const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
 pub const ExecuteContext = struct {
     blocklist: *security.Blocklist,
     store_mutex: *std.Thread.Mutex,
+    dbcache: ?*dbcache.Cache = null,
 };
 
 /// Execute a parsed plan. Writes the JSON envelope into `out`.
@@ -147,8 +149,39 @@ fn execCountVisits(
     out: *std.ArrayList(u8),
 ) !void {
     const since_seconds = argInt(args, "since_seconds") orelse 86400;
-    const since = std.time.timestamp() - since_seconds;
 
+    // Fast path: use SQLite cache if available
+    if (ctx.dbcache) |cache| {
+        const c = cache.countVisits(
+            since_seconds,
+            argString(args, "classification"),
+            argString(args, "country"),
+            argString(args, "path_contains"),
+            argString(args, "ip"),
+        ) catch {
+            // Cache failed, fall through to JSONL
+            try execCountVisitsFromJsonl(allocator, ctx, args, explanation, out, since_seconds);
+            return;
+        };
+        var result = std.ArrayList(u8).init(allocator);
+        defer result.deinit();
+        try result.writer().print("{{\"count\":{d},\"since_seconds\":{d},\"source\":\"sqlite\"}}", .{ c, since_seconds });
+        try writeEnvelope(out, "count_visits", explanation, result.items);
+        return;
+    }
+
+    try execCountVisitsFromJsonl(allocator, ctx, args, explanation, out, since_seconds);
+}
+
+fn execCountVisitsFromJsonl(
+    allocator: std.mem.Allocator,
+    ctx: ExecuteContext,
+    args: std.json.Value,
+    explanation: []const u8,
+    out: *std.ArrayList(u8),
+    since_seconds: i64,
+) !void {
+    const since = std.time.timestamp() - since_seconds;
     ctx.store_mutex.lock();
     const visits = store.readVisits(allocator, visits_path, 50000) catch {
         ctx.store_mutex.unlock();
@@ -170,7 +203,7 @@ fn execCountVisits(
     }
     var result = std.ArrayList(u8).init(allocator);
     defer result.deinit();
-    try result.writer().print("{{\"count\":{d},\"since_seconds\":{d}}}", .{ c, since_seconds });
+    try result.writer().print("{{\"count\":{d},\"since_seconds\":{d},\"source\":\"jsonl\"}}", .{ c, since_seconds });
     try writeEnvelope(out, "count_visits", explanation, result.items);
 }
 
@@ -188,6 +221,38 @@ fn execListTop(
     const limit_raw = argInt(args, "limit") orelse 10;
     const limit: usize = @intCast(@max(@as(i64, 1), @min(@as(i64, 50), limit_raw)));
     const since_seconds = argInt(args, "since_seconds") orelse 86400;
+
+    // Fast path: SQLite cache
+    if (ctx.dbcache) |cache| {
+        const rows = cache.topField(
+            allocator,
+            field,
+            since_seconds,
+            argString(args, "classification"),
+            limit,
+        ) catch null;
+        if (rows) |r| {
+            defer {
+                for (r) |row| allocator.free(row.value);
+                allocator.free(r);
+            }
+            var result = std.ArrayList(u8).init(allocator);
+            defer result.deinit();
+            const w = result.writer();
+            try w.print("{{\"field\":\"{s}\",\"source\":\"sqlite\",\"items\":[", .{field});
+            for (r, 0..) |row, i| {
+                if (i > 0) try w.writeByte(',');
+                try w.writeAll("{\"value\":");
+                try writeJsonString(w, row.value);
+                try w.print(",\"count\":{d}}}", .{row.count});
+            }
+            try w.writeAll("]}");
+            try writeEnvelope(out, "list_top", explanation, result.items);
+            return;
+        }
+    }
+
+    // Fallback: scan JSONL
     const since = std.time.timestamp() - since_seconds;
 
     ctx.store_mutex.lock();

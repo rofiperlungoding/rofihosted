@@ -17,7 +17,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("httpz", httpz_dep.module("httpz"));
-    // websocket types accessed via httpz.websocket re-export, no separate import needed
 
     b.installArtifact(exe);
 
