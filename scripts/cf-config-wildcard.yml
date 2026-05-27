@@ -1,0 +1,12 @@
+tunnel: b63b2262-1db4-4c91-9485-8f1a2094c150
+credentials-file: /data/data/com.termux/files/home/.cloudflared/b63b2262-1db4-4c91-9485-8f1a2094c150.json
+no-autoupdate: true
+
+# Wildcard catches everything *.rofihosted.space. The Zig server then
+# dispatches by Host header (apex / app.* / dashboard.* / etc / hosted sites).
+ingress:
+  - hostname: rofihosted.space
+    service: http://localhost:8080
+  - hostname: "*.rofihosted.space"
+    service: http://localhost:8080
+  - service: http_status:404

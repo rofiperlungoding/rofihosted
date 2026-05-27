@@ -22,6 +22,8 @@ const query = @import("query.zig");
 const writebuf = @import("writebuf.zig");
 const rules = @import("rules.zig");
 const dbcache = @import("dbcache.zig");
+const pathsafe = @import("pathsafe.zig");
+const hosted = @import("hosted.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -49,6 +51,7 @@ const App = struct {
     visit_buf: *writebuf.Buffer,
     rules: *rules.Engine,
     dbcache: *dbcache.Cache,
+    hosted: *hosted.Manager,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -107,6 +110,7 @@ pub fn main() !void {
     visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
     const rules_engine = try rules.Engine.init(allocator, blocklist);
     const db_cache = try dbcache.Cache.init(allocator, visits_path);
+    const hosted_mgr = try hosted.Manager.init(allocator);
 
     var app = App{
         .allocator = allocator,
@@ -129,6 +133,7 @@ pub fn main() !void {
         .visit_buf = visit_buf,
         .rules = rules_engine,
         .dbcache = db_cache,
+        .hosted = hosted_mgr,
     };
     g_app = &app;
 
@@ -320,6 +325,13 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         }
     }
 
+    // Static hosting: try *.rofihosted.space subdomains before fixed routing.
+    // Returns true if served (any subdomain that has ~/hosted/sites/<sub>/current/).
+    if (try hosted.tryServe(app.hosted, host, path, res)) {
+        logVisitFull(app, req, ip, ua, host, method, res.status, cls);
+        return;
+    }
+
     // Dispatch by host
     if (std.mem.eql(u8, host, "www.rofihosted.space")) {
         try redirectAbs(res, "https://rofihosted.space", path);
@@ -459,6 +471,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/rules/replace")) return apiRulesReplace(app, req, res);
     if (std.mem.eql(u8, path, "/api/dbcache/stats")) return apiDbCacheStats(app, res);
     if (std.mem.eql(u8, path, "/api/dbcache/sync")) return apiDbCacheSync(app, req, res);
+    if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
+    if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
+    if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/scrub")) return apiAiScrub(app, req, res);
     if (std.mem.eql(u8, path, "/api/audit")) return apiAudit(app, res);
     if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
@@ -2378,4 +2393,86 @@ fn apiAiScrub(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     try envelope.appendSlice(result_json);
     try envelope.writer().print(",\"scanner_paths_analysed\":{d}}}", .{path_hits.items.len});
     res.body = try res.arena.dupe(u8, envelope.items);
+}
+
+// =================================================================
+// HOSTED SITES (static site hosting at *.rofihosted.space)
+// =================================================================
+fn apiHostedStats(app: *App, res: *httpz.Response) !void {
+    const json_body = app.hosted.statsJson(res.arena) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "stats_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    res.body = json_body;
+}
+
+fn apiHostedList(app: *App, res: *httpz.Response) !void {
+    _ = app;
+    // Walk ~/hosted/sites/ and list every subdomain that has a current/ symlink.
+    var dir = std.fs.openDirAbsolute(hosted.HOSTED_ROOT, .{ .iterate = true }) catch {
+        try res.json(.{ .ok = true, .sites = &[_]u8{} }, .{});
+        return;
+    };
+    defer dir.close();
+
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    try w.writeAll("{\"ok\":true,\"sites\":[");
+
+    var it = dir.iterate();
+    var first = true;
+    while (it.next() catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (entry.name.len == 0 or entry.name[0] == '.') continue;
+
+        // Check if current symlink resolves
+        const current = try std.fmt.allocPrint(res.arena, "{s}/{s}/current", .{ hosted.HOSTED_ROOT, entry.name });
+        var rbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const target = std.fs.realpath(current, &rbuf) catch "";
+
+        if (!first) try w.writeByte(',');
+        first = false;
+        try w.print(
+            "{{\"subdomain\":\"{s}\",\"deployed\":{s},\"target\":\"{s}\"}}",
+            .{ entry.name, if (target.len > 0) "true" else "false", target },
+        );
+    }
+    try w.writeAll("]}");
+    res.content_type = .JSON;
+    res.body = try out.toOwnedSlice();
+}
+
+fn apiHostedRefresh(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    // Force-invalidate caches for a site (or all sites). Useful right after
+    // an scp deploy + symlink swap done outside the server.
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch null;
+    const sub_opt = if (form) |f| f.get("subdomain") else null;
+    if (sub_opt) |sub| {
+        // Validate subdomain shape before operating on it
+        pathsafe.validateSubdomain(sub) catch {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "invalid_subdomain" }, .{});
+            return;
+        };
+        app.hosted.bumpSite(sub);
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "hosted_refresh",
+            .target = sub,
+        });
+        try res.json(.{ .ok = true, .refreshed = sub }, .{});
+        return;
+    }
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "hosted_refresh",
+        .target = "all",
+    });
+    // No subdomain provided - just succeed; sites lazy-init on next request.
+    try res.json(.{ .ok = true, .refreshed = "lazy" }, .{});
 }
