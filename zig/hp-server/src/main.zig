@@ -30,6 +30,8 @@ const webhook = @import("webhook.zig");
 const projects = @import("projects.zig");
 const projsecrets = @import("projsecrets.zig");
 const builder = @import("builder.zig");
+const supervisor = @import("supervisor.zig");
+const proxy = @import("proxy.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -63,6 +65,7 @@ const App = struct {
     webhook: *webhook.Manager,
     projects: *projects.Manager,
     builder: *builder.Orchestrator,
+    supervisor: *supervisor.Supervisor,
     pepper: []const u8,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
@@ -135,6 +138,8 @@ pub fn main() !void {
     const webhook_mgr = try webhook.Manager.init(allocator);
     const projects_mgr = try projects.Manager.init(allocator);
     const builder_orch = try builder.Orchestrator.init(allocator, pepper_slice, projects_mgr);
+    const supervisor_mgr = try supervisor.Supervisor.init(allocator, pepper_slice, projects_mgr);
+    builder_orch.supervisor = @ptrCast(supervisor_mgr);
     // Wire bus -> webhook fan-out so any event published also fires matching
     // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
     bus.pub_callback = webhookFanOut;
@@ -167,6 +172,7 @@ pub fn main() !void {
         .webhook = webhook_mgr,
         .projects = projects_mgr,
         .builder = builder_orch,
+        .supervisor = supervisor_mgr,
         .pepper = pepper_slice,
     };
     g_app = &app;
@@ -239,6 +245,12 @@ pub fn main() !void {
     // SQLite read-side cache sync loop (every 5 min)
     const dbsync_thread = try std.Thread.spawn(.{}, dbcache.syncLoop, .{db_cache});
     dbsync_thread.detach();
+
+    // Auto-restart any backend project that was running at last shutdown.
+    supervisor_mgr.restartPersisted();
+    // Background loop that respawns crashed children with exponential backoff.
+    const supervisor_thread = try std.Thread.spawn(.{}, supervisor.Supervisor.autoRestartLoop, .{supervisor_mgr});
+    supervisor_thread.detach();
 
     try server.listen();
     std.log.info("hp-server: server.listen returned, exiting cleanly", .{});
@@ -367,7 +379,7 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     // Project-aware subdomain routing. Static projects served from
     // ~/data/projects/<id>/current/. Backend projects (later phase) reverse-proxied.
-    if (try tryServeProject(app, host, path, res)) {
+    if (try tryServeProject(app, req, host, path, ip, res)) {
         logVisitFull(app, req, ip, ua, host, method, res.status, cls);
         return;
     }
@@ -542,6 +554,11 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/projects/secrets/delete")) return apiProjectSecretsDelete(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/deploy")) return apiProjectsDeploy(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/projects/logs")) return apiProjectsLogs(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/start")) return apiProjectsStart(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/stop")) return apiProjectsStop(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/restart")) return apiProjectsRestart(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/runtime-logs")) return apiProjectsRuntimeLogs(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/status")) return apiProjectsStatus(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -2924,7 +2941,7 @@ fn apiWebhooksDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void
 
 /// Try to serve a request from a project that owns the host's subdomain.
 /// Returns true if the request was handled (200/404/etc set on res).
-fn tryServeProject(app: *App, host: []const u8, req_path: []const u8, res: *httpz.Response) !bool {
+fn tryServeProject(app: *App, req: *httpz.Request, host: []const u8, req_path: []const u8, client_ip: []const u8, res: *httpz.Response) !bool {
     const sub = hosted.extractSubdomain(host) orelse return false;
     const project = app.projects.getBySubdomain(sub) orelse return false;
 
@@ -2932,11 +2949,26 @@ fn tryServeProject(app: *App, host: []const u8, req_path: []const u8, res: *http
         return tryServeProjectStatic(app, project, req_path, res);
     }
 
-    // Backend / dynamic project: reverse proxy is a Phase C item. For now,
-    // emit a clear placeholder so the operator sees what's happening.
-    res.status = 503;
-    res.content_type = .TEXT;
-    res.body = "backend project not running yet (Phase C: reverse proxy + supervisor)\n";
+    // Backend / dynamic project: reverse proxy to 127.0.0.1:<port>.
+    if (project.port == 0) {
+        res.status = 503;
+        res.content_type = .TEXT;
+        res.body = "project has no allocated port\n";
+        return true;
+    }
+    const status = app.supervisor.statusOf(project.id);
+    if (status.state != .running or status.pid == null) {
+        res.status = 503;
+        res.content_type = .TEXT;
+        res.body = "project not running, click Start in the dashboard\n";
+        return true;
+    }
+    proxy.proxy(app.allocator, project.port, req, res, host, client_ip) catch |err| {
+        std.log.warn("proxy {s}:{d} failed: {}", .{ project.subdomain, project.port, err });
+        res.status = 502;
+        res.content_type = .TEXT;
+        res.body = "proxy error\n";
+    };
     return true;
 }
 
@@ -3432,4 +3464,157 @@ fn handleGithubWebhook(app: *App, req: *httpz.Request, res: *httpz.Response, pro
         return;
     };
     try res.json(.{ .ok = true, .triggered = true }, .{});
+}
+
+fn apiProjectsStart(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    app.supervisor.start(id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.NotFound => "not_found",
+            error.StaticProject => "static_project",
+            error.NoStartCommand => "no_start_cmd",
+            error.AlreadyRunning => "already_running",
+            else => "start_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_start",
+        .target = id,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiProjectsStop(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    app.supervisor.stop(id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.NotRunning => "not_running",
+            else => "stop_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_stop",
+        .target = id,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiProjectsRestart(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    app.supervisor.restart(id) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "restart_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_restart",
+        .target = id,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiProjectsRuntimeLogs(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const tail = supervisor.tailLog(res.arena, id, 64 * 1024) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "log_read_failed" }, .{});
+        return;
+    };
+    var out = std.ArrayList(u8).init(res.arena);
+    try out.appendSlice("{\"ok\":true,\"log\":");
+    try std.json.stringify(tail, .{}, out.writer());
+    try out.appendSlice("}");
+    res.content_type = .JSON;
+    res.body = try out.toOwnedSlice();
+}
+
+fn apiProjectsStatus(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const s = app.supervisor.statusOf(id);
+    try res.json(.{
+        .ok = true,
+        .state = @tagName(s.state),
+        .pid = if (s.pid) |p| @as(i64, @intCast(p)) else null,
+        .started_at = s.started_at,
+        .crash_count = s.crash_count,
+        .last_exit = s.last_exit,
+    }, .{});
 }

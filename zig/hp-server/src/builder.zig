@@ -38,6 +38,9 @@ pub const Orchestrator = struct {
     allocator: std.mem.Allocator,
     pepper: []const u8,
     projects_mgr: *projects.Manager,
+    /// Optional pointer to the supervisor (set by main.zig at boot via
+    /// orch.supervisor = sup;). Type-erased to avoid an import cycle.
+    supervisor: ?*anyopaque = null,
     /// Map project_id -> in-flight flag. Prevents concurrent deploys of the same
     /// project (would corrupt the repo dir).
     in_flight: std.StringHashMap(void),
@@ -226,16 +229,25 @@ fn deploy(orch: *Orchestrator, project_id: []const u8) !void {
             .last_deploy_at = std.time.timestamp(),
         });
     } else {
-        // Phase C will hook the supervisor here. For now, leave status as
-        // "stopped" so the operator knows the build succeeded but nothing
-        // is serving HTTP yet.
+        // Phase C: kick the supervisor. We import via the orchestrator's
+        // optional supervisor field set by main.zig at boot.
         _ = try orch.projects_mgr.update(project_id, .{
-            .status = .stopped,
             .last_deploy_at = std.time.timestamp(),
         });
         ctx.logHeader(.publish);
-        ctx.writeLog("(non-static runtime; supervisor wiring is Phase C, current build artifacts left in repo/)\n");
+        ctx.writeLog("(non-static runtime; build artifacts in repo/ - supervisor will (re)start on success)\n");
         ctx.logFooter(.publish, true, 0);
+        if (orch.supervisor) |sup_ptr| {
+            const sup: *@import("supervisor.zig").Supervisor = @ptrCast(@alignCast(sup_ptr));
+            // Restart picks up new code/secrets even if the project was running.
+            sup.restart(project_id) catch |err| {
+                std.log.warn("supervisor.restart after deploy failed: {}", .{err});
+                _ = try orch.projects_mgr.update(project_id, .{ .status = .failed });
+                return;
+            };
+        } else {
+            _ = try orch.projects_mgr.update(project_id, .{ .status = .stopped });
+        }
     }
 }
 

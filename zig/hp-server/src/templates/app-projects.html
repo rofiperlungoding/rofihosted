@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=22">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=22">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=22">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=23">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=23">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=23">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -240,8 +240,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=22"></script>
-<script src="https://rofihosted.space/app.js?v=22"></script>
+<script src="https://rofihosted.space/theme.js?v=23"></script>
+<script src="https://rofihosted.space/app.js?v=23"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -337,11 +337,18 @@ RH.loadCurrentUser();
       + row('Last deploy', '<span class="value">' + (p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never') + '</span>');
 
     html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Deploy</h3>'
-      + '<div class="submit-row" style="margin-top:.5rem; gap:.5rem">'
+      + '<div class="submit-row" style="margin-top:.5rem; gap:.5rem; flex-wrap:wrap">'
       +   '<button type="button" class="btn btn-accent" id="detail-deploy-btn"><i class="icon-cloud-upload"></i><span>Deploy now</span></button>'
-      +   '<button type="button" class="btn" id="detail-logs-btn"><i class="icon-list"></i><span>View logs</span></button>'
+      +   '<button type="button" class="btn" id="detail-logs-btn"><i class="icon-list"></i><span>Build logs</span></button>'
+      +   (p.runtime !== 'static' ? ''
+        +   '<button type="button" class="btn" id="detail-start-btn"><i class="icon-control-play"></i><span>Start</span></button>'
+        +   '<button type="button" class="btn" id="detail-stop-btn"><i class="icon-control-pause"></i><span>Stop</span></button>'
+        +   '<button type="button" class="btn" id="detail-restart-btn"><i class="icon-refresh"></i><span>Restart</span></button>'
+        +   '<button type="button" class="btn" id="detail-rt-logs-btn"><i class="icon-list"></i><span>Runtime logs</span></button>'
+        : '')
       + '</div>'
       + '<div id="detail-deploy-alert" class="alert" style="display:none; margin-top:.6rem"></div>'
+      + (p.runtime !== 'static' ? '<div id="detail-supervisor-status" class="hint" style="margin-top:.5rem; font-family: ui-monospace, \'SF Mono\', Menlo, monospace"></div>' : '')
       + '<pre id="detail-logs" style="display:none; margin-top:.8rem; max-height:280px; overflow:auto; padding:.7rem .9rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; color:var(--text);"></pre>';
 
     if (p.repo_url) {
@@ -370,7 +377,14 @@ RH.loadCurrentUser();
     loadSecrets(id);
     document.getElementById('detail-sk-add').addEventListener('click', function () { addSecret(id); });
     document.getElementById('detail-deploy-btn').addEventListener('click', function () { triggerDeploy(id); });
-    document.getElementById('detail-logs-btn').addEventListener('click', function () { toggleLogs(id); });
+    document.getElementById('detail-logs-btn').addEventListener('click', function () { toggleLogs(id, '/api/projects/logs'); });
+    if (p.runtime !== 'static') {
+      document.getElementById('detail-start-btn').addEventListener('click', function () { supervisorAction(id, 'start'); });
+      document.getElementById('detail-stop-btn').addEventListener('click', function () { supervisorAction(id, 'stop'); });
+      document.getElementById('detail-restart-btn').addEventListener('click', function () { supervisorAction(id, 'restart'); });
+      document.getElementById('detail-rt-logs-btn').addEventListener('click', function () { toggleLogs(id, '/api/projects/runtime-logs'); });
+      refreshSupervisorStatus(id);
+    }
 
     if (p.repo_url) {
       // Reveal secret on demand: hit /api/projects (already returns it - the
@@ -418,6 +432,7 @@ RH.loadCurrentUser();
         // Auto-refresh logs view
         const logsEl = document.getElementById('detail-logs');
         logsEl.style.display = '';
+        logsCurrentEndpoint = '/api/projects/logs';
         pollLogs(id, 60);
         // Refresh project list to update status
         setTimeout(loadProjects, 1500);
@@ -425,7 +440,9 @@ RH.loadCurrentUser();
   }
 
   let logsPollAbort = null;
-  function toggleLogs(id) {
+  let logsCurrentEndpoint = '/api/projects/logs';
+  function toggleLogs(id, endpoint) {
+    if (endpoint) logsCurrentEndpoint = endpoint;
     const el = document.getElementById('detail-logs');
     if (el.style.display === 'none' || !el.style.display) {
       el.style.display = '';
@@ -437,7 +454,7 @@ RH.loadCurrentUser();
   }
 
   function pollLogs(id, ticks) {
-    fetch('/api/projects/logs?id=' + encodeURIComponent(id))
+    fetch(logsCurrentEndpoint + '?id=' + encodeURIComponent(id))
       .then(function (r) { return r.json(); })
       .then(function (j) {
         const el = document.getElementById('detail-logs');
@@ -447,6 +464,41 @@ RH.loadCurrentUser();
         if (ticks > 0) {
           logsPollAbort = setTimeout(function () { pollLogs(id, ticks - 1); }, 2000);
         }
+      });
+  }
+
+  function supervisorAction(id, action) {
+    const fd = new FormData();
+    fd.append('id', id);
+    fetch('/api/projects/' + action, { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const alertEl = document.getElementById('detail-deploy-alert');
+        if (!j.ok) {
+          alertEl.className = 'alert error';
+          alertEl.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(action) + ' failed: ' + escapeHtml(j.err || 'unknown');
+          alertEl.style.display = '';
+        } else {
+          alertEl.className = 'alert success';
+          alertEl.innerHTML = '<i class="icon-check"></i> ' + escapeHtml(action) + ' triggered.';
+          alertEl.style.display = '';
+        }
+        refreshSupervisorStatus(id);
+        setTimeout(loadProjects, 1500);
+      });
+  }
+
+  function refreshSupervisorStatus(id) {
+    fetch('/api/projects/status?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const el = document.getElementById('detail-supervisor-status');
+        if (!el || !j.ok) return;
+        const parts = ['state=' + j.state];
+        if (j.pid) parts.push('pid=' + j.pid);
+        if (j.crash_count) parts.push('crashes=' + j.crash_count);
+        if (j.started_at) parts.push('started=' + fmtTs(j.started_at));
+        el.textContent = parts.join('  |  ');
       });
   }
 
