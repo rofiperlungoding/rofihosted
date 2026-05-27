@@ -18,6 +18,7 @@ pub const EventType = enum {
     stats_tick,
     digest_ready,
     tunnel_health,
+    anomaly_detected,
 
     pub fn label(self: EventType) []const u8 {
         return switch (self) {
@@ -28,6 +29,7 @@ pub const EventType = enum {
             .stats_tick => "stats_tick",
             .digest_ready => "digest_ready",
             .tunnel_health => "tunnel_health",
+            .anomaly_detected => "anomaly_detected",
         };
     }
 };

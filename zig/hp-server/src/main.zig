@@ -394,6 +394,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/security/unblock")) return apiSecurityUnblock(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/files/list")) return apiFilesList(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/explain")) return apiAiExplain(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/explain/stream")) return apiAiExplainStream(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/digest/latest")) return apiDigestLatest(app, res);
     if (std.mem.eql(u8, path, "/api/ai/digest/run")) return apiDigestRun(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/policy/latest")) return apiPolicyLatest(app, res);
@@ -1283,6 +1284,116 @@ fn apiAiExplain(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 }
 
 // =================================================================
+// AI: EXPLAIN IP (STREAMING via SSE)
+// =================================================================
+fn apiAiExplainStream(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        res.content_type = .TEXT;
+        res.body = "ai_disabled\n";
+        return;
+    }
+    const form = req.formData() catch {
+        res.status = 400;
+        res.content_type = .TEXT;
+        res.body = "bad_form\n";
+        return;
+    };
+    const ip = form.get("ip") orelse {
+        res.status = 400;
+        res.content_type = .TEXT;
+        res.body = "missing_ip\n";
+        return;
+    };
+
+    // Gather visit data (same as non-streaming explain)
+    app.store_mutex.lock();
+    const visits = store.readVisits(res.arena, visits_path, 2000) catch {
+        app.store_mutex.unlock();
+        res.status = 500;
+        res.content_type = .TEXT;
+        res.body = "read_failed\n";
+        return;
+    };
+    app.store_mutex.unlock();
+
+    var paths = std.ArrayList([]const u8).init(res.arena);
+    var ua_set = std.StringHashMap(void).init(res.arena);
+    var classification_counts = std.StringHashMap(u32).init(res.arena);
+    var country: []const u8 = "-";
+    var visit_count: u32 = 0;
+    for (visits) |v| {
+        if (!std.mem.eql(u8, v.ip, ip)) continue;
+        visit_count += 1;
+        if (v.country.len > 0) country = v.country;
+        if (paths.items.len < 20) paths.append(v.path) catch {};
+        if (ua_set.count() < 6 and v.ua.len > 0) ua_set.put(v.ua, {}) catch {};
+        if (v.classification.len > 0) {
+            const gop = classification_counts.getOrPut(v.classification) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+    }
+    if (visit_count == 0) {
+        res.status = 404;
+        res.content_type = .TEXT;
+        res.body = "no_visits_for_ip\n";
+        return;
+    }
+
+    var ua_list = std.ArrayList([]const u8).init(res.arena);
+    var ua_it = ua_set.keyIterator();
+    while (ua_it.next()) |k| ua_list.append(k.*) catch {};
+
+    var cls_buf = std.ArrayList(u8).init(res.arena);
+    var cls_it = classification_counts.iterator();
+    var first = true;
+    while (cls_it.next()) |e| {
+        if (!first) cls_buf.appendSlice(", ") catch {};
+        first = false;
+        cls_buf.writer().print("{s}: {d}", .{ e.key_ptr.*, e.value_ptr.* }) catch {};
+    }
+
+    // Start SSE stream
+    const stream = try res.startEventStreamSync();
+
+    // Send metadata event first
+    var meta_buf: [256]u8 = undefined;
+    const meta = std.fmt.bufPrint(&meta_buf, "event: meta\ndata: {{\"ip\":\"{s}\",\"visit_count\":{d},\"country\":\"{s}\"}}\n\n", .{
+        ip, visit_count, country,
+    }) catch "";
+    _ = stream.writeAll(meta) catch {};
+
+    // Stream tokens via callback
+    const StreamCtx = struct {
+        s: std.net.Stream,
+        fn onChunk(ctx_ptr: *anyopaque, chunk: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx_ptr));
+            // SSE format: event: token\ndata: <chunk>\n\n
+            self.s.writeAll("event: token\ndata: ") catch return;
+            self.s.writeAll(chunk) catch return;
+            self.s.writeAll("\n\n") catch return;
+        }
+    };
+    var ctx = StreamCtx{ .s = stream };
+
+    _ = ai.explainIpStream(app.ai_cfg, res.arena, .{
+        .ip = ip,
+        .country = country,
+        .visit_count = visit_count,
+        .classifications = cls_buf.items,
+        .paths = paths.items,
+        .user_agents = ua_list.items,
+    }, .{
+        .ctx = @ptrCast(&ctx),
+        .on_chunk = StreamCtx.onChunk,
+    });
+
+    // Send done event
+    _ = stream.writeAll("event: done\ndata: {}\n\n") catch {};
+}
+
+// =================================================================
 // AI: DAILY DIGEST
 // =================================================================
 const DigestRecord = struct {
@@ -1618,7 +1729,55 @@ fn embedRequestThread(args: *EmbedArgs) void {
     const a = arena.allocator();
 
     const vec = ai.embed(args.app.ai_cfg, a, args.key) orelse return;
-    _ = args.app.embeddings.upsert(args.key, vec) catch {};
+    const is_new = args.app.embeddings.upsert(args.key, vec) catch return;
+
+    // Anomaly detection: if this is a genuinely new pattern, check how far it is
+    // from existing clusters. If distant, ask AI to classify it.
+    if (is_new and args.app.embeddings.count() > 5) {
+        const neighbors = args.app.embeddings.topK(a, vec, 1) catch return;
+        const nearest_sim: f32 = if (neighbors.len > 0) neighbors[0].similarity else 0;
+        const nearest_key: ?[]const u8 = if (neighbors.len > 0) neighbors[0].key else null;
+
+        // Only flag if the pattern is far from everything known (< 0.7 cosine)
+        if (nearest_sim < 0.7) {
+            const explanation = ai.explainAnomaly(args.app.ai_cfg, a, .{
+                .pattern_key = args.key,
+                .nearest_cluster_rep = nearest_key,
+                .nearest_similarity = nearest_sim,
+                .sample_paths = &.{args.key}, // key IS the ua|path pattern
+            }) orelse return;
+
+            // Parse and publish as SSE event
+            const Parsed = struct {
+                novelty: []const u8,
+                summary: []const u8,
+                recommended_attention: []const u8,
+            };
+            const parsed = std.json.parseFromSlice(Parsed, a, explanation, .{
+                .ignore_unknown_fields = true,
+            }) catch return;
+
+            args.app.bus.publish(.anomaly_detected, .{
+                .pattern = args.key,
+                .novelty = parsed.value.novelty,
+                .summary = parsed.value.summary,
+                .attention = parsed.value.recommended_attention,
+                .nearest_similarity = nearest_sim,
+                .timestamp = std.time.timestamp(),
+            });
+
+            // Persist to anomaly log
+            const log_path = "/data/data/com.termux/files/home/data/anomalies.jsonl";
+            store.appendJson(log_path, .{
+                .timestamp = std.time.timestamp(),
+                .pattern = args.key,
+                .novelty = parsed.value.novelty,
+                .summary = parsed.value.summary,
+                .attention = parsed.value.recommended_attention,
+                .nearest_similarity = nearest_sim,
+            }) catch {};
+        }
+    }
 }
 
 // =================================================================
@@ -1665,6 +1824,18 @@ fn apiAiQuery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         return;
     };
 
+    // Semantic cache: embed the question and check if we've answered something similar recently.
+    const q_embedding = ai.embed(app.ai_cfg, res.arena, question);
+    if (q_embedding) |emb| {
+        if (app.semantic_cache.lookup(emb, res.arena)) |cached_response| {
+            // Cache hit! Return the cached result directly.
+            ai.SemanticCache.recordHit(app.ai_cfg);
+            res.content_type = .JSON;
+            res.body = cached_response;
+            return;
+        }
+    }
+
     const plan_json = ai.planQuery(app.ai_cfg, res.arena, question) orelse {
         res.status = 502;
         try res.json(.{ .ok = false, .err = "plan_failed" }, .{});
@@ -1680,6 +1851,11 @@ fn apiAiQuery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         try res.json(.{ .ok = false, .err = "execute_failed" }, .{});
         return;
     };
+
+    // Store in semantic cache for future similar queries
+    if (q_embedding) |emb| {
+        app.semantic_cache.put(question, emb, out.items);
+    }
     res.content_type = .JSON;
     res.body = try res.arena.dupe(u8, out.items);
 }
