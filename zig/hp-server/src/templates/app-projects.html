@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=21">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=21">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=21">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=22">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=22">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=22">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -240,8 +240,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=21"></script>
-<script src="https://rofihosted.space/app.js?v=21"></script>
+<script src="https://rofihosted.space/theme.js?v=22"></script>
+<script src="https://rofihosted.space/app.js?v=22"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -336,6 +336,26 @@ RH.loadCurrentUser();
       + row('Created', '<span class="value">' + fmtTs(p.created_at) + '</span>')
       + row('Last deploy', '<span class="value">' + (p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never') + '</span>');
 
+    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Deploy</h3>'
+      + '<div class="submit-row" style="margin-top:.5rem; gap:.5rem">'
+      +   '<button type="button" class="btn btn-accent" id="detail-deploy-btn"><i class="icon-cloud-upload"></i><span>Deploy now</span></button>'
+      +   '<button type="button" class="btn" id="detail-logs-btn"><i class="icon-list"></i><span>View logs</span></button>'
+      + '</div>'
+      + '<div id="detail-deploy-alert" class="alert" style="display:none; margin-top:.6rem"></div>'
+      + '<pre id="detail-logs" style="display:none; margin-top:.8rem; max-height:280px; overflow:auto; padding:.7rem .9rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; color:var(--text);"></pre>';
+
+    if (p.repo_url) {
+      const hookUrl = location.origin + '/v1/github/' + p.id;
+      html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">GitHub auto-deploy</h3>'
+        + '<p class="hint" style="margin-top:.4rem">Add a webhook to your repo: settings > webhooks > add webhook. Use the URL and secret below. Choose <em>application/json</em> as the content type and the <em>Just the push event</em> trigger.</p>'
+        + row('Webhook URL', '<span class="value">' + escapeHtml(hookUrl) + '</span>')
+        + row('Webhook secret', '<span class="value" id="detail-secret-cell">click reveal</span>')
+        + '<div class="submit-row" style="gap:.4rem; margin-top:.4rem">'
+        +   '<button type="button" class="btn btn-sm" id="detail-secret-btn">Reveal</button>'
+        +   '<button type="button" class="btn btn-sm" id="detail-secret-copy">Copy</button>'
+        + '</div>';
+    }
+
     html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Secrets</h3>'
       + '<div id="detail-secrets" class="wiz-secret-existing">Loading...</div>'
       + '<div class="wiz-secret-row" style="margin-top:.6rem">'
@@ -349,6 +369,85 @@ RH.loadCurrentUser();
 
     loadSecrets(id);
     document.getElementById('detail-sk-add').addEventListener('click', function () { addSecret(id); });
+    document.getElementById('detail-deploy-btn').addEventListener('click', function () { triggerDeploy(id); });
+    document.getElementById('detail-logs-btn').addEventListener('click', function () { toggleLogs(id); });
+
+    if (p.repo_url) {
+      // Reveal secret on demand: hit /api/projects (already returns it - the
+      // operator owns the device anyway, hash-reveal is fine).
+      const cell = document.getElementById('detail-secret-cell');
+      const fullSecret = p.webhook_secret || '';
+      let revealed = false;
+      document.getElementById('detail-secret-btn').addEventListener('click', function () {
+        revealed = !revealed;
+        cell.textContent = revealed
+          ? fullSecret
+          : (fullSecret ? fullSecret.slice(0, 8) + '...' + fullSecret.slice(-4) : 'click reveal');
+        document.getElementById('detail-secret-btn').textContent = revealed ? 'Hide' : 'Reveal';
+      });
+      cell.textContent = fullSecret ? fullSecret.slice(0, 8) + '...' + fullSecret.slice(-4) : 'click reveal';
+      document.getElementById('detail-secret-copy').addEventListener('click', function () {
+        navigator.clipboard.writeText(fullSecret).then(function () {
+          document.getElementById('detail-secret-copy').textContent = 'Copied';
+          setTimeout(function () { document.getElementById('detail-secret-copy').textContent = 'Copy'; }, 1500);
+        });
+      });
+    }
+  }
+
+  function triggerDeploy(id) {
+    const btn = document.getElementById('detail-deploy-btn');
+    const alertEl = document.getElementById('detail-deploy-alert');
+    btn.disabled = true;
+    alertEl.style.display = 'none';
+    const fd = new FormData();
+    fd.append('id', id);
+    fetch('/api/projects/deploy', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        btn.disabled = false;
+        if (!j.ok) {
+          alertEl.className = 'alert error';
+          alertEl.innerHTML = '<i class="icon-exclamation"></i> Deploy failed: ' + escapeHtml(j.err || 'unknown');
+          alertEl.style.display = '';
+          return;
+        }
+        alertEl.className = 'alert success';
+        alertEl.innerHTML = '<i class="icon-check"></i> Deploy queued. Tail the logs to follow.';
+        alertEl.style.display = '';
+        // Auto-refresh logs view
+        const logsEl = document.getElementById('detail-logs');
+        logsEl.style.display = '';
+        pollLogs(id, 60);
+        // Refresh project list to update status
+        setTimeout(loadProjects, 1500);
+      });
+  }
+
+  let logsPollAbort = null;
+  function toggleLogs(id) {
+    const el = document.getElementById('detail-logs');
+    if (el.style.display === 'none' || !el.style.display) {
+      el.style.display = '';
+      pollLogs(id, 30);
+    } else {
+      el.style.display = 'none';
+      if (logsPollAbort) { clearTimeout(logsPollAbort); logsPollAbort = null; }
+    }
+  }
+
+  function pollLogs(id, ticks) {
+    fetch('/api/projects/logs?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const el = document.getElementById('detail-logs');
+        if (!el) return;
+        el.textContent = j.log || '(no log yet)';
+        el.scrollTop = el.scrollHeight;
+        if (ticks > 0) {
+          logsPollAbort = setTimeout(function () { pollLogs(id, ticks - 1); }, 2000);
+        }
+      });
   }
 
   function row(label, valueHtml) {
@@ -416,6 +515,7 @@ RH.loadCurrentUser();
     install_cmd: '',
     build_cmd: '',
     start_cmd: '',
+    publish_dir: '',
     secrets: [], // [{key, value}, ...] applied after project create
     createdId: null,
   };
@@ -424,6 +524,7 @@ RH.loadCurrentUser();
     Object.assign(wizState, {
       step: 1, name: '', subdomain: '', repo_url: '', branch: 'main',
       runtime: 'static', install_cmd: '', build_cmd: '', start_cmd: '',
+      publish_dir: '',
       secrets: [], createdId: null,
     });
     renderWizard();
@@ -472,7 +573,6 @@ RH.loadCurrentUser();
         const sel = wizState.runtime === r ? 'selected' : '';
         return '<div class="opt ' + sel + '" data-r="' + r + '">' + r + '</div>';
       }).join('');
-      const showCmds = wizState.runtime !== 'static';
       body.innerHTML = ''
         + '<label>Runtime</label>'
         + '<div class="wiz-runtime-grid">' + optsHtml + '</div>'
@@ -480,8 +580,11 @@ RH.loadCurrentUser();
         + '<input class="input" id="wiz-install" value="' + escapeHtml(wizState.install_cmd) + '" placeholder="npm ci">'
         + '<label>Build command <span class="hint-inline">- runs after install (optional)</span></label>'
         + '<input class="input" id="wiz-build" value="' + escapeHtml(wizState.build_cmd) + '" placeholder="npm run build">'
-        + (showCmds ? '<label>Start command <span class="hint-inline">- long-running, will be supervised</span></label>'
-            + '<input class="input" id="wiz-start" value="' + escapeHtml(wizState.start_cmd) + '" placeholder="node server.js">' : '');
+        + (wizState.runtime === 'static'
+            ? '<label>Publish directory <span class="hint-inline">- relative path under the repo where built static output lives, default = repo root</span></label>'
+              + '<input class="input" id="wiz-pubdir" value="' + escapeHtml(wizState.publish_dir || '') + '" placeholder="dist">'
+            : '<label>Start command <span class="hint-inline">- long-running, will be supervised</span></label>'
+              + '<input class="input" id="wiz-start" value="' + escapeHtml(wizState.start_cmd) + '" placeholder="node server.js">');
       body.querySelectorAll('.opt').forEach(function (el) {
         el.addEventListener('click', function () {
           wizState.runtime = el.dataset.r;
@@ -489,6 +592,7 @@ RH.loadCurrentUser();
           if (document.getElementById('wiz-install')) wizState.install_cmd = document.getElementById('wiz-install').value;
           if (document.getElementById('wiz-build')) wizState.build_cmd = document.getElementById('wiz-build').value;
           if (document.getElementById('wiz-start')) wizState.start_cmd = document.getElementById('wiz-start').value;
+          if (document.getElementById('wiz-pubdir')) wizState.publish_dir = document.getElementById('wiz-pubdir').value;
           renderWizard();
         });
       });
@@ -550,9 +654,11 @@ RH.loadCurrentUser();
       const inst = document.getElementById('wiz-install');
       const bld = document.getElementById('wiz-build');
       const st = document.getElementById('wiz-start');
+      const pd = document.getElementById('wiz-pubdir');
       if (inst) wizState.install_cmd = inst.value;
       if (bld) wizState.build_cmd = bld.value;
       if (st) wizState.start_cmd = st.value;
+      if (pd) wizState.publish_dir = pd.value;
     } else if (wizState.step === 4) {
       captureSecrets();
     }
@@ -613,6 +719,7 @@ RH.loadCurrentUser();
     fd.append('install_cmd', wizState.install_cmd);
     fd.append('build_cmd', wizState.build_cmd);
     fd.append('start_cmd', wizState.start_cmd);
+    fd.append('publish_dir', wizState.publish_dir || '');
     document.getElementById('wiz-next-btn').disabled = true;
     fetch('/api/projects/create', { method: 'POST', body: fd })
       .then(function (r) { return r.json(); })

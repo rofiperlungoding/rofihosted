@@ -81,6 +81,8 @@ pub const Project = struct {
     install_cmd: []const u8,
     build_cmd: []const u8,
     start_cmd: []const u8, // ignored for static
+    publish_dir: []const u8, // sub-path of repo where static output lives ("" = repo root)
+    webhook_secret: []const u8, // hex string used to HMAC-verify GitHub push webhooks
     port: u16, // 0 for static
     status: Status,
     created_at: i64,
@@ -149,6 +151,8 @@ pub const Manager = struct {
                 install_cmd: []const u8 = "",
                 build_cmd: []const u8 = "",
                 start_cmd: []const u8 = "",
+                publish_dir: []const u8 = "",
+                webhook_secret: []const u8 = "",
                 port: u16 = 0,
                 status: []const u8 = "created",
                 created_at: i64 = 0,
@@ -175,6 +179,8 @@ pub const Manager = struct {
                 .install_cmd = try arena.dupe(u8, w.install_cmd),
                 .build_cmd = try arena.dupe(u8, w.build_cmd),
                 .start_cmd = try arena.dupe(u8, w.start_cmd),
+                .publish_dir = try arena.dupe(u8, w.publish_dir),
+                .webhook_secret = try arena.dupe(u8, w.webhook_secret),
                 .port = w.port,
                 .status = st,
                 .created_at = w.created_at,
@@ -223,6 +229,7 @@ pub const Manager = struct {
         install_cmd: []const u8 = "",
         build_cmd: []const u8 = "",
         start_cmd: []const u8 = "",
+        publish_dir: []const u8 = "",
     };
 
     pub fn create(self: *Manager, input: CreateInput) !Project {
@@ -248,6 +255,16 @@ pub const Manager = struct {
             id_hex[i * 2 + 1] = cs[b & 0xf];
         }
 
+        // Generate a per-project webhook secret (random, hex). The operator copies
+        // this into their GitHub repo settings as the secret for the push webhook.
+        var secret_bytes: [32]u8 = undefined;
+        std.crypto.random.bytes(&secret_bytes);
+        var secret_hex: [64]u8 = undefined;
+        for (secret_bytes, 0..) |b, i| {
+            secret_hex[i * 2] = cs[b >> 4];
+            secret_hex[i * 2 + 1] = cs[b & 0xf];
+        }
+
         const arena = self.arena_state.allocator();
         const now = std.time.timestamp();
         const project = Project{
@@ -260,6 +277,8 @@ pub const Manager = struct {
             .install_cmd = try arena.dupe(u8, input.install_cmd),
             .build_cmd = try arena.dupe(u8, input.build_cmd),
             .start_cmd = try arena.dupe(u8, input.start_cmd),
+            .publish_dir = try arena.dupe(u8, input.publish_dir),
+            .webhook_secret = try arena.dupe(u8, &secret_hex),
             .port = port,
             .status = .created,
             .created_at = now,
@@ -287,6 +306,7 @@ pub const Manager = struct {
         install_cmd: ?[]const u8 = null,
         build_cmd: ?[]const u8 = null,
         start_cmd: ?[]const u8 = null,
+        publish_dir: ?[]const u8 = null,
         status: ?Status = null,
         last_deploy_at: ?i64 = null,
     };
@@ -306,6 +326,7 @@ pub const Manager = struct {
                 if (input.install_cmd) |v| p.install_cmd = try arena.dupe(u8, v);
                 if (input.build_cmd) |v| p.build_cmd = try arena.dupe(u8, v);
                 if (input.start_cmd) |v| p.start_cmd = try arena.dupe(u8, v);
+                if (input.publish_dir) |v| p.publish_dir = try arena.dupe(u8, v);
                 if (input.status) |v| p.status = v;
                 if (input.last_deploy_at) |v| p.last_deploy_at = v;
                 p.updated_at = std.time.timestamp();
@@ -386,6 +407,10 @@ fn writeProject(w: anytype, p: Project) !void {
     try writeJsonStr(w, p.build_cmd);
     try w.writeAll(",\"start_cmd\":\"");
     try writeJsonStr(w, p.start_cmd);
+    try w.writeAll(",\"publish_dir\":\"");
+    try writeJsonStr(w, p.publish_dir);
+    try w.writeAll(",\"webhook_secret\":\"");
+    try writeJsonStr(w, p.webhook_secret);
     try w.print(
         ",\"port\":{d},\"status\":\"{s}\",\"created_at\":{d},\"updated_at\":{d},\"last_deploy_at\":{d}}}",
         .{ p.port, p.status.toString(), p.created_at, p.updated_at, p.last_deploy_at },

@@ -29,6 +29,7 @@ const apikey = @import("apikey.zig");
 const webhook = @import("webhook.zig");
 const projects = @import("projects.zig");
 const projsecrets = @import("projsecrets.zig");
+const builder = @import("builder.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -61,6 +62,7 @@ const App = struct {
     apikey: *apikey.Manager,
     webhook: *webhook.Manager,
     projects: *projects.Manager,
+    builder: *builder.Orchestrator,
     pepper: []const u8,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
@@ -132,6 +134,7 @@ pub fn main() !void {
     const apikey_mgr = try apikey.Manager.init(allocator, pepper_slice);
     const webhook_mgr = try webhook.Manager.init(allocator);
     const projects_mgr = try projects.Manager.init(allocator);
+    const builder_orch = try builder.Orchestrator.init(allocator, pepper_slice, projects_mgr);
     // Wire bus -> webhook fan-out so any event published also fires matching
     // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
     bus.pub_callback = webhookFanOut;
@@ -163,6 +166,7 @@ pub fn main() !void {
         .apikey = apikey_mgr,
         .webhook = webhook_mgr,
         .projects = projects_mgr,
+        .builder = builder_orch,
         .pepper = pepper_slice,
     };
     g_app = &app;
@@ -536,6 +540,8 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/projects/secrets/list")) return apiProjectSecretsList(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/secrets/set")) return apiProjectSecretsSet(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/secrets/delete")) return apiProjectSecretsDelete(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/deploy")) return apiProjectsDeploy(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/logs")) return apiProjectsLogs(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -2566,6 +2572,12 @@ fn apiDbPoolStats(app: *App, res: *httpz.Response) !void {
 const SQL_DB_ROOT = "/data/data/com.termux/files/home/data/dbs";
 
 fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
+    // GitHub webhook is unauthenticated at the X-API-Key layer - it's HMAC-verified per project.
+    if (std.mem.startsWith(u8, path, "/v1/github/")) {
+        const project_id = path["/v1/github/".len..];
+        return handleGithubWebhook(app, req, res, project_id);
+    }
+
     // Extract API key
     const raw_key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
     if (raw_key.len == 0) {
@@ -3073,6 +3085,7 @@ fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .install_cmd = form.get("install_cmd") orelse "",
         .build_cmd = form.get("build_cmd") orelse "",
         .start_cmd = form.get("start_cmd") orelse "",
+        .publish_dir = form.get("publish_dir") orelse "",
     }) catch |err| {
         const code: []const u8 = switch (err) {
             error.SubdomainTaken => "subdomain_taken",
@@ -3113,6 +3126,7 @@ fn apiProjectsUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
     if (form.get("install_cmd")) |v| input.install_cmd = v;
     if (form.get("build_cmd")) |v| input.build_cmd = v;
     if (form.get("start_cmd")) |v| input.start_cmd = v;
+    if (form.get("publish_dir")) |v| input.publish_dir = v;
 
     const updated = app.projects.update(id, input) catch |err| {
         const code: []const u8 = switch (err) {
@@ -3288,4 +3302,134 @@ fn apiProjectSecretsDelete(app: *App, req: *httpz.Request, res: *httpz.Response)
         .detail = k,
     });
     try res.json(.{ .ok = true }, .{});
+}
+
+fn apiProjectsDeploy(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+    app.builder.deployAsync(id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.AlreadyInFlight => "already_in_flight",
+            else => "deploy_failed",
+        };
+        res.status = 409;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_deploy",
+        .target = id,
+    });
+    try res.json(.{ .ok = true, .triggered = true }, .{});
+}
+
+fn apiProjectsLogs(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+    const tail = builder.tailLog(res.arena, id, 64 * 1024) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "log_read_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    var out = std.ArrayList(u8).init(res.arena);
+    try out.appendSlice("{\"ok\":true,\"log\":");
+    try std.json.stringify(tail, .{}, out.writer());
+    try out.appendSlice("}");
+    res.body = try out.toOwnedSlice();
+}
+
+fn handleGithubWebhook(app: *App, req: *httpz.Request, res: *httpz.Response, project_id: []const u8) !void {
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const project = app.projects.getById(project_id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+
+    const sig = req.header("x-hub-signature-256") orelse req.header("X-Hub-Signature-256") orelse "";
+    const body = req.body() orelse "";
+    if (!builder.verifyGithubSignature(project.webhook_secret, sig, body)) {
+        res.status = 401;
+        try res.json(.{ .ok = false, .err = "invalid_signature" }, .{});
+        return;
+    }
+
+    // Honour the 'ping' event by just acking.
+    const event = req.header("x-github-event") orelse req.header("X-GitHub-Event") orelse "";
+    if (std.mem.eql(u8, event, "ping")) {
+        try res.json(.{ .ok = true, .pong = true }, .{});
+        return;
+    }
+    if (!std.mem.eql(u8, event, "push") and event.len > 0) {
+        try res.json(.{ .ok = true, .ignored = event }, .{});
+        return;
+    }
+
+    // Optional: only deploy when the pushed branch matches project.branch.
+    // GitHub push payload contains a "ref":"refs/heads/<branch>" field. We do a
+    // simple substring check to avoid pulling in a full JSON parser path here.
+    const expected = std.fmt.allocPrint(res.arena, "\"ref\":\"refs/heads/{s}\"", .{project.branch}) catch null;
+    if (expected) |e| {
+        if (std.mem.indexOf(u8, body, e) == null and body.len > 0) {
+            try res.json(.{ .ok = true, .ignored = "branch mismatch" }, .{});
+            return;
+        }
+    }
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = "github_webhook",
+        .action = "project_deploy",
+        .target = project_id,
+    });
+    app.builder.deployAsync(project_id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.AlreadyInFlight => "already_in_flight",
+            else => "deploy_failed",
+        };
+        res.status = 202;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    try res.json(.{ .ok = true, .triggered = true }, .{});
 }
