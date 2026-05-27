@@ -7,10 +7,38 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=17">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=17">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=17">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=18">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=18">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=18">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  .dbc-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: .6rem;
+    margin: .6rem 0 .4rem;
+  }
+  .dbc-stat {
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    padding: .7rem .9rem;
+    display: flex; flex-direction: column; gap: .3rem;
+  }
+  .dbc-stat .label {
+    font-size: .68rem;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    font-weight: 600;
+  }
+  .dbc-stat .value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -124,6 +152,21 @@
     </div>
 
     <div class="form-card">
+      <h2>Database cache</h2>
+      <p class="lead">SQLite read-side cache at <code>~/data/cache.db</code>. JSONL stays the source of truth, this just makes the AI query bar fast. Auto-syncs every 5 minutes from <code>visits.jsonl</code>. WAL mode + synchronous=NORMAL = Android-safe.</p>
+      <div class="dbc-stats" id="dbcache-grid">
+        <div class="dbc-stat"><span class="label">Rows cached</span><span class="value" id="dbc-rows">&mdash;</span></div>
+        <div class="dbc-stat"><span class="label">Sync count</span><span class="value" id="dbc-syncs">&mdash;</span></div>
+        <div class="dbc-stat"><span class="label">Last sync</span><span class="value" id="dbc-last">&mdash;</span></div>
+        <div class="dbc-stat"><span class="label">Last duration</span><span class="value" id="dbc-dur">&mdash;</span></div>
+      </div>
+      <div class="submit-row" style="margin-top: 1rem">
+        <button type="button" class="btn btn-accent" id="dbc-sync-btn"><span>Sync now</span><i class="icon-refresh"></i></button>
+      </div>
+      <div id="dbc-alert" class="alert" style="display:none; margin-top: 1rem"></div>
+    </div>
+
+    <div class="form-card">
       <h2>Operator rules</h2>
       <p class="lead">Define your own event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and a list of actions. Actions are limited to <code>block</code>, <code>log</code>, and <code>increment</code>. Single-user, no sandboxing nightmare. Stored in <code>~/.hp-server-rules.jsonl</code>.</p>
       <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
@@ -138,8 +181,8 @@
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=17"></script>
-<script src="https://rofihosted.space/app.js?v=17"></script>
+<script src="https://rofihosted.space/theme.js?v=18"></script>
+<script src="https://rofihosted.space/app.js?v=18"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -224,6 +267,51 @@
           honeyAlert.style.display = '';
         });
     });
+
+    // DB cache panel
+    const dbcAlert = document.getElementById('dbc-alert');
+    function fmtAgo(ts) {
+      if (!ts) return 'never';
+      const ago = Math.floor(Date.now() / 1000 - ts);
+      if (ago < 60) return ago + 's ago';
+      if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
+      if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+      return Math.floor(ago / 86400) + 'd ago';
+    }
+    function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+    function loadDbcStats() {
+      fetch('/api/dbcache/stats').then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) return;
+        setText('dbc-rows', (j.row_count || 0).toLocaleString());
+        setText('dbc-syncs', j.sync_count || 0);
+        setText('dbc-last', fmtAgo(j.last_sync_at || 0));
+        setText('dbc-dur', (j.last_sync_duration_ms || 0) + ' ms');
+      }).catch(function () {});
+    }
+    document.getElementById('dbc-sync-btn').addEventListener('click', function () {
+      const btn = document.getElementById('dbc-sync-btn');
+      btn.disabled = true;
+      dbcAlert.style.display = 'none';
+      fetch('/api/dbcache/sync').then(function (r) { return r.json(); }).then(function (j) {
+        if (j.ok) {
+          dbcAlert.className = 'alert success';
+          dbcAlert.innerHTML = '<i class="icon-check"></i> Synced ' + (j.rows_synced || 0) + ' new row(s).';
+          loadDbcStats();
+        } else {
+          dbcAlert.className = 'alert error';
+          dbcAlert.innerHTML = '<i class="icon-exclamation"></i> Sync failed: ' + (j.err || 'unknown');
+        }
+        dbcAlert.style.display = '';
+      }).catch(function () {
+        dbcAlert.className = 'alert error';
+        dbcAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
+        dbcAlert.style.display = '';
+      }).finally(function () {
+        btn.disabled = false;
+      });
+    });
+    loadDbcStats();
+    setInterval(loadDbcStats, 30000);
 
     // Operator rules
     const rulesText = document.getElementById('rules-json');

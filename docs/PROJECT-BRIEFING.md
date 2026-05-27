@@ -140,6 +140,17 @@ Cookie-based HMAC-SHA256 sessions:
 - Prompt injection defense (UNTRUSTED delimiters + sanitization)
 - Constant-time password comparison
 
+### Operator rule engine
+
+A tiny JSON DSL stored at `~/.hp-server-rules.jsonl` (one rule per line). Rules let the operator codify "if X happens then Y" without writing Zig and rebuilding.
+
+- Triggers: `on_visit`, `on_login_attempt`, `on_blocklist_change`, `on_anomaly`
+- Conditions (ANDed): `eq`, `neq`, `contains`, `not_contains`, `starts_with`, `ends_with`, against fields like `ip`, `path`, `country`, `ua`, `classification`, `method`, `host`
+- Actions: `block` (with optional TTL and reason), `log` (level + message), `increment` (named counter, used as a metric)
+- CRUD: `GET /api/rules`, `POST /api/rules` (append), `POST /api/rules/replace` (full replace)
+- UI: textarea editor on the Settings page, live counters surfaced via `GET /api/rules`
+- Each rule is dispatched synchronously inside the request hot path, so conditions should stay small. Block actions feed straight into the same blocklist used by manual blocks.
+
 ## AI features (comprehensive)
 
 All AI features are opt-in via `MISTRAL_API_KEY` in `~/.hp-server.env`. If the key is absent, everything degrades gracefully (server runs normally without AI).
@@ -221,6 +232,14 @@ All AI features are opt-in via `MISTRAL_API_KEY` in `~/.hp-server.env`. If the k
     - `/api/ai/usage` endpoint: cumulative stats (total_calls, total_tokens, cache_hits, failures, estimated_cost_usd, uptime)
     - Config struct tracks lifetime usage in memory
 
+11. **Log scrubbing** (structured output, on-demand)
+    - Trigger: operator clicks "Run scrub" on Security page or hits `GET /api/ai/scrub`
+    - Input: top 50 scanner-classified paths + top 10 UAs from the SQLite cache (last 7 days)
+    - Output: structured findings with category (`known_cve`/`novel_pattern`/`misconfig_probe`/`standard_scan`/`benign`), severity, optional CVE reference, rationale, suggested action
+    - Persisted to `~/data/scrub.jsonl` (each scrub is one row with the full report)
+    - Goal: surface "is anything in my scanner traffic actually a zero-day I should care about?" without manually grepping logs
+    - Rate limit: shared with explain bucket (1/6s, burst 10)
+
 ### Prompt injection defense
 
 All untrusted data (attacker UAs, paths, query text) is:
@@ -260,8 +279,8 @@ All pages behind auth except the public landing. SaaS-style design with:
 | `/status` | Uptime probe results with status dots |
 | `/files` | Directory browser for ~/data and home |
 | `/api` | API explorer (documentation of all endpoints) |
-| `/security` | Daily digest, weekly policy, summary stats, top IPs with Explain/Block buttons, blocklist, login attempts, top UAs/paths/countries, tunnel health, behavioural clusters, anomaly alerts, audit log |
-| `/settings` | Change credentials, geo-block toggle, honeypot toggle |
+| `/security` | Daily digest, weekly policy, summary stats, top IPs with Explain/Block buttons, blocklist, login attempts, top UAs/paths/countries, tunnel health, behavioural clusters, anomaly alerts, log scrub findings, audit log |
+| `/settings` | Change credentials, geo-block toggle, honeypot toggle, database cache stats with manual sync, operator rules JSON editor |
 
 ### Real-time (SSE)
 
@@ -305,6 +324,12 @@ Mounted in the topbar of every authenticated page. Operator types natural langua
 - `POST /api/geoblock/update` - toggle geo-block
 - `GET /api/honeypot` - honeypot state
 - `POST /api/honeypot/update` - toggle honeypot
+- `GET /api/rules` - list rules + counters
+- `POST /api/rules` - append a single rule
+- `POST /api/rules/replace` - replace the entire rule set (used by the JSON editor)
+- `GET /api/dbcache/stats` - cache row count, sync count, last sync time + duration
+- `GET /api/dbcache/sync` - trigger an incremental sync immediately
+- `GET /api/ai/scrub` - run a log scrub pass and return findings
 - `POST /api/ai/explain` - structured IP assessment
 - `POST /api/ai/explain/stream` - streaming IP explanation (SSE)
 - `GET /api/ai/digest/latest` - latest daily digest
@@ -387,7 +412,8 @@ All `.zig`, `.html`, `.css`, `.js` files are pure 7-bit ASCII. JS uses `\u00B0` 
 
 - v0.1.0: Initial deployment (Zig binary, Cloudflare Tunnel, auth, classifier, auto-ban, SSE, security headers)
 - v0.2.0: AI features (annotation, explain, digest), reliability (watchdog, tunnel health, backup, graceful shutdown), security (pepper, geoblock, audit log), quality (bundled font, CI)
-- Post-v0.2.0 (current HEAD): AI v2 (structured outputs, embeddings, honeypot, weekly policy, query bar), AI v3 (streaming, observability, injection defense, semantic cache, reflection, anomaly detection), full frontend wiring
+- Post-v0.2.0: AI v2 (structured outputs, embeddings, honeypot, weekly policy, query bar), AI v3 (streaming, observability, injection defense, semantic cache, reflection, anomaly detection), full frontend wiring
+- Current HEAD: buffered visit writes (`writebuf.zig`, 5s flush + SIGTERM-safe), operator rule engine (`rules.zig`, JSON DSL with 4 triggers and 3 action types), SQLite read-side cache (`dbcache.zig`, subprocess pattern, 5min sync, query-bar fast path), AI log scrubbing (`/api/ai/scrub`), Settings page database cache panel + Security page log scrub panel
 
 ## Extending this project
 

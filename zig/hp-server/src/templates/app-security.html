@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Security / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=17">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=17">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=17">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=18">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=18">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=18">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
@@ -303,6 +303,44 @@
   }
   .anomaly-row .summary { color: var(--text-2); font-size: .78rem; grid-column: 2; }
   .anomaly-row .time { color: var(--text-3); font-size: .72rem; white-space: nowrap; }
+
+  /* Scrub findings */
+  .scrub-finding {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: .6rem;
+    padding: .8rem 1.15rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: .82rem;
+    align-items: start;
+  }
+  .scrub-finding:last-child { border-bottom: 0; }
+  .scrub-finding .path {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0; grid-column: 2;
+  }
+  .scrub-finding .rationale { color: var(--text-3); font-size: .76rem; grid-column: 2; padding-top: .25rem; }
+  .scrub-finding .meta { display: flex; gap: .35rem; flex-wrap: wrap; grid-column: 2; padding-top: .35rem; }
+  .severity-pill {
+    padding: .12rem .5rem; border-radius: 4px; font-size: .68rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .severity-pill.critical { background: var(--error-soft); color: var(--error); }
+  .severity-pill.high { background: var(--error-soft); color: var(--error); }
+  .severity-pill.medium { background: rgba(245,158,11,.12); color: var(--warning); }
+  .severity-pill.low { background: var(--surface-3); color: var(--text-3); }
+  .category-pill {
+    padding: .12rem .5rem; border-radius: 4px; font-size: .68rem; font-weight: 500;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--surface-2); color: var(--text-2);
+    border: 1px solid var(--border-soft);
+  }
+  .scrub-finding .actions {
+    display: flex; gap: .35rem;
+  }
 </style>
 </head>
 <body>
@@ -442,6 +480,19 @@
       <div class="listing-row"><span class="v">Loading</span><span class="c"></span></div>
     </div>
 
+    <!-- AI log scrubbing -->
+    <div class="digest-panel" id="scrub-panel">
+      <div class="digest-head">
+        <div>
+          <div class="digest-title">Log scrub (zero-day pattern check)</div>
+          <div class="digest-sub" id="scrub-meta">Click <strong>Run scrub</strong> to ask AI if any recent scanner paths look like undocumented exploits.</div>
+        </div>
+        <button class="btn btn-sm" id="scrub-run-btn"><i class="icon-magnifier"></i><span>Run scrub</span></button>
+      </div>
+      <div class="digest-body" id="scrub-body">No scan yet.</div>
+      <div id="scrub-findings"></div>
+    </div>
+
     <!-- Weekly policy review -->
     <div class="digest-panel" id="policy-panel">
       <div class="digest-head">
@@ -504,8 +555,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=17"></script>
-<script src="https://rofihosted.space/app.js?v=17"></script>
+<script src="https://rofihosted.space/theme.js?v=18"></script>
+<script src="https://rofihosted.space/app.js?v=18"></script>
 <script>
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function fmtAgo(ts) {
@@ -1009,6 +1060,68 @@ async function loadAudit() {
 loadAudit();
 RH.on('blocklist_change', loadAudit);
 RH.on('digest_ready', loadAudit);
+
+// Log scrub
+async function runScrub() {
+  const btn = document.getElementById('scrub-run-btn');
+  const body = document.getElementById('scrub-body');
+  const findings = document.getElementById('scrub-findings');
+  const meta = document.getElementById('scrub-meta');
+  if (!btn) return;
+  btn.disabled = true;
+  body.innerHTML = '<span class="digest-loading">Asking AI to scrub the logs...</span>';
+  findings.innerHTML = '';
+  try {
+    const r = await fetch('/api/ai/scrub');
+    const j = await r.json().catch(function () { return {}; });
+    if (!j.ok) {
+      body.classList.add('muted');
+      body.textContent = 'Scrub failed (' + (j.err || ('http ' + r.status)) + ').';
+      return;
+    }
+    if (j.empty) {
+      body.classList.add('muted');
+      body.textContent = j.message || 'No scanner traffic to analyse.';
+      meta.innerHTML = 'Scanned 0 paths . ' + new Date().toLocaleString();
+      return;
+    }
+    const report = j.report || {};
+    body.classList.remove('muted');
+    body.textContent = report.summary || '';
+    meta.innerHTML = 'Scanned ' + (j.scanner_paths_analysed || 0) + ' paths . ' + new Date().toLocaleString();
+
+    const items = report.findings || [];
+    if (!items.length) {
+      findings.innerHTML = '<div class="hint" style="margin-top:.8rem">No actionable findings. The AI considers the current scanner list comprehensive.</div>';
+      return;
+    }
+    let html = '<div class="ip-table-wrap" style="margin-top:.9rem">';
+    for (const f of items) {
+      const severity = (f.severity || 'low').toLowerCase();
+      const cveText = f.cve_or_advisory ? ' . ' + escapeHtml(f.cve_or_advisory) : '';
+      html += '<div class="scrub-finding">'
+        + '<span></span>'
+        + '<span class="path">' + escapeHtml(f.path || '') + '</span>'
+        + '<span class="actions"></span>'
+        + '<div class="meta">'
+        + '<span class="severity-pill ' + severity + '">' + escapeHtml(severity) + '</span>'
+        + '<span class="category-pill">' + escapeHtml(f.category || '') + cveText + '</span>'
+        + '<span class="category-pill">' + escapeHtml(f.suggested_action || '') + '</span>'
+        + '</div>'
+        + '<div class="rationale">' + escapeHtml(f.rationale || '') + '</div>'
+        + '</div>';
+    }
+    html += '</div>';
+    findings.innerHTML = html;
+  } catch (e) {
+    body.classList.add('muted');
+    body.textContent = 'Network error.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('scrub-run-btn').addEventListener('click', runScrub);
 
 document.getElementById('block-form').addEventListener('submit', function(e) {
   e.preventDefault();
