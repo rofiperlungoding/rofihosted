@@ -19,6 +19,8 @@ const secret = @import("secret.zig");
 const embeddings = @import("embeddings.zig");
 const honeypot = @import("honeypot.zig");
 const query = @import("query.zig");
+const writebuf = @import("writebuf.zig");
+const rules = @import("rules.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -43,6 +45,8 @@ const App = struct {
     geoblock: *geoblock.Config,
     embeddings: *embeddings.Store,
     honeypot: *honeypot.Config,
+    visit_buf: *writebuf.Buffer,
+    rules: *rules.Engine,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -54,10 +58,16 @@ var g_app: ?*App = null;
 
 fn shutdownHandler(_: c_int) callconv(.c) void {
     std.log.info("hp-server: SIGTERM received, shutting down gracefully", .{});
-    if (g_app) |app| if (app.server_ptr) |ptr| {
-        const s: *httpz.Server(*App) = @ptrCast(@alignCast(ptr));
-        s.stop();
-    };
+    if (g_app) |app| {
+        // Flush buffered writes BEFORE httpz.stop() so we don't lose data
+        app.visit_buf.flush() catch |e| {
+            std.log.warn("shutdown: visit_buf flush failed: {}", .{e});
+        };
+        if (app.server_ptr) |ptr| {
+            const s: *httpz.Server(*App) = @ptrCast(@alignCast(ptr));
+            s.stop();
+        }
+    }
 }
 
 pub fn main() !void {
@@ -91,6 +101,9 @@ pub fn main() !void {
     const geo_cfg = try geoblock.Config.init(allocator);
     const emb_store = try embeddings.Store.init(allocator);
     const honey_cfg = try honeypot.Config.init(allocator);
+    const visit_buf = try allocator.create(writebuf.Buffer);
+    visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
+    const rules_engine = try rules.Engine.init(allocator, blocklist);
 
     var app = App{
         .allocator = allocator,
@@ -110,6 +123,8 @@ pub fn main() !void {
         .geoblock = geo_cfg,
         .embeddings = emb_store,
         .honeypot = honey_cfg,
+        .visit_buf = visit_buf,
+        .rules = rules_engine,
     };
     g_app = &app;
 
@@ -173,6 +188,10 @@ pub fn main() !void {
     // Tunnel health watchdog
     const th = try std.Thread.spawn(.{}, tunnel_health.loop, .{ allocator, tunnel_status, bus });
     th.detach();
+
+    // Buffered visit writer flush loop (every 5s)
+    const vbuf_thread = try std.Thread.spawn(.{}, writebuf.flushLoop, .{visit_buf});
+    vbuf_thread.detach();
 
     try server.listen();
     std.log.info("hp-server: server.listen returned, exiting cleanly", .{});
@@ -256,6 +275,29 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     // Async fire-and-forget so request latency is unaffected.
     if (!is_authed and !is_local and cls != .blocked) {
         spawnEmbedRequest(app, ua, path) catch {};
+    }
+
+    // Rule engine: dispatch on_visit. Rules can block, log, or bump counters
+    // synchronously. They should be fast (no I/O beyond the blocklist).
+    {
+        const country_hdr = req.header("cf-ipcountry") orelse "";
+        app.rules.dispatch(.on_visit, .{
+            .ip = ip,
+            .path = path,
+            .country = country_hdr,
+            .ua = ua,
+            .classification = cls.label(),
+            .method = method,
+            .host = host,
+        });
+        // A rule action may have just blocked this IP. Re-check before serving.
+        if (!is_local and app.blocklist.isBlocked(ip)) {
+            res.status = 403;
+            res.content_type = .TEXT;
+            res.body = "blocked\n";
+            logVisitFull(app, req, ip, ua, host, method, 403, .blocked);
+            return;
+        }
     }
 
     // Rate limit (skip /health, skip self)
@@ -405,6 +447,8 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/embeddings/stats")) return apiEmbeddingsStats(app, res);
     if (std.mem.eql(u8, path, "/api/honeypot")) return apiHoneypotGet(app, res);
     if (std.mem.eql(u8, path, "/api/honeypot/update")) return apiHoneypotUpdate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/rules")) return apiRulesGet(app, res);
+    if (std.mem.eql(u8, path, "/api/rules/replace")) return apiRulesReplace(app, req, res);
     if (std.mem.eql(u8, path, "/api/audit")) return apiAudit(app, res);
     if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
@@ -493,6 +537,14 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
 
     // Track outcome (rate-limit failed attempts -> auto-ban after 5 fails / 15min)
     app.login_tracker.record(ip, ua, attempted_user, ok);
+
+    // Rule engine: dispatch on_login_attempt
+    app.rules.dispatch(.on_login_attempt, .{
+        .ip = ip,
+        .ua = ua,
+        .username = attempted_user,
+        .success = ok,
+    });
 
     // Realtime broadcast (mask the username if it's wrong - just log "?" then)
     app.bus.publish(.login_attempt, .{
@@ -586,12 +638,23 @@ fn logVisitFull(
         .country = country,
         .classification = cls.label(),
     };
-    app.store_mutex.lock();
-    store.appendJson(visits_path, visit) catch {};
-    app.store_mutex.unlock();
+    // Buffered append: returns immediately, flushed every 5s by background loop.
+    app.visit_buf.append(visit) catch |e| {
+        std.log.warn("visit_buf append failed: {}", .{e});
+    };
 
     // Realtime broadcast
     app.bus.publish(.visit, visit);
+}
+
+/// Flush the buffered visit writer and read fresh visit data.
+/// Use this instead of calling store.readVisits directly when you want
+/// to include the last 0-5s of buffered visits.
+fn readVisitsFresh(app: *App, allocator: std.mem.Allocator, limit: usize) ![]store.Visit {
+    app.visit_buf.flush() catch |e| {
+        std.log.warn("readVisitsFresh: pre-flush failed: {}", .{e});
+    };
+    return store.readVisits(allocator, visits_path, limit);
 }
 
 // =================================================================
@@ -715,7 +778,7 @@ fn apiTunnel(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
 // =================================================================
 fn apiSecurity(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
     app.store_mutex.lock();
-    const visits = store.readVisits(res.arena, visits_path, 1000) catch {
+    const visits = readVisitsFresh(app, res.arena, 1000) catch {
         app.store_mutex.unlock();
         res.status = 500;
         res.content_type = .JSON;
@@ -985,7 +1048,7 @@ fn apiStream(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
 fn apiVisits(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
     app.store_mutex.lock();
     defer app.store_mutex.unlock();
-    const visits = store.readVisits(res.arena, visits_path, 50) catch {
+    const visits = readVisitsFresh(app, res.arena, 50) catch {
         res.status = 500;
         res.content_type = .JSON;
         res.body = "{\"error\":\"store error\"}";
@@ -1120,7 +1183,7 @@ fn annotateBanThread(args: *AnnotateArgs) void {
 
     // Pull recent paths probed by this IP from visits.jsonl
     args.app.store_mutex.lock();
-    const visits = store.readVisits(a, visits_path, 500) catch {
+    const visits = readVisitsFresh(args.app, a, 500) catch {
         args.app.store_mutex.unlock();
         return;
     };
@@ -1194,7 +1257,7 @@ fn apiAiExplain(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     };
 
     app.store_mutex.lock();
-    const visits = store.readVisits(res.arena, visits_path, 2000) catch {
+    const visits = readVisitsFresh(app, res.arena, 2000) catch {
         app.store_mutex.unlock();
         res.status = 500;
         try res.json(.{ .ok = false, .err = "read_failed" }, .{});
@@ -1308,7 +1371,7 @@ fn apiAiExplainStream(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
 
     // Gather visit data (same as non-streaming explain)
     app.store_mutex.lock();
-    const visits = store.readVisits(res.arena, visits_path, 2000) catch {
+    const visits = readVisitsFresh(app, res.arena, 2000) catch {
         app.store_mutex.unlock();
         res.status = 500;
         res.content_type = .TEXT;
@@ -1433,7 +1496,7 @@ fn runDigest(app: *App) !void {
     const a = arena.allocator();
 
     app.store_mutex.lock();
-    const visits = store.readVisits(a, visits_path, 50000) catch {
+    const visits = readVisitsFresh(app, a, 50000) catch {
         app.store_mutex.unlock();
         return;
     };
@@ -1894,7 +1957,7 @@ fn runPolicyReview(app: *App) !void {
     const a = arena.allocator();
 
     app.store_mutex.lock();
-    const visits = store.readVisits(a, visits_path, 100000) catch {
+    const visits = readVisitsFresh(app, a, 100000) catch {
         app.store_mutex.unlock();
         return;
     };
@@ -2102,6 +2165,8 @@ fn apiAiUsage(app: *App, res: *httpz.Response) !void {
     const cost_usd = @as(f64, @floatFromInt(prompt_tokens)) * 0.15 / 1_000_000.0 +
         @as(f64, @floatFromInt(completion_tokens)) * 0.60 / 1_000_000.0;
 
+    const buf = app.visit_buf.snapshot();
+
     try res.json(.{
         .ok = true,
         .total_calls = total_calls,
@@ -2113,5 +2178,63 @@ fn apiAiUsage(app: *App, res: *httpz.Response) !void {
         .semantic_cache_entries = app.semantic_cache.count(),
         .estimated_cost_usd = cost_usd,
         .uptime_seconds = std.time.timestamp() - app.started_at,
+        .write_buffer = .{
+            .pending_bytes = buf.pending_bytes,
+            .last_flush = buf.last_flush,
+            .total_appends = buf.total_appends,
+            .total_flushes = buf.total_flushes,
+            .total_bytes_written = buf.total_bytes_written,
+        },
     }, .{});
+}
+
+// =================================================================
+// RULES (operator-defined event handlers)
+// =================================================================
+fn apiRulesGet(app: *App, res: *httpz.Response) !void {
+    const snap = app.rules.snapshot(res.arena) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "snapshot_failed" }, .{});
+        return;
+    };
+    const counters = app.rules.snapshotCounters(res.arena) catch &.{};
+    try res.json(.{
+        .ok = true,
+        .rules = snap,
+        .counters = counters,
+    }, .{});
+}
+
+fn apiRulesReplace(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const body = req.body() orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_body" }, .{});
+        return;
+    };
+    app.rules.replaceFromJson(body) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.InvalidJson => "invalid_json",
+            error.UnknownTrigger => "unknown_trigger",
+            else => "replace_failed",
+        };
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "rules_replace",
+            .target = "all",
+            .detail = code,
+            .ok = false,
+        });
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "rules_replace",
+        .target = "all",
+    });
+    try res.json(.{ .ok = true }, .{});
 }

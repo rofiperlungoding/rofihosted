@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=16">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=16">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=16">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=17">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=17">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=17">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
@@ -122,11 +122,24 @@
       </form>
       <div id="honey-alert" class="alert" style="display:none; margin-top: 1rem"></div>
     </div>
+
+    <div class="form-card">
+      <h2>Operator rules</h2>
+      <p class="lead">Define your own event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and a list of actions. Actions are limited to <code>block</code>, <code>log</code>, and <code>increment</code>. Single-user, no sandboxing nightmare. Stored in <code>~/.hp-server-rules.jsonl</code>.</p>
+      <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
+      <textarea id="rules-json" class="input" style="height: 280px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .82rem; resize: vertical" spellcheck="false"></textarea>
+      <div class="submit-row" style="margin-top: 1rem">
+        <button type="button" class="btn btn-accent" id="rules-save"><span>Save rules</span><i class="icon-arrow-right"></i></button>
+        <button type="button" class="btn" id="rules-reload"><span>Reload from server</span></button>
+      </div>
+      <div id="rules-alert" class="alert" style="display:none; margin-top: 1rem"></div>
+      <div id="rules-counters" class="hint" style="margin-top: 1rem; font-family: ui-monospace, 'SF Mono', Menlo, monospace"></div>
+    </div>
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=16"></script>
-<script src="https://rofihosted.space/app.js?v=16"></script>
+<script src="https://rofihosted.space/theme.js?v=17"></script>
+<script src="https://rofihosted.space/app.js?v=17"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -211,6 +224,83 @@
           honeyAlert.style.display = '';
         });
     });
+
+    // Operator rules
+    const rulesText = document.getElementById('rules-json');
+    const rulesAlert = document.getElementById('rules-alert');
+    const rulesCounters = document.getElementById('rules-counters');
+
+    function escapeHtml(s) {
+      return (s || '').replace(/[<>&"']/g, function (c) {
+        return { '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c];
+      });
+    }
+
+    function loadRules() {
+      fetch('/api/rules').then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) return;
+        rulesText.value = JSON.stringify(j.rules || [], null, 2);
+        if (j.counters && j.counters.length) {
+          rulesCounters.innerHTML = 'counters: ' + j.counters.map(function (c) {
+            return escapeHtml(c.name) + '=' + c.value;
+          }).join(' . ');
+        } else {
+          rulesCounters.textContent = 'counters: (none)';
+        }
+      }).catch(function () {});
+    }
+
+    document.getElementById('rules-save').addEventListener('click', function () {
+      let parsed;
+      try {
+        parsed = JSON.parse(rulesText.value);
+      } catch (e) {
+        rulesAlert.className = 'alert error';
+        rulesAlert.innerHTML = '<i class="icon-exclamation"></i> Invalid JSON: ' + e.message;
+        rulesAlert.style.display = '';
+        return;
+      }
+      fetch('/api/rules/replace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.ok) {
+            rulesAlert.className = 'alert success';
+            rulesAlert.innerHTML = '<i class="icon-check"></i> Rules saved (' + (parsed.length || 0) + ' rule(s)).';
+            loadRules();
+          } else {
+            rulesAlert.className = 'alert error';
+            rulesAlert.innerHTML = '<i class="icon-exclamation"></i> Save failed: ' + (j.err || 'unknown');
+          }
+          rulesAlert.style.display = '';
+        })
+        .catch(function () {
+          rulesAlert.className = 'alert error';
+          rulesAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
+          rulesAlert.style.display = '';
+        });
+    });
+
+    document.getElementById('rules-reload').addEventListener('click', function () {
+      loadRules();
+      rulesAlert.style.display = 'none';
+    });
+
+    loadRules();
+    setInterval(function () {
+      // Update counters live, but don't clobber the textarea
+      fetch('/api/rules').then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) return;
+        if (j.counters && j.counters.length) {
+          rulesCounters.innerHTML = 'counters: ' + j.counters.map(function (c) {
+            return escapeHtml(c.name) + '=' + c.value;
+          }).join(' . ');
+        }
+      }).catch(function () {});
+    }, 5000);
   })();
 </script>
 </body>
