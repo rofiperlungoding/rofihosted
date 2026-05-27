@@ -370,11 +370,113 @@ window.RH = (function () {
     }
   }
 
+  // --- Natural-language query bar ---
+  // Mounts an "Ask" input into the topbar of every authenticated page.
+  function mountQueryBar() {
+    const tb = document.querySelector('.topbar-actions');
+    if (!tb || document.getElementById('rh-ask')) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'rh-ask-wrap';
+    wrap.innerHTML = ''
+      + '<button class="btn-icon rh-ask-btn" id="rh-ask-btn" aria-label="Ask"><i class="icon-magnifier"></i></button>'
+      + '<div class="rh-ask-popover" id="rh-ask-popover">'
+      +   '<form id="rh-ask-form">'
+      +     '<input id="rh-ask" type="text" placeholder="Ask about your server, e.g. \u201Ctop scanners today\u201D" autocomplete="off">'
+      +   '</form>'
+      +   '<div class="rh-ask-result" id="rh-ask-result"></div>'
+      + '</div>';
+    tb.insertBefore(wrap, tb.firstChild);
+
+    const input = document.getElementById('rh-ask');
+    const popover = document.getElementById('rh-ask-popover');
+    const result = document.getElementById('rh-ask-result');
+    const btn = document.getElementById('rh-ask-btn');
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      popover.classList.toggle('open');
+      if (popover.classList.contains('open')) input.focus();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) popover.classList.remove('open');
+    });
+
+    document.getElementById('rh-ask-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (!q) return;
+      result.innerHTML = '<span class="digest-loading">Thinking...</span>';
+      try {
+        const fd = new FormData();
+        fd.append('q', q);
+        const r = await fetch('/api/ai/query', { method: 'POST', body: fd });
+        const j = await r.json();
+        if (!j.ok) {
+          result.textContent = 'Could not answer (' + (j.err || 'unknown') + ').';
+          return;
+        }
+        renderQueryResult(result, j);
+      } catch (err) {
+        result.textContent = 'Network error.';
+      }
+    });
+  }
+
   // Auto-connect SSE when DOM ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', connect);
+    document.addEventListener('DOMContentLoaded', function () { connect(); mountQueryBar(); });
   } else {
     connect();
+    mountQueryBar();
+  }
+
+  function renderQueryResult(root, j) {
+    const fn = j.function;
+    const ex = j.explanation || '';
+    const r = j.result || {};
+    let body = '';
+    if (fn === 'count_visits') {
+      body = '<div class="rh-ask-num">' + r.count + '</div><div class="rh-ask-sub">visits in last ' + Math.round((r.since_seconds || 0) / 3600) + 'h</div>';
+    } else if (fn === 'list_top') {
+      body = '<div class="rh-ask-sub">top ' + escapeHtml(r.field || '') + '</div>';
+      if (r.items && r.items.length) {
+        body += '<div class="rh-ask-list">';
+        for (const it of r.items) body += '<div><span>' + escapeHtml(it.value) + '</span><span class="c">' + it.count + '</span></div>';
+        body += '</div>';
+      } else {
+        body += '<div class="rh-ask-sub">no rows</div>';
+      }
+    } else if (fn === 'list_failed_logins') {
+      body = '<div class="rh-ask-sub">' + (r.items || []).length + ' failed login(s)</div>';
+      body += '<div class="rh-ask-list">';
+      for (const it of (r.items || [])) {
+        body += '<div><span>' + escapeHtml(it.ip) + ' . ' + escapeHtml(it.username) + '</span><span class="c">' + fmtAgo(it.timestamp) + '</span></div>';
+      }
+      body += '</div>';
+    } else if (fn === 'list_blocked_ips') {
+      body = '<div class="rh-ask-sub">' + (r.items || []).length + ' blocked</div>';
+      body += '<div class="rh-ask-list">';
+      for (const it of (r.items || [])) {
+        body += '<div><span>' + escapeHtml(it.ip) + '</span><span class="c">' + escapeHtml(it.reason || '') + '</span></div>';
+      }
+      body += '</div>';
+    } else if (fn === 'show_uptime') {
+      body = '<div class="rh-ask-sub">' + (r.items || []).length + ' probe(s)</div>';
+      body += '<div class="rh-ask-list">';
+      for (const it of (r.items || [])) {
+        body += '<div><span>' + escapeHtml(it.target) + '</span><span class="c">' + (it.ok ? 'up' : 'down') + ' . ' + it.latency_ms + 'ms</span></div>';
+      }
+      body += '</div>';
+    } else if (fn === 'explain_ip') {
+      body = '<div class="rh-ask-sub">opens IP profile for ' + escapeHtml(r.ip || '') + '</div>';
+      // Trigger explain modal if function exists on this page
+      if (typeof openExplain === 'function' && r.ip) setTimeout(function () { openExplain(r.ip); }, 200);
+    } else {
+      body = '<div class="rh-ask-sub">cannot answer from server logs</div>';
+    }
+    root.innerHTML = '<div class="rh-ask-explanation">' + escapeHtml(ex) + '</div>' + body;
   }
 
   return {

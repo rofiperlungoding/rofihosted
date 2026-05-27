@@ -6,7 +6,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
-Nothing yet.
+### Added: AI v2
+
+- **Structured outputs everywhere**: auto-ban annotation and IP explain now use Mistral's `response_format: json_schema` mode and return typed assessments (`actor_type`, `risk_score 0-100`, `confidence 0.0-1.0`, `recommended_action: allow|monitor|block_24h|block_permanent`, indicators array). The Security UI renders these as colored pills and offers a one-click "Apply this action" button when the AI recommends a block.
+- **Embeddings + behavioural clusters**: each distinct (UA, path-pattern) is embedded once via `mistral-embed` (1024-dim) and stored in a flat in-memory + on-disk index at `~/data/embeddings.bin`. A "Behavioural clusters" panel on the Security page groups patterns with cosine similarity >= 0.85, surfacing coordinated scanner/bot families. Pure brute-force search at this scale (cap 4096 patterns), no HNSW needed. New module `embeddings.zig`.
+- **Weekly policy review**: every 7 days (and on-demand), the server batches the past week's per-IP behavior and asks Mistral to produce a structured list of `{ip, suggested_action, risk_score, rationale}`. Each suggestion in the UI has a one-click "Apply" that pre-fills the rationale into the manual block flow. Persisted at `~/data/policy.jsonl`.
+- **AI honeypot (opt-in, default off)**: when enabled in Settings, scanner-classified requests targeting common probe paths (`/wp-admin`, `/.env`, `/.git/config`, etc) get answered with AI-generated decoy content instead of a 403. Generated content uses obviously-fake placeholder values (`honeypot-decoy-00000`, `DECOY-NOT-A-REAL-KEY-XXXX`). Cached forever per kind so we never re-call Mistral. New module `honeypot.zig`.
+- **Natural-language query bar**: a small "Ask" button in the topbar of every authenticated page opens a popover where you can type free-form questions like "top scanners today", "failed logins last hour", "explain 1.2.3.4". Mistral plans the call via structured output (`function` enum with strict args schema), the server executes it locally against `~/data/*.jsonl` and the blocklist, and the popover renders the result. No mutations possible. New module `query.zig`.
+- New endpoints (auth-required): `POST /api/ai/query`, `GET /api/ai/policy/latest`, `GET /api/ai/policy/run`, `GET /api/embeddings/clusters`, `GET /api/embeddings/stats`, `GET /api/honeypot`, `POST /api/honeypot/update`.
+- New per-feature rate limits in `ai.zig`: 1 embed/5s, 1 honeypot-gen/min, 1 policy/week, 1 query/4s.
+
+### Changed
+- `ai.zig` reorganised around two primitives: `complete()` for free text (digest only) and `completeJson()` for schema-validated structured output. The latter sends `response_format: {"type":"json_schema","json_schema":{...,"strict":true}}` so Mistral validates server-side.
+- `/api/ai/explain` now returns a typed `assessment` field instead of free-text `profile`. Falls back to `raw` if the model fails to conform to the schema.
+- All template asset query strings bumped to `?v=15`.
 
 ## [0.2.0] - 2026-05-27
 

@@ -327,3 +327,46 @@ html.t, html.t * {
 strong.success, .text-success { color: var(--success); font-weight: 600; }
 strong.warn, .text-warn { color: var(--warning); font-weight: 600; }
 strong.error, .text-error { color: var(--error); font-weight: 600; }
+
+/* Natural-language query bar (mounted into topbar) */
+.rh-ask-wrap {
+  position: relative;
+}
+.rh-ask-popover {
+  position: absolute; right: 0; top: calc(100% + .5rem);
+  background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px;
+  box-shadow: 0 16px 32px rgba(0,0,0,.4);
+  padding: .8rem; width: min(420px, 92vw);
+  display: none; z-index: 50;
+}
+.rh-ask-popover.open { display: block; }
+.rh-ask-popover input {
+  width: 100%; height: 36px; padding: 0 .8rem;
+  border-radius: 7px; border: 1px solid var(--border-soft);
+  background: var(--surface-2); color: var(--text);
+  font: inherit; font-size: .9rem;
+  outline: none;
+}
+.rh-ask-popover input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rh-ask-result {
+  margin-top: .8rem; max-height: 320px; overflow-y: auto;
+  font-size: .85rem; color: var(--text-2);
+}
+.rh-ask-result:empty { display: none; }
+.rh-ask-explanation {
+  font-size: .76rem; color: var(--text-3); font-style: italic; margin-bottom: .55rem;
+}
+.rh-ask-num { font-size: 1.6rem; font-weight: 600; color: var(--text); letter-spacing: -0.02em; }
+.rh-ask-sub { font-size: .76rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; margin-top: .15rem; }
+.rh-ask-list {
+  margin-top: .55rem; display: flex; flex-direction: column; gap: .25rem;
+}
+.rh-ask-list > div {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: .35rem .55rem; border-radius: 6px;
+  background: var(--surface-2);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .76rem;
+}
+.rh-ask-list .c { color: var(--text-3); white-space: nowrap; }
+.rh-ask-list span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

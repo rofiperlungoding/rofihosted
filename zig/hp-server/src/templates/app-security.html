@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Security / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=14">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=14">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=14">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=15">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=15">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=15">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
@@ -213,6 +213,70 @@
     color: var(--text-3); font-size: .76rem; margin-top: .35rem;
     font-style: italic;
   }
+
+  /* Structured assessment chips */
+  .assessment-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .9rem; }
+  .kv-pill {
+    display: inline-flex; align-items: stretch; border-radius: 6px;
+    overflow: hidden; border: 1px solid var(--border-soft); background: var(--surface-2);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .76rem;
+  }
+  .kv-pill .k { padding: .2rem .5rem; color: var(--text-3); border-right: 1px solid var(--border-soft); text-transform: uppercase; letter-spacing: .04em; }
+  .kv-pill .v { padding: .2rem .5rem; color: var(--text); font-weight: 600; }
+  .kv-pill.success .v { color: var(--success); }
+  .kv-pill.warn .v { color: var(--warning); }
+  .kv-pill.error .v { color: var(--error); }
+  .assessment-prose { color: var(--text-2); font-size: .92rem; line-height: 1.65; margin-bottom: .9rem; }
+  .indicators { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .indicator {
+    background: var(--surface-3); border: 1px solid var(--border-soft);
+    padding: .2rem .55rem; border-radius: 12px;
+    font-size: .72rem; color: var(--text-2);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  /* Policy suggestion rows */
+  .policy-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) auto auto auto auto;
+    gap: .75rem;
+    padding: .7rem 1.15rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: .82rem;
+    align-items: center;
+  }
+  .policy-row:last-child { border-bottom: 0; }
+  .policy-row .ip { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); font-weight: 500; }
+  .policy-row .rationale { color: var(--text-3); font-size: .76rem; grid-column: 1 / -1; padding-top: .2rem; }
+  .policy-action-pill {
+    padding: .15rem .55rem; border-radius: 4px; font-size: .68rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .policy-action-pill.allow { background: var(--success-soft); color: var(--success); }
+  .policy-action-pill.monitor { background: rgba(245,158,11,.12); color: var(--warning); }
+  .policy-action-pill.block_24h { background: var(--error-soft); color: var(--error); }
+  .policy-action-pill.block_permanent { background: var(--error-soft); color: var(--error); }
+  @media (max-width: 600px) {
+    .policy-row { grid-template-columns: 1fr auto; }
+  }
+
+  /* Cluster rows */
+  .cluster-row {
+    padding: .8rem 1.15rem; border-bottom: 1px solid var(--border-soft);
+    font-size: .82rem;
+  }
+  .cluster-row:last-child { border-bottom: 0; }
+  .cluster-row .head {
+    display: flex; gap: 1rem; align-items: center; margin-bottom: .35rem;
+  }
+  .cluster-row .rep { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cluster-row .meta { color: var(--text-3); font-size: .73rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .cluster-row .members {
+    color: var(--text-3); font-size: .72rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    line-height: 1.55; padding-left: 1rem;
+  }
 </style>
 </head>
 <body>
@@ -352,6 +416,28 @@
       <div class="listing-row"><span class="v">Loading</span><span class="c"></span></div>
     </div>
 
+    <!-- Weekly policy review -->
+    <div class="digest-panel" id="policy-panel">
+      <div class="digest-head">
+        <div>
+          <div class="digest-title">Weekly policy review</div>
+          <div class="digest-sub" id="policy-meta">Loading the latest review...</div>
+        </div>
+        <button class="btn btn-sm" id="policy-run-btn"><i class="icon-refresh"></i><span>Generate now</span></button>
+      </div>
+      <div class="digest-body" id="policy-body">No review yet. Auto-runs once per week.</div>
+      <div id="policy-suggestions"></div>
+    </div>
+
+    <!-- Behavioural clusters -->
+    <div class="section-head">
+      <h2>Behavioural clusters</h2>
+      <p>Visits grouped by access-pattern similarity (Mistral embeddings, cosine &ge; 0.85). Useful for spotting coordinated bots.</p>
+    </div>
+    <div class="ip-table-wrap" id="clusters">
+      <div class="empty">Loading</div>
+    </div>
+
     <!-- Audit log -->
     <div class="section-head">
       <h2>Audit log</h2>
@@ -383,8 +469,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=14"></script>
-<script src="https://rofihosted.space/app.js?v=14"></script>
+<script src="https://rofihosted.space/theme.js?v=15"></script>
+<script src="https://rofihosted.space/app.js?v=15"></script>
 <script>
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function fmtAgo(ts) {
@@ -517,7 +603,8 @@ document.addEventListener('click', function(e) {
   const blockBtn = e.target.closest('[data-block]');
   if (blockBtn) {
     e.preventDefault();
-    blockIp(blockBtn.getAttribute('data-block'), 'manual from security page');
+    const reason = blockBtn.getAttribute('data-block-reason') || 'manual from security page';
+    blockIp(blockBtn.getAttribute('data-block'), reason);
     return;
   }
   const unblockBtn = e.target.closest('[data-unblock]');
@@ -558,8 +645,38 @@ async function openExplain(ip) {
     }
     const j = await r.json();
     document.getElementById('ai-modal-meta').textContent =
-      j.visit_count + ' visits observed . country ' + (j.country || '&mdash;');
-    document.getElementById('ai-modal-body').textContent = j.profile;
+      j.visit_count + ' visits observed . country ' + (j.country || '\u2014');
+    const a = j.assessment;
+    if (a) {
+      const riskCls = a.risk_score >= 80 ? 'error' : (a.risk_score >= 50 ? 'warn' : 'success');
+      const actCls = (a.recommended_action || '').indexOf('block') === 0 ? 'error' : (a.recommended_action === 'monitor' ? 'warn' : 'success');
+      const conf = Math.round((a.confidence || 0) * 100);
+      let html = '<div class="assessment-row">'
+        + '<span class="kv-pill"><span class="k">actor</span><span class="v">' + escapeHtml(a.actor_type) + '</span></span>'
+        + '<span class="kv-pill ' + riskCls + '"><span class="k">risk</span><span class="v">' + a.risk_score + '/100</span></span>'
+        + '<span class="kv-pill"><span class="k">confidence</span><span class="v">' + conf + '%</span></span>'
+        + '<span class="kv-pill ' + actCls + '"><span class="k">action</span><span class="v">' + escapeHtml(a.recommended_action) + '</span></span>'
+        + '</div>'
+        + '<div class="assessment-prose">' + escapeHtml(a.reasoning) + '</div>';
+      if (a.indicators && a.indicators.length) {
+        html += '<div class="indicators">';
+        for (const i of a.indicators) html += '<span class="indicator">' + escapeHtml(i) + '</span>';
+        html += '</div>';
+      }
+      if ((a.recommended_action || '').indexOf('block') === 0) {
+        html += '<div class="ai-modal-actions" style="margin-top:1rem"><button class="btn btn-sm btn-danger" id="ai-apply-block" data-ip="' + escapeAttr(j.ip) + '"><i class="icon-ban"></i><span>Apply ' + escapeHtml(a.recommended_action) + '</span></button></div>';
+      }
+      document.getElementById('ai-modal-body').innerHTML = html;
+      const applyBtn = document.getElementById('ai-apply-block');
+      if (applyBtn) {
+        applyBtn.addEventListener('click', function () {
+          blockIp(applyBtn.getAttribute('data-ip'), 'ai: ' + a.recommended_action + ' . risk=' + a.risk_score);
+          document.getElementById('ai-modal-bg').classList.remove('open');
+        });
+      }
+    } else if (j.raw) {
+      document.getElementById('ai-modal-body').textContent = j.raw;
+    }
   } catch (err) {
     document.getElementById('ai-modal-body').textContent = 'Network error.';
   }
@@ -617,6 +734,105 @@ async function runDigestNow() {
 document.getElementById('digest-run-btn').addEventListener('click', runDigestNow);
 loadDigest();
 RH.on('digest_ready', loadDigest);
+
+// Weekly policy review
+async function loadPolicy() {
+  const meta = document.getElementById('policy-meta');
+  const body = document.getElementById('policy-body');
+  const sugs = document.getElementById('policy-suggestions');
+  try {
+    const r = await fetch('/api/ai/policy/latest');
+    const j = await r.json();
+    if (!j.latest) {
+      meta.textContent = 'No review yet';
+      body.classList.add('muted');
+      body.innerHTML = 'No review yet. Auto-runs once per week, or click <strong>Generate now</strong>.';
+      sugs.innerHTML = '';
+      return;
+    }
+    const d = j.latest;
+    const when = new Date(d.generated_at * 1000).toLocaleString();
+    meta.textContent = 'Generated ' + when + ' . ' + d.window_days + ' day window . ' + (d.suggestions ? d.suggestions.length : 0) + ' suggestion(s)';
+    body.classList.remove('muted');
+    body.textContent = d.overall_summary;
+    if (d.suggestions && d.suggestions.length) {
+      let html = '<div class="ip-table-wrap" style="margin-top:.9rem">';
+      for (const s of d.suggestions) {
+        const blocked = (s.suggested_action || '').indexOf('block') === 0;
+        html += '<div class="policy-row">'
+          + '<span class="ip">' + escapeHtml(s.ip) + '</span>'
+          + '<span><span class="policy-action-pill ' + escapeAttr(s.suggested_action) + '">' + escapeHtml(s.suggested_action) + '</span></span>'
+          + '<span class="num">risk ' + s.risk_score + '</span>'
+          + (blocked ? '<button class="btn btn-sm btn-danger" data-block="' + escapeAttr(s.ip) + '" data-block-reason="ai-policy: ' + escapeAttr(s.rationale) + '"><i class="icon-ban"></i><span>Apply</span></button>' : '<span></span>')
+          + '<span></span>'
+          + '<span class="rationale">' + escapeHtml(s.rationale) + '</span>'
+          + '</div>';
+      }
+      html += '</div>';
+      sugs.innerHTML = html;
+    } else {
+      sugs.innerHTML = '';
+    }
+  } catch (e) {
+    meta.textContent = 'Could not load review';
+  }
+}
+
+async function runPolicyNow() {
+  const btn = document.getElementById('policy-run-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  document.getElementById('policy-body').innerHTML = '<span class="digest-loading">Running review...</span>';
+  try {
+    const r = await fetch('/api/ai/policy/run');
+    const j = await r.json().catch(function () { return {}; });
+    if (!j.ok) {
+      document.getElementById('policy-body').textContent = 'Policy run failed (' + (j.err || ('http ' + r.status)) + ').';
+      return;
+    }
+    await loadPolicy();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('policy-run-btn').addEventListener('click', runPolicyNow);
+loadPolicy();
+
+// Behavioural clusters
+async function loadClusters() {
+  const root = document.getElementById('clusters');
+  if (!root) return;
+  try {
+    const j = await (await fetch('/api/embeddings/clusters')).json();
+    if (!j.ok) { root.innerHTML = '<div class="empty">Could not load clusters.</div>'; return; }
+    const cs = j.clusters || [];
+    if (!cs.length) {
+      root.innerHTML = '<div class="empty">No clusters yet. Need at least 2 similar requests; we have ' + (j.total_entries || 0) + ' patterns indexed so far.</div>';
+      return;
+    }
+    let html = '';
+    for (const c of cs) {
+      const cohesion = Math.round((c.cohesion || 0) * 100);
+      html += '<div class="cluster-row">'
+        + '<div class="head">'
+        + '<span class="rep">' + escapeHtml(c.representative) + '</span>'
+        + '<span class="meta">' + c.members.length + ' members . cohesion ' + cohesion + '%</span>'
+        + '</div>'
+        + '<div class="members">';
+      for (let i = 0; i < c.members.length && i < 6; i++) {
+        html += escapeHtml(c.members[i]) + '<br>';
+      }
+      if (c.members.length > 6) html += '+ ' + (c.members.length - 6) + ' more';
+      html += '</div></div>';
+    }
+    root.innerHTML = html;
+  } catch (e) {
+    root.innerHTML = '<div class="empty">Network error.</div>';
+  }
+}
+loadClusters();
+setInterval(loadClusters, 60000);
 
 // Tunnel health
 async function loadTunnelHealth() {

@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=14">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=14">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=14">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=15">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=15">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=15">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
@@ -104,11 +104,29 @@
       </form>
       <div id="geo-alert" class="alert" style="display:none; margin-top: 1rem"></div>
     </div>
+
+    <div class="form-card">
+      <h2>Honeypot</h2>
+      <p class="lead">When enabled, scanner-classified requests targeting common probe paths (<code>/wp-admin</code>, <code>/.env</code>, <code>/.git/config</code>, etc) get answered with AI-generated decoy content instead of a 403. All decoys contain only obviously fake placeholder values. Off by default. Requires the Mistral API key.</p>
+      <form id="honey-form" autocomplete="off">
+        <div class="form-row inline">
+          <label class="switch">
+            <input type="checkbox" id="honey-enabled" name="enabled">
+            <span>Enable honeypot</span>
+          </label>
+        </div>
+        <p class="hint" id="honey-status">&mdash;</p>
+        <div class="submit-row">
+          <button type="submit" class="btn btn-accent"><span>Save honeypot</span><i class="icon-arrow-right"></i></button>
+        </div>
+      </form>
+      <div id="honey-alert" class="alert" style="display:none; margin-top: 1rem"></div>
+    </div>
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=14"></script>
-<script src="https://rofihosted.space/app.js?v=14"></script>
+<script src="https://rofihosted.space/theme.js?v=15"></script>
+<script src="https://rofihosted.space/app.js?v=15"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -158,6 +176,39 @@
           geoAlert.className = 'alert error';
           geoAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
           geoAlert.style.display = '';
+        });
+    });
+
+    // Honeypot toggle
+    const honeyEl = document.getElementById('honey-enabled');
+    const honeyAlert = document.getElementById('honey-alert');
+    const honeyStatus = document.getElementById('honey-status');
+    fetch('/api/honeypot').then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) return;
+      honeyEl.checked = !!j.enabled;
+      honeyStatus.textContent = (j.cached_responses || 0) + ' decoy response(s) cached so far.';
+    }).catch(function () {});
+
+    document.getElementById('honey-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const fd = new FormData();
+      fd.append('enabled', honeyEl.checked ? 'on' : 'off');
+      fetch('/api/honeypot/update', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.ok) {
+            honeyAlert.className = 'alert success';
+            honeyAlert.innerHTML = '<i class="icon-check"></i> Honeypot setting saved.';
+          } else {
+            honeyAlert.className = 'alert error';
+            honeyAlert.innerHTML = '<i class="icon-exclamation"></i> Could not save (' + (j.err || 'unknown') + ').';
+          }
+          honeyAlert.style.display = '';
+        })
+        .catch(function () {
+          honeyAlert.className = 'alert error';
+          honeyAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
+          honeyAlert.style.display = '';
         });
     });
   })();

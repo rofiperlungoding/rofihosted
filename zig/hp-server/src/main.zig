@@ -16,10 +16,14 @@ const audit = @import("audit.zig");
 const tunnel_health = @import("tunnel_health.zig");
 const geoblock = @import("geoblock.zig");
 const secret = @import("secret.zig");
+const embeddings = @import("embeddings.zig");
+const honeypot = @import("honeypot.zig");
+const query = @import("query.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
 const digests_path = "/data/data/com.termux/files/home/data/digests.jsonl";
+const policy_path = "/data/data/com.termux/files/home/data/policy.jsonl";
 
 const App = struct {
     allocator: std.mem.Allocator,
@@ -36,6 +40,8 @@ const App = struct {
     annotation_cache: *ai.AnnotationCache,
     tunnel_status: *tunnel_health.Status,
     geoblock: *geoblock.Config,
+    embeddings: *embeddings.Store,
+    honeypot: *honeypot.Config,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -80,6 +86,8 @@ pub fn main() !void {
     const tunnel_status = try allocator.create(tunnel_health.Status);
     tunnel_status.* = .{};
     const geo_cfg = try geoblock.Config.init(allocator);
+    const emb_store = try embeddings.Store.init(allocator);
+    const honey_cfg = try honeypot.Config.init(allocator);
 
     var app = App{
         .allocator = allocator,
@@ -96,6 +104,8 @@ pub fn main() !void {
         .annotation_cache = annotation_cache,
         .tunnel_status = tunnel_status,
         .geoblock = geo_cfg,
+        .embeddings = emb_store,
+        .honeypot = honey_cfg,
     };
     g_app = &app;
 
@@ -147,6 +157,14 @@ pub fn main() !void {
     // Daily digest loop
     const digest_thread = try std.Thread.spawn(.{}, digestLoop, .{&app});
     digest_thread.detach();
+
+    // Weekly policy review loop
+    const policy_thread = try std.Thread.spawn(.{}, policyLoop, .{&app});
+    policy_thread.detach();
+
+    // Embeddings persist loop (every 5 min if dirty)
+    const emb_thread = try std.Thread.spawn(.{}, embeddings.Store.persistLoop, .{emb_store});
+    emb_thread.detach();
 
     // Tunnel health watchdog
     const th = try std.Thread.spawn(.{}, tunnel_health.loop, .{ allocator, tunnel_status, bus });
@@ -218,6 +236,22 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
             // Fire-and-forget AI annotation
             spawnAnnotateBan(app, ip, ua) catch {};
         }
+        // Honeypot: if enabled, serve plausible decoy instead of falling through to 403/handler.
+        if (app.honeypot.isEnabled()) {
+            if (app.honeypot.getOrGenerate(app.ai_cfg, path)) |entry| {
+                res.status = 200;
+                res.header("Content-Type", entry.content_type);
+                res.body = entry.body;
+                logVisitFull(app, req, ip, ua, host, method, 200, cls);
+                return;
+            }
+        }
+    }
+
+    // Embeddings: track unique (ua, path) combos for non-self traffic.
+    // Async fire-and-forget so request latency is unaffected.
+    if (!is_authed and !is_local and cls != .blocked) {
+        spawnEmbedRequest(app, ua, path) catch {};
     }
 
     // Rate limit (skip /health, skip self)
@@ -358,6 +392,13 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/ai/explain")) return apiAiExplain(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/digest/latest")) return apiDigestLatest(app, res);
     if (std.mem.eql(u8, path, "/api/ai/digest/run")) return apiDigestRun(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/policy/latest")) return apiPolicyLatest(app, res);
+    if (std.mem.eql(u8, path, "/api/ai/policy/run")) return apiPolicyRun(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/query")) return apiAiQuery(app, req, res);
+    if (std.mem.eql(u8, path, "/api/embeddings/clusters")) return apiEmbeddingsClusters(app, res);
+    if (std.mem.eql(u8, path, "/api/embeddings/stats")) return apiEmbeddingsStats(app, res);
+    if (std.mem.eql(u8, path, "/api/honeypot")) return apiHoneypotGet(app, res);
+    if (std.mem.eql(u8, path, "/api/honeypot/update")) return apiHoneypotUpdate(app, req, res);
     if (std.mem.eql(u8, path, "/api/audit")) return apiAudit(app, res);
     if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
@@ -1090,17 +1131,33 @@ fn annotateBanThread(args: *AnnotateArgs) void {
     }
     if (recent_paths.items.len == 0) return; // nothing to base annotation on
 
-    const annotated = ai.annotateBan(args.app.ai_cfg, a, .{
+    const annotated_json = ai.annotateBan(args.app.ai_cfg, a, .{
         .ip = args.ip,
         .paths = recent_paths.items,
         .user_agent = args.ua,
         .country = country,
     }) orelse return;
 
-    args.app.annotation_cache.put(args.ip, annotated);
+    // Parse structured output -> compact summary string for the blocklist reason
+    const Parsed = struct {
+        actor_type: []const u8,
+        risk_score: u8,
+        summary: []const u8,
+        indicators: []const []const u8 = &.{},
+    };
+    const parsed = std.json.parseFromSlice(Parsed, a, annotated_json, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+
+    const compact = std.fmt.allocPrint(a, "{s} (risk={d}, {s})", .{
+        parsed.value.summary,
+        parsed.value.risk_score,
+        parsed.value.actor_type,
+    }) catch return;
+    args.app.annotation_cache.put(args.ip, compact);
 
     // Prepend "auto: " so the source is still visible after enrichment.
-    const final = std.fmt.allocPrint(a, "auto: {s}", .{annotated}) catch return;
+    const final = std.fmt.allocPrint(a, "auto: {s}", .{compact}) catch return;
     args.app.blocklist.updateReason(args.ip, final) catch {};
     args.app.bus.publish(.blocklist_change, .{
         .action = "annotate",
@@ -1175,7 +1232,7 @@ fn apiAiExplain(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         cls_buf.writer().print("{s}: {d}", .{ e.key_ptr.*, e.value_ptr.* }) catch {};
     }
 
-    const profile = ai.explainIp(app.ai_cfg, res.arena, .{
+    const profile_json = ai.explainIp(app.ai_cfg, res.arena, .{
         .ip = ip,
         .country = country,
         .visit_count = visit_count,
@@ -1188,12 +1245,35 @@ fn apiAiExplain(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         return;
     };
 
+    // Parse the structured assessment so we return typed fields.
+    const ParsedAssessment = struct {
+        actor_type: []const u8,
+        risk_score: u8,
+        confidence: f32,
+        recommended_action: []const u8,
+        reasoning: []const u8,
+        indicators: []const []const u8 = &.{},
+    };
+    const parsed = std.json.parseFromSlice(ParsedAssessment, res.arena, profile_json, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        // Fall back to raw text if parsing fails for any reason
+        try res.json(.{
+            .ok = true,
+            .ip = ip,
+            .visit_count = visit_count,
+            .country = country,
+            .raw = profile_json,
+        }, .{});
+        return;
+    };
+
     try res.json(.{
         .ok = true,
         .ip = ip,
         .visit_count = visit_count,
         .country = country,
-        .profile = profile,
+        .assessment = parsed.value,
     }, .{});
 }
 
@@ -1484,6 +1564,342 @@ fn apiGeoblockUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .action = "geoblock_update",
         .target = if (enabled) "on" else "off",
         .detail = allow_csv,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+// =================================================================
+// AI: EMBEDDINGS (async, fire-and-forget, dedup by key)
+// =================================================================
+const EmbedArgs = struct {
+    app: *App,
+    key: []u8,
+};
+
+fn spawnEmbedRequest(app: *App, ua: []const u8, path: []const u8) !void {
+    if (!app.ai_cfg.enabled()) return;
+    // Cheap: skip if path looks like a static asset (we already filter most of these out
+    // by classification, this is just belt-and-suspenders).
+    if (std.mem.endsWith(u8, path, ".css") or std.mem.endsWith(u8, path, ".js") or
+        std.mem.endsWith(u8, path, ".woff2") or std.mem.endsWith(u8, path, ".ico")) return;
+
+    const key = embeddings.keyForRequest(app.allocator, ua, path) catch return;
+    // Skip if we already have it (cheap lookup, no API call)
+    {
+        app.embeddings.mutex.lock();
+        const known = app.embeddings.index.contains(key);
+        app.embeddings.mutex.unlock();
+        if (known) {
+            // Just bump hit counter, no API call needed
+            _ = app.embeddings.upsert(key, &[_]f32{}) catch {};
+            app.allocator.free(key);
+            return;
+        }
+    }
+
+    const args = try app.allocator.create(EmbedArgs);
+    args.* = .{ .app = app, .key = key };
+    const t = try std.Thread.spawn(.{}, embedRequestThread, .{args});
+    t.detach();
+}
+
+fn embedRequestThread(args: *EmbedArgs) void {
+    defer {
+        args.app.allocator.free(args.key);
+        args.app.allocator.destroy(args);
+    }
+    var arena = std.heap.ArenaAllocator.init(args.app.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const vec = ai.embed(args.app.ai_cfg, a, args.key) orelse return;
+    _ = args.app.embeddings.upsert(args.key, vec) catch {};
+}
+
+// =================================================================
+// API: embeddings cluster summary
+// =================================================================
+fn apiEmbeddingsStats(app: *App, res: *httpz.Response) !void {
+    try res.json(.{
+        .ok = true,
+        .count = app.embeddings.count(),
+        .max_entries = 4096,
+    }, .{});
+}
+
+fn apiEmbeddingsClusters(app: *App, res: *httpz.Response) !void {
+    const groups = app.embeddings.cluster(res.arena, 0.85) catch {
+        try res.json(.{ .ok = false, .err = "cluster_failed" }, .{});
+        return;
+    };
+    try res.json(.{
+        .ok = true,
+        .threshold = 0.85,
+        .total_entries = app.embeddings.count(),
+        .clusters = groups,
+    }, .{});
+}
+
+// =================================================================
+// AI: NATURAL LANGUAGE QUERY
+// =================================================================
+fn apiAiQuery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
+        return;
+    }
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const question = form.get("q") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_q" }, .{});
+        return;
+    };
+
+    const plan_json = ai.planQuery(app.ai_cfg, res.arena, question) orelse {
+        res.status = 502;
+        try res.json(.{ .ok = false, .err = "plan_failed" }, .{});
+        return;
+    };
+
+    var out = std.ArrayList(u8).init(res.arena);
+    query.execute(res.arena, plan_json, .{
+        .blocklist = app.blocklist,
+        .store_mutex = app.store_mutex,
+    }, &out) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "execute_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    res.body = try res.arena.dupe(u8, out.items);
+}
+
+// =================================================================
+// AI: WEEKLY POLICY REVIEW
+// =================================================================
+const PolicyRecord = struct {
+    generated_at: i64,
+    window_days: u32,
+    overall_summary: []const u8,
+    suggestions: []const Suggestion,
+
+    const Suggestion = struct {
+        ip: []const u8,
+        suggested_action: []const u8,
+        risk_score: u8,
+        rationale: []const u8,
+    };
+};
+
+fn policyLoop(app: *App) void {
+    // First run: 30 minutes after boot (so we have data + the digest finished too)
+    std.Thread.sleep(30 * 60 * std.time.ns_per_s);
+    while (true) {
+        runPolicyReview(app) catch {};
+        // Sleep 7 days
+        std.Thread.sleep(7 * 24 * 60 * 60 * std.time.ns_per_s);
+    }
+}
+
+fn runPolicyReview(app: *App) !void {
+    if (!app.ai_cfg.enabled()) return;
+    var arena = std.heap.ArenaAllocator.init(app.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    app.store_mutex.lock();
+    const visits = store.readVisits(a, visits_path, 100000) catch {
+        app.store_mutex.unlock();
+        return;
+    };
+    app.store_mutex.unlock();
+
+    const window_days: u32 = 7;
+    const since = std.time.timestamp() - @as(i64, @intCast(window_days)) * 24 * 3600;
+
+    // Per-IP aggregation
+    const PerIp = struct {
+        country: []const u8 = "",
+        total: u32 = 0,
+        scanner: u32 = 0,
+        bot: u32 = 0,
+        unknown: u32 = 0,
+        self: u32 = 0,
+        recent_paths: std.ArrayList([]const u8),
+    };
+    var ips = std.StringHashMap(PerIp).init(a);
+
+    for (visits) |v| {
+        if (v.visited_at < since) continue;
+        if (v.ip.len == 0) continue;
+        const gop = ips.getOrPut(v.ip) catch continue;
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{
+                .recent_paths = std.ArrayList([]const u8).init(a),
+            };
+        }
+        gop.value_ptr.total += 1;
+        if (v.country.len > 0) gop.value_ptr.country = v.country;
+        if (std.mem.eql(u8, v.classification, "scanner")) gop.value_ptr.scanner += 1;
+        if (std.mem.eql(u8, v.classification, "bot")) gop.value_ptr.bot += 1;
+        if (std.mem.eql(u8, v.classification, "unknown")) gop.value_ptr.unknown += 1;
+        if (std.mem.eql(u8, v.classification, "self")) gop.value_ptr.self += 1;
+        if (gop.value_ptr.recent_paths.items.len < 4) {
+            gop.value_ptr.recent_paths.append(v.path) catch {};
+        }
+    }
+
+    // Format up to 30 most-active non-self IPs
+    var summaries = std.ArrayList([]const u8).init(a);
+    var it = ips.iterator();
+    while (it.next()) |e| {
+        if (e.value_ptr.self > e.value_ptr.scanner + e.value_ptr.bot + e.value_ptr.unknown) continue;
+        if (e.value_ptr.total < 2) continue;
+        var line = std.ArrayList(u8).init(a);
+        try line.writer().print("ip={s} country={s} total={d} scanner={d} bot={d} unknown={d} paths=[", .{
+            e.key_ptr.*,
+            if (e.value_ptr.country.len > 0) e.value_ptr.country else "?",
+            e.value_ptr.total,
+            e.value_ptr.scanner,
+            e.value_ptr.bot,
+            e.value_ptr.unknown,
+        });
+        for (e.value_ptr.recent_paths.items, 0..) |p, i| {
+            if (i > 0) try line.appendSlice(",");
+            try line.appendSlice(p);
+        }
+        try line.appendSlice("]");
+        try summaries.append(try line.toOwnedSlice());
+        if (summaries.items.len >= 30) break;
+    }
+    if (summaries.items.len == 0) return;
+
+    const result_json = ai.weeklyPolicyReview(app.ai_cfg, a, .{
+        .window_days = window_days,
+        .ip_summaries = summaries.items,
+    }) orelse return;
+
+    // Parse for storage
+    const Parsed = struct {
+        overall_summary: []const u8,
+        suggestions: []const PolicyRecord.Suggestion,
+    };
+    const parsed = std.json.parseFromSlice(Parsed, a, result_json, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+
+    const rec = PolicyRecord{
+        .generated_at = std.time.timestamp(),
+        .window_days = window_days,
+        .overall_summary = parsed.value.overall_summary,
+        .suggestions = parsed.value.suggestions,
+    };
+    store.appendJson(policy_path, rec) catch {};
+}
+
+fn apiPolicyLatest(_: *App, res: *httpz.Response) !void {
+    const file = std.fs.cwd().openFile(policy_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            try res.json(.{ .ok = true, .latest = null }, .{});
+            return;
+        },
+        else => return err,
+    };
+    defer file.close();
+    const data = try file.readToEndAlloc(res.arena, 8 * 1024 * 1024);
+
+    var last_start: usize = 0;
+    var i: usize = data.len;
+    while (i > 0) {
+        i -= 1;
+        if (data[i] == '\n' and i + 1 < data.len) {
+            last_start = i + 1;
+            break;
+        }
+    }
+    const last_line = std.mem.trim(u8, data[last_start..], " \t\r\n");
+    if (last_line.len == 0) {
+        try res.json(.{ .ok = true, .latest = null }, .{});
+        return;
+    }
+    const parsed = std.json.parseFromSlice(PolicyRecord, res.arena, last_line, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        try res.json(.{ .ok = true, .latest = null }, .{});
+        return;
+    };
+    try res.json(.{ .ok = true, .latest = parsed.value }, .{});
+}
+
+fn apiPolicyRun(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
+        return;
+    }
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const ok = blk: {
+        runPolicyReview(app) catch break :blk false;
+        break :blk true;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "policy_run",
+        .target = "manual",
+        .ok = ok,
+    });
+    if (!ok) {
+        res.status = 502;
+        try res.json(.{ .ok = false, .err = "policy_failed" }, .{});
+        return;
+    }
+    try res.json(.{ .ok = true }, .{});
+}
+
+// =================================================================
+// HONEYPOT (toggle + status)
+// =================================================================
+fn apiHoneypotGet(app: *App, res: *httpz.Response) !void {
+    try res.json(.{
+        .ok = true,
+        .enabled = app.honeypot.isEnabled(),
+        .cached_responses = app.honeypot.cache.count(),
+    }, .{});
+}
+
+fn apiHoneypotUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const enabled_str = form.get("enabled") orelse "off";
+    const enabled = std.mem.eql(u8, enabled_str, "on") or std.mem.eql(u8, enabled_str, "true") or std.mem.eql(u8, enabled_str, "1");
+
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    app.honeypot.setEnabled(enabled) catch {
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "honeypot_update",
+            .target = if (enabled) "on" else "off",
+            .ok = false,
+        });
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "update_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "honeypot_update",
+        .target = if (enabled) "on" else "off",
     });
     try res.json(.{ .ok = true }, .{});
 }
