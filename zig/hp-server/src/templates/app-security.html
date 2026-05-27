@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Security / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=13">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=13">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=13">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=14">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=14">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=14">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
@@ -275,12 +275,12 @@
 
     <!-- Summary -->
     <div class="summary-grid">
-      <div class="sum-card"><div class="label">Total requests</div><div class="value" id="s-total">—</div></div>
-      <div class="sum-card"><div class="label">Last hour</div><div class="value" id="s-hour">—</div></div>
-      <div class="sum-card"><div class="label">Last 24h</div><div class="value" id="s-day">—</div></div>
-      <div class="sum-card"><div class="label">Self</div><div class="value success" id="s-self">—</div></div>
-      <div class="sum-card"><div class="label">Unknown</div><div class="value warn" id="s-unknown">—</div></div>
-      <div class="sum-card"><div class="label">Scanners</div><div class="value error" id="s-scanner">—</div></div>
+      <div class="sum-card"><div class="label">Total requests</div><div class="value" id="s-total">&mdash;</div></div>
+      <div class="sum-card"><div class="label">Last hour</div><div class="value" id="s-hour">&mdash;</div></div>
+      <div class="sum-card"><div class="label">Last 24h</div><div class="value" id="s-day">&mdash;</div></div>
+      <div class="sum-card"><div class="label">Self</div><div class="value success" id="s-self">&mdash;</div></div>
+      <div class="sum-card"><div class="label">Unknown</div><div class="value warn" id="s-unknown">&mdash;</div></div>
+      <div class="sum-card"><div class="label">Scanners</div><div class="value error" id="s-scanner">&mdash;</div></div>
     </div>
 
     <!-- IP table -->
@@ -369,8 +369,8 @@
   <div class="ai-modal">
     <div class="ai-modal-head">
       <div>
-        <div class="ai-modal-title">IP profile <span class="ai-modal-ip" id="ai-modal-ip">—</span></div>
-        <div class="ai-modal-meta" id="ai-modal-meta">—</div>
+        <div class="ai-modal-title">IP profile <span class="ai-modal-ip" id="ai-modal-ip">&mdash;</span></div>
+        <div class="ai-modal-meta" id="ai-modal-meta">&mdash;</div>
       </div>
       <button class="ai-modal-close" data-ai-close="1" aria-label="Close">&times;</button>
     </div>
@@ -383,8 +383,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=13"></script>
-<script src="https://rofihosted.space/app.js?v=13"></script>
+<script src="https://rofihosted.space/theme.js?v=14"></script>
+<script src="https://rofihosted.space/app.js?v=14"></script>
 <script>
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function fmtAgo(ts) {
@@ -436,7 +436,7 @@ async function refresh() {
         return '<div class="ip-row">'
           + '<span class="ip">' + escapeHtml(r.ip) + '</span>'
           + '<span class="num">' + r.count + '</span>'
-          + '<span class="country">' + escapeHtml(r.country || '—') + '</span>'
+          + '<span class="country">' + escapeHtml(r.country || '&mdash;') + '</span>'
           + '<span class="last">' + fmtAgo(r.last_seen) + '</span>'
           + '<span><span class="cls-pill ' + escapeAttr(r.last_classification || 'legacy') + '">' + escapeHtml(r.last_classification || 'legacy') + '</span></span>'
           + '<span class="block-actions">'
@@ -459,7 +459,7 @@ async function refresh() {
       blEl.innerHTML = j.blocklist.map(function(b) {
         return '<div class="blocklist-row">'
           + '<span class="ip">' + escapeHtml(b.ip) + '</span>'
-          + '<span class="reason">' + escapeHtml(b.reason || '—') + '</span>'
+          + '<span class="reason">' + escapeHtml(b.reason || '&mdash;') + '</span>'
           + '<span class="ttl">' + fmtTtl(b.expires_at) + '</span>'
           + '<button class="btn btn-sm" data-unblock="' + escapeAttr(b.ip) + '"><i class="icon-check"></i><span>Unblock</span></button>'
           + '</div>';
@@ -558,7 +558,7 @@ async function openExplain(ip) {
     }
     const j = await r.json();
     document.getElementById('ai-modal-meta').textContent =
-      j.visit_count + ' visits observed . country ' + (j.country || '—');
+      j.visit_count + ' visits observed . country ' + (j.country || '&mdash;');
     document.getElementById('ai-modal-body').textContent = j.profile;
   } catch (err) {
     document.getElementById('ai-modal-body').textContent = 'Network error.';
@@ -627,7 +627,7 @@ async function loadTunnelHealth() {
     if (!root) return;
     const cls = j.state === 'healthy' ? 'success' : (j.state === 'degraded' ? 'warn' : 'error');
     const restartNote = j.restart_attempted ? ' . watchdog requested restart' : '';
-    const since = j.state_since ? fmtAgo(j.state_since) : '—';
+    const since = j.state_since ? fmtAgo(j.state_since) : '&mdash;';
     root.innerHTML =
       '<div class="listing-row"><span class="v">State <strong class="' + cls + '">' + j.state + '</strong> for ' + since + restartNote + '</span><span class="c">' + j.connections + ' active connection(s)</span></div>'
       + '<div class="listing-row"><span class="v">Last check</span><span class="c">' + (j.last_check ? fmtAgo(j.last_check) : 'never') + '</span></div>';
@@ -653,7 +653,7 @@ async function loadAudit() {
       const act = (e.action || '').replace(/_/g, ' ');
       const detail = e.detail ? ' . ' + escapeHtml(e.detail) : '';
       return '<div class="listing-row ' + cls + '">'
-        + '<span class="v">' + escapeHtml(act) + ' . ' + escapeHtml(e.target || '—') + ' . by ' + escapeHtml(e.actor || '?') + detail + '</span>'
+        + '<span class="v">' + escapeHtml(act) + ' . ' + escapeHtml(e.target || '&mdash;') + ' . by ' + escapeHtml(e.actor || '?') + detail + '</span>'
         + '<span class="c">' + fmtAgo(e.timestamp) + '</span>'
         + '</div>';
     }).join('');

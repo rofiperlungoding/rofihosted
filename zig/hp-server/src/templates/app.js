@@ -217,16 +217,16 @@ window.RH = (function () {
           bar.parentElement.className = b.percentage < 15 ? 'bar crit' : b.percentage < 30 ? 'bar warn' : 'bar';
         }
         setText('bat-status', (b.status || '?') + ' . ' + (b.health || '?'));
-        setText('bat-plugged', b.plugged || '—');
-        setText('bat-temp', b.temperature_c != null ? b.temperature_c.toFixed(1) + ' °C' : '—');
-        setText('bat-voltage', b.voltage_mv != null ? b.voltage_mv + ' mV' : '—');
+        setText('bat-plugged', b.plugged || '\u2014');
+        setText('bat-temp', b.temperature_c != null ? b.temperature_c.toFixed(1) + ' \u00B0C' : '\u2014');
+        setText('bat-voltage', b.voltage_mv != null ? b.voltage_mv + ' mV' : '\u2014');
       }
       const w = j.wifi;
       if (w) {
-        setText('wifi-ssid', w.ssid || '—');
-        setText('wifi-ip', w.ip || '—');
-        setText('wifi-speed', w.link_speed_mbps != null ? w.link_speed_mbps : '—');
-        setText('wifi-rssi', w.rssi != null ? w.rssi : '—');
+        setText('wifi-ssid', w.ssid || '\u2014');
+        setText('wifi-ip', w.ip || '\u2014');
+        setText('wifi-speed', w.link_speed_mbps != null ? w.link_speed_mbps : '\u2014');
+        setText('wifi-rssi', w.rssi != null ? w.rssi : '\u2014');
       }
     } catch (e) {}
   }

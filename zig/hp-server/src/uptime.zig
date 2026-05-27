@@ -97,9 +97,9 @@ pub fn checkerLoop(
                 if (prev != r.ok) {
                     var msg_buf: [256]u8 = undefined;
                     const msg = if (r.ok)
-                        std.fmt.bufPrint(&msg_buf, "✅ *{s}* is back UP (HTTP {d}, {d}ms)", .{ target.name, r.status_code, r.latency_ms }) catch continue
+                        std.fmt.bufPrint(&msg_buf, "[UP] *{s}* is back UP (HTTP {d}, {d}ms)", .{ target.name, r.status_code, r.latency_ms }) catch continue
                     else
-                        std.fmt.bufPrint(&msg_buf, "🔴 *{s}* is DOWN (HTTP {d}, {d}ms)", .{ target.name, r.status_code, r.latency_ms }) catch continue;
+                        std.fmt.bufPrint(&msg_buf, "[DOWN] *{s}* is DOWN (HTTP {d}, {d}ms)", .{ target.name, r.status_code, r.latency_ms }) catch continue;
                     std.log.warn("transition: {s}", .{msg});
                     telegram.send(allocator, tg_cfg, msg);
                     st.consecutive = 1;

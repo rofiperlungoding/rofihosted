@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Overview / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=13">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=13">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=13">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=14">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=14">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=14">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   /* Group panels for transparency */
@@ -135,10 +135,10 @@
         <div class="src">source <code>/proc/self/status</code></div>
       </div>
       <div class="kv-grid">
-        <div class="kv"><div class="label">Resident memory</div><div class="value" id="proc-rss">—</div><div class="sub" id="proc-rss-sub"></div></div>
-        <div class="kv"><div class="label">Virtual memory</div><div class="value" id="proc-vsz">—</div></div>
-        <div class="kv"><div class="label">Threads</div><div class="value" id="proc-threads">—</div></div>
-        <div class="kv"><div class="label">Open file descriptors</div><div class="value" id="proc-fds">—</div></div>
+        <div class="kv"><div class="label">Resident memory</div><div class="value" id="proc-rss">&mdash;</div><div class="sub" id="proc-rss-sub"></div></div>
+        <div class="kv"><div class="label">Virtual memory</div><div class="value" id="proc-vsz">&mdash;</div></div>
+        <div class="kv"><div class="label">Threads</div><div class="value" id="proc-threads">&mdash;</div></div>
+        <div class="kv"><div class="label">Open file descriptors</div><div class="value" id="proc-fds">&mdash;</div></div>
       </div>
     </section>
 
@@ -151,13 +151,13 @@
       <div class="kv-grid">
         <div class="kv">
           <div class="label">Used</div>
-          <div class="value"><span id="mem-percent">—</span><span class="unit">%</span></div>
+          <div class="value"><span id="mem-percent">&mdash;</span><span class="unit">%</span></div>
           <div class="bar"><div id="mem-bar" style="width:0%"></div></div>
-          <div class="sub" id="mem-sub">—</div>
+          <div class="sub" id="mem-sub">&mdash;</div>
         </div>
-        <div class="kv"><div class="label">Available</div><div class="value" id="mem-avail">—</div></div>
-        <div class="kv"><div class="label">Free</div><div class="value" id="mem-free">—</div></div>
-        <div class="kv"><div class="label">Cached</div><div class="value" id="mem-cached">—</div></div>
+        <div class="kv"><div class="label">Available</div><div class="value" id="mem-avail">&mdash;</div></div>
+        <div class="kv"><div class="label">Free</div><div class="value" id="mem-free">&mdash;</div></div>
+        <div class="kv"><div class="label">Cached</div><div class="value" id="mem-cached">&mdash;</div></div>
       </div>
     </section>
 
@@ -170,12 +170,12 @@
       <div class="kv-grid">
         <div class="kv">
           <div class="label">Used</div>
-          <div class="value" id="swap-used">—</div>
+          <div class="value" id="swap-used">&mdash;</div>
           <div class="bar"><div id="swap-bar" style="width:0%"></div></div>
         </div>
-        <div class="kv"><div class="label">Free</div><div class="value" id="swap-free">—</div></div>
-        <div class="kv"><div class="label">Total</div><div class="value" id="swap-total">—</div></div>
-        <div class="kv"><div class="label">Utilization</div><div class="value"><span id="swap-percent">—</span><span class="unit">%</span></div></div>
+        <div class="kv"><div class="label">Free</div><div class="value" id="swap-free">&mdash;</div></div>
+        <div class="kv"><div class="label">Total</div><div class="value" id="swap-total">&mdash;</div></div>
+        <div class="kv"><div class="label">Utilization</div><div class="value"><span id="swap-percent">&mdash;</span><span class="unit">%</span></div></div>
       </div>
     </section>
 
@@ -188,13 +188,13 @@
       <div class="kv-grid">
         <div class="kv">
           <div class="label">Charge</div>
-          <div class="value"><span id="bat-pct">—</span><span class="unit">%</span></div>
+          <div class="value"><span id="bat-pct">&mdash;</span><span class="unit">%</span></div>
           <div class="bar"><div id="bat-bar" style="width:0%"></div></div>
-          <div class="sub" id="bat-status">—</div>
+          <div class="sub" id="bat-status">&mdash;</div>
         </div>
-        <div class="kv"><div class="label">Plugged</div><div class="value" id="bat-plugged" style="font-size:1rem">—</div></div>
-        <div class="kv"><div class="label">Temperature</div><div class="value" id="bat-temp">—</div></div>
-        <div class="kv"><div class="label">Voltage</div><div class="value" id="bat-voltage">—</div></div>
+        <div class="kv"><div class="label">Plugged</div><div class="value" id="bat-plugged" style="font-size:1rem">&mdash;</div></div>
+        <div class="kv"><div class="label">Temperature</div><div class="value" id="bat-temp">&mdash;</div></div>
+        <div class="kv"><div class="label">Voltage</div><div class="value" id="bat-voltage">&mdash;</div></div>
       </div>
     </section>
 
@@ -205,10 +205,10 @@
         <div class="src">source <code>termux-wifi-connectioninfo</code></div>
       </div>
       <div class="kv-grid">
-        <div class="kv"><div class="label">SSID</div><div class="value" id="wifi-ssid" style="font-size:1rem">—</div></div>
-        <div class="kv"><div class="label">IP address</div><div class="value" id="wifi-ip" style="font-size:1rem; font-family: ui-monospace, monospace">—</div></div>
-        <div class="kv"><div class="label">Link speed</div><div class="value"><span id="wifi-speed">—</span><span class="unit">Mbps</span></div></div>
-        <div class="kv"><div class="label">Signal (RSSI)</div><div class="value"><span id="wifi-rssi">—</span><span class="unit">dBm</span></div></div>
+        <div class="kv"><div class="label">SSID</div><div class="value" id="wifi-ssid" style="font-size:1rem">&mdash;</div></div>
+        <div class="kv"><div class="label">IP address</div><div class="value" id="wifi-ip" style="font-size:1rem; font-family: ui-monospace, monospace">&mdash;</div></div>
+        <div class="kv"><div class="label">Link speed</div><div class="value"><span id="wifi-speed">&mdash;</span><span class="unit">Mbps</span></div></div>
+        <div class="kv"><div class="label">Signal (RSSI)</div><div class="value"><span id="wifi-rssi">&mdash;</span><span class="unit">dBm</span></div></div>
       </div>
     </section>
 
@@ -221,11 +221,11 @@
       <div class="kv-grid">
         <div class="kv">
           <div class="label">HA Connections</div>
-          <div class="value" id="tun-connections">—</div>
+          <div class="value" id="tun-connections">&mdash;</div>
           <div class="edge-badges" id="tun-edges"></div>
         </div>
-        <div class="kv"><div class="label">Total requests</div><div class="value" id="tun-total">—</div></div>
-        <div class="kv"><div class="label">Request errors</div><div class="value" id="tun-errors">—</div></div>
+        <div class="kv"><div class="label">Total requests</div><div class="value" id="tun-total">&mdash;</div></div>
+        <div class="kv"><div class="label">Request errors</div><div class="value" id="tun-errors">&mdash;</div></div>
         <div class="kv">
           <div class="label">Response codes</div>
           <div class="codes-table" id="tun-codes"></div>
@@ -253,8 +253,8 @@
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=13"></script>
-<script src="https://rofihosted.space/app.js?v=13"></script>
+<script src="https://rofihosted.space/theme.js?v=14"></script>
+<script src="https://rofihosted.space/app.js?v=14"></script>
 <script>
   // Initial load
   RH.loadCurrentUser();

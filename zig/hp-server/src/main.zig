@@ -1080,7 +1080,7 @@ fn annotateBanThread(args: *AnnotateArgs) void {
     args.app.store_mutex.unlock();
 
     var recent_paths = std.ArrayList([]const u8).init(a);
-    var country: []const u8 = "—";
+    var country: []const u8 = "-";
     for (visits) |v| {
         if (std.mem.eql(u8, v.ip, args.ip)) {
             if (v.country.len > 0) country = v.country;
@@ -1142,7 +1142,7 @@ fn apiAiExplain(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     var paths = std.ArrayList([]const u8).init(res.arena);
     var ua_set = std.StringHashMap(void).init(res.arena);
     var classification_counts = std.StringHashMap(u32).init(res.arena);
-    var country: []const u8 = "—";
+    var country: []const u8 = "-";
     var visit_count: u32 = 0;
     for (visits) |v| {
         if (!std.mem.eql(u8, v.ip, ip)) continue;
