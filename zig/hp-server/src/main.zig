@@ -26,6 +26,7 @@ const dbpool = @import("dbpool.zig");
 const pathsafe = @import("pathsafe.zig");
 const hosted = @import("hosted.zig");
 const apikey = @import("apikey.zig");
+const webhook = @import("webhook.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -56,6 +57,7 @@ const App = struct {
     dbpool: *dbpool.Pool,
     hosted: *hosted.Manager,
     apikey: *apikey.Manager,
+    webhook: *webhook.Manager,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -124,6 +126,11 @@ pub fn main() !void {
     const hosted_mgr = try hosted.Manager.init(allocator);
     const pepper_slice = try allocator.dupe(u8, &pepper);
     const apikey_mgr = try apikey.Manager.init(allocator, pepper_slice);
+    const webhook_mgr = try webhook.Manager.init(allocator);
+    // Wire bus -> webhook fan-out so any event published also fires matching
+    // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
+    bus.pub_callback = webhookFanOut;
+    bus.pub_ctx = @ptrCast(webhook_mgr);
 
     var app = App{
         .allocator = allocator,
@@ -149,6 +156,7 @@ pub fn main() !void {
         .dbpool = db_pool,
         .hosted = hosted_mgr,
         .apikey = apikey_mgr,
+        .webhook = webhook_mgr,
     };
     g_app = &app;
 
@@ -504,6 +512,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/apikeys")) return apiApikeysList(app, res);
     if (std.mem.eql(u8, path, "/api/apikeys/create")) return apiApikeysCreate(app, req, res);
     if (std.mem.eql(u8, path, "/api/apikeys/revoke")) return apiApikeysRevoke(app, req, res);
+    if (std.mem.eql(u8, path, "/api/webhooks")) return apiWebhooksList(app, res);
+    if (std.mem.eql(u8, path, "/api/webhooks/create")) return apiWebhooksCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/webhooks/delete")) return apiWebhooksDelete(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -2764,6 +2775,105 @@ fn apiApikeysRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         .timestamp = std.time.timestamp(),
         .actor = actor,
         .action = "apikey_revoke",
+        .target = id,
+        .ok = did,
+    });
+    try res.json(.{ .ok = did }, .{});
+}
+
+// =================================================================
+// WEBHOOKS (outbound HTTP on internal events)
+// =================================================================
+fn webhookFanOut(ctx: *anyopaque, label: []const u8, payload_json: []const u8) void {
+    const mgr: *webhook.Manager = @ptrCast(@alignCast(ctx));
+    // Map SSE label back to EventType. If unknown, just skip.
+    const event_type = webhook.EventType.fromString(label) orelse return;
+    // Wrap payload in {event, ts, payload} envelope.
+    var buf: [8192]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+    w.print(
+        \\{{"event":"{s}","ts":{d},"payload":{s}}}
+    , .{ label, std.time.timestamp(), payload_json }) catch return;
+    mgr.fire(event_type, fbs.getWritten());
+}
+
+fn apiWebhooksList(app: *App, res: *httpz.Response) !void {
+    const json_body = app.webhook.listJson(res.arena) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    res.body = json_body;
+}
+
+fn apiWebhooksCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const name = form.get("name") orelse "unnamed";
+    const url = form.get("url") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_url" }, .{});
+        return;
+    };
+    const events_str = form.get("events") orelse "";
+
+    var ev_list = std.ArrayList(webhook.EventType).init(res.arena);
+    var it = std.mem.tokenizeScalar(u8, events_str, ',');
+    while (it.next()) |s| {
+        const trimmed = std.mem.trim(u8, s, " ");
+        if (webhook.EventType.fromString(trimmed)) |e| try ev_list.append(e);
+    }
+    if (ev_list.items.len == 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "no_events" }, .{});
+        return;
+    }
+
+    const id = app.webhook.create(name, url, ev_list.items) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.InvalidUrl => "invalid_url",
+            else => "create_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "webhook_create",
+        .target = name,
+    });
+    try res.json(.{ .ok = true, .id = id }, .{});
+}
+
+fn apiWebhooksDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const did = app.webhook.delete(id) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "delete_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "webhook_delete",
         .target = id,
         .ok = did,
     });

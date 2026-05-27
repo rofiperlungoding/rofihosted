@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=19">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=19">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=19">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=20">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=20">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=20">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .dbc-stats {
@@ -223,6 +223,38 @@
     </div>
 
     <div class="form-card">
+      <h2>Webhooks</h2>
+      <p class="lead">Outbound HTTP POST when internal events fire. Use this to push <code>blocklist_change</code> alerts to Telegram, Discord, your phone via Pushover, or your own automation. The payload envelope is <code>{event, ts, payload}</code>.</p>
+      <p class="hint">Valid events: <code>visit</code>, <code>login_attempt</code>, <code>blocklist_change</code>, <code>digest_ready</code>, <code>tunnel_health</code>, <code>anomaly_detected</code>, <code>rule_fired</code>. Best-effort, no retry queue. 5 second timeout.</p>
+
+      <div class="webhook-create">
+        <input type="text" id="wh-name" class="input" placeholder="Name (e.g. telegram-alerts)" maxlength="64">
+        <input type="text" id="wh-url" class="input" placeholder="https://example.com/hook" style="margin-top:.6rem">
+        <input type="text" id="wh-events" class="input" placeholder="Events, comma-separated (e.g. anomaly_detected,blocklist_change)" style="margin-top:.6rem">
+        <div class="submit-row" style="margin-top: .8rem">
+          <button type="button" class="btn btn-accent" id="wh-create-btn"><span>Create webhook</span><i class="icon-link"></i></button>
+        </div>
+      </div>
+
+      <div id="wh-alert" class="alert" style="display:none; margin-top: 1rem"></div>
+
+      <table class="apikey-table" id="wh-table" style="display:none">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>URL</th>
+            <th>Events</th>
+            <th>Fires</th>
+            <th>Last status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="wh-rows"></tbody>
+      </table>
+      <div id="wh-empty" class="hint">No webhooks yet.</div>
+    </div>
+
+    <div class="form-card">
       <h2>Operator rules</h2>
       <p class="lead">Define your own event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and a list of actions. Actions are limited to <code>block</code>, <code>log</code>, and <code>increment</code>. Single-user, no sandboxing nightmare. Stored in <code>~/.hp-server-rules.jsonl</code>.</p>
       <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
@@ -237,8 +269,8 @@
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=19"></script>
-<script src="https://rofihosted.space/app.js?v=19"></script>
+<script src="https://rofihosted.space/theme.js?v=20"></script>
+<script src="https://rofihosted.space/app.js?v=20"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -476,6 +508,98 @@
     });
 
     loadApikeys();
+
+    // Webhooks
+    const whRows = document.getElementById('wh-rows');
+    const whTable = document.getElementById('wh-table');
+    const whEmpty = document.getElementById('wh-empty');
+    const whAlert = document.getElementById('wh-alert');
+    const whName = document.getElementById('wh-name');
+    const whUrl = document.getElementById('wh-url');
+    const whEvents = document.getElementById('wh-events');
+    const whCreateBtn = document.getElementById('wh-create-btn');
+
+    function renderWebhooks(hooks) {
+      whRows.innerHTML = '';
+      if (!hooks || hooks.length === 0) {
+        whTable.style.display = 'none';
+        whEmpty.style.display = '';
+        return;
+      }
+      whEmpty.style.display = 'none';
+      whTable.style.display = '';
+      hooks.forEach(function (h) {
+        const tr = document.createElement('tr');
+        const evHtml = (h.events || []).map(function (e) {
+          return '<span class="scope-pill">' + escapeHtmlS(e) + '</span>';
+        }).join('');
+        const status = h.last_status === 0 ? '\u2014' : (h.last_status >= 200 && h.last_status < 300
+          ? '<span class="status-active">' + h.last_status + '</span>'
+          : '<span class="status-revoked">' + h.last_status + '</span>');
+        tr.innerHTML = '<td>' + escapeHtmlS(h.name) + '</td>'
+          + '<td style="word-break:break-all">' + escapeHtmlS(h.url) + '</td>'
+          + '<td>' + evHtml + '</td>'
+          + '<td>' + h.fires + (h.failures ? '/' + h.failures + ' failed' : '') + '</td>'
+          + '<td>' + status + '</td>'
+          + '<td><button type="button" class="btn btn-sm" data-id="' + escapeHtmlS(h.id) + '">Delete</button></td>';
+        const btn = tr.querySelector('button');
+        if (btn) btn.addEventListener('click', function () { deleteHook(h.id); });
+        whRows.appendChild(tr);
+      });
+    }
+
+    function loadWebhooks() {
+      fetch('/api/webhooks').then(function (r) { return r.json(); }).then(function (j) {
+        if (j.ok) renderWebhooks(j.hooks);
+      }).catch(function () {});
+    }
+
+    function deleteHook(id) {
+      if (!confirm('Delete this webhook?')) return;
+      const fd = new FormData();
+      fd.append('id', id);
+      fetch('/api/webhooks/delete', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function () { loadWebhooks(); });
+    }
+
+    whCreateBtn.addEventListener('click', function () {
+      const name = (whName.value || '').trim();
+      const url = (whUrl.value || '').trim();
+      const events = (whEvents.value || '').trim();
+      if (!name || !url || !events) {
+        whAlert.className = 'alert error';
+        whAlert.innerHTML = '<i class="icon-exclamation"></i> Name, URL, and events all required.';
+        whAlert.style.display = '';
+        return;
+      }
+      whCreateBtn.disabled = true;
+      const fd = new FormData();
+      fd.append('name', name);
+      fd.append('url', url);
+      fd.append('events', events);
+      fetch('/api/webhooks/create', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          whCreateBtn.disabled = false;
+          if (!j.ok) {
+            whAlert.className = 'alert error';
+            whAlert.innerHTML = '<i class="icon-exclamation"></i> Create failed: ' + escapeHtmlS(j.err || 'unknown');
+            whAlert.style.display = '';
+            return;
+          }
+          whAlert.className = 'alert success';
+          whAlert.innerHTML = '<i class="icon-check"></i> Webhook created.';
+          whAlert.style.display = '';
+          whName.value = '';
+          whUrl.value = '';
+          whEvents.value = '';
+          loadWebhooks();
+        });
+    });
+
+    loadWebhooks();
+    setInterval(loadWebhooks, 30000);
 
     // Operator rules
     const rulesText = document.getElementById('rules-json');

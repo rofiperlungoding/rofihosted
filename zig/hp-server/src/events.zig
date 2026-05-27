@@ -46,6 +46,10 @@ pub const Bus = struct {
     mutex: std.Thread.Mutex,
     subs: std.ArrayList(*Subscriber),
     next_id: std.atomic.Value(u64),
+    /// Optional fan-out callback invoked after each publish so other modules
+    /// (e.g. webhook dispatcher) can listen without creating import cycles.
+    pub_callback: ?*const fn (ctx: *anyopaque, label: []const u8, payload_json: []const u8) void = null,
+    pub_ctx: ?*anyopaque = null,
 
     pub fn init(allocator: std.mem.Allocator) !*Bus {
         const b = try allocator.create(Bus);
@@ -98,6 +102,20 @@ pub const Bus = struct {
         std.json.stringify(payload, .{}, w) catch return;
         w.writeAll("\n\n") catch return;
         const out = fbs.getWritten();
+
+        // Capture the JSON-only payload (skip the SSE "event:"/"data:" framing).
+        // We re-stringify into a small stack buffer for the callback.
+        var pj_buf: [4096]u8 = undefined;
+        var pj_fbs = std.io.fixedBufferStream(&pj_buf);
+        const pj_ok = blk: {
+            std.json.stringify(payload, .{}, pj_fbs.writer()) catch break :blk false;
+            break :blk true;
+        };
+        const payload_json = if (pj_ok) pj_fbs.getWritten() else "{}";
+
+        if (self.pub_callback) |cb| {
+            if (self.pub_ctx) |ctx| cb(ctx, event.label(), payload_json);
+        }
 
         self.mutex.lock();
         defer self.mutex.unlock();
