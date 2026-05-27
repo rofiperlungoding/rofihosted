@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Security / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=15">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=15">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=15">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=16">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=16">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=16">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .summary-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1.5rem; }
@@ -277,6 +277,32 @@
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     line-height: 1.55; padding-left: 1rem;
   }
+
+  /* Anomaly alert rows */
+  .anomaly-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: .6rem;
+    padding: .7rem 1.15rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: .82rem;
+    align-items: start;
+  }
+  .anomaly-row:last-child { border-bottom: 0; }
+  .anomaly-dot {
+    width: 8px; height: 8px; border-radius: 50%; margin-top: .35rem;
+  }
+  .anomaly-dot.suspicious { background: var(--error); }
+  .anomaly-dot.novel { background: var(--warning); }
+  .anomaly-dot.expected { background: var(--success); }
+  .anomaly-row .pattern {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .anomaly-row .summary { color: var(--text-2); font-size: .78rem; grid-column: 2; }
+  .anomaly-row .time { color: var(--text-3); font-size: .72rem; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -438,6 +464,15 @@
       <div class="empty">Loading</div>
     </div>
 
+    <!-- Anomaly alerts -->
+    <div class="section-head">
+      <h2>Anomaly alerts</h2>
+      <p>Novel access patterns that are far from any known cluster (cosine &lt; 0.7). AI classifies each as expected / novel / suspicious.</p>
+    </div>
+    <div class="listing" id="anomaly-table">
+      <div class="empty">No anomalies detected yet. Patterns build up as traffic flows in.</div>
+    </div>
+
     <!-- Audit log -->
     <div class="section-head">
       <h2>Audit log</h2>
@@ -469,8 +504,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=15"></script>
-<script src="https://rofihosted.space/app.js?v=15"></script>
+<script src="https://rofihosted.space/theme.js?v=16"></script>
+<script src="https://rofihosted.space/app.js?v=16"></script>
 <script>
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function fmtAgo(ts) {
@@ -627,58 +662,125 @@ document.addEventListener('click', function(e) {
 
 async function openExplain(ip) {
   const bg = document.getElementById('ai-modal-bg');
+  const metaEl = document.getElementById('ai-modal-meta');
+  const bodyEl = document.getElementById('ai-modal-body');
   document.getElementById('ai-modal-ip').textContent = ip;
-  document.getElementById('ai-modal-meta').textContent = 'Gathering visit history...';
-  document.getElementById('ai-modal-body').innerHTML = '<span class="digest-loading">Asking the model...</span>';
+  metaEl.textContent = 'Connecting to AI...';
+  bodyEl.innerHTML = '<span class="digest-loading">Streaming response...</span>';
   bg.classList.add('open');
+
+  // Try streaming first for live token-by-token UX
+  try {
+    const fd = new FormData();
+    fd.append('ip', ip);
+    const streamRes = await fetch('/api/ai/explain/stream', { method: 'POST', body: fd });
+    if (streamRes.ok && streamRes.headers.get('content-type') && streamRes.headers.get('content-type').indexOf('text/event-stream') >= 0) {
+      // SSE streaming mode
+      bodyEl.innerHTML = '<div class="assessment-prose" id="stream-prose"></div>';
+      const proseEl = document.getElementById('stream-prose');
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Parse SSE lines
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('event: meta')) continue;
+          if (line.startsWith('event: done')) continue;
+          if (line.startsWith('event: token')) continue;
+          if (line.startsWith('data: ')) {
+            const payload = line.slice(6);
+            // meta event has JSON with ip/visit_count/country
+            if (payload.startsWith('{') && payload.indexOf('visit_count') > 0) {
+              try {
+                const m = JSON.parse(payload);
+                metaEl.textContent = (m.visit_count || 0) + ' visits observed . country ' + (m.country || '\u2014');
+              } catch (e) {}
+            } else if (payload === '{}') {
+              // done event
+            } else {
+              // token chunk - append to prose
+              proseEl.textContent += payload;
+            }
+          }
+        }
+      }
+      // After streaming, also fetch the structured assessment for the pills
+      try {
+        const fd2 = new FormData();
+        fd2.append('ip', ip);
+        const r2 = await fetch('/api/ai/explain', { method: 'POST', body: fd2 });
+        if (r2.ok) {
+          const j2 = await r2.json();
+          if (j2.assessment) {
+            renderAssessmentPills(j2, bodyEl);
+          }
+        }
+      } catch (e) {}
+      return;
+    }
+    // If streaming endpoint returned non-SSE (e.g. error), fall through to structured
+  } catch (e) {
+    // Streaming failed, fall through to structured endpoint
+  }
+
+  // Fallback: structured (non-streaming) explain
+  bodyEl.innerHTML = '<span class="digest-loading">Asking the model...</span>';
   try {
     const fd = new FormData();
     fd.append('ip', ip);
     const r = await fetch('/api/ai/explain', { method: 'POST', body: fd });
     if (!r.ok) {
       const errJ = await r.json().catch(function () { return {}; });
-      document.getElementById('ai-modal-body').textContent =
+      bodyEl.textContent =
         errJ.err === 'ai_disabled'
           ? 'AI features are disabled. Set MISTRAL_API_KEY in ~/.hp-server.env and restart.'
           : 'Could not generate profile (' + (errJ.err || ('http ' + r.status)) + ').';
       return;
     }
     const j = await r.json();
-    document.getElementById('ai-modal-meta').textContent =
-      j.visit_count + ' visits observed . country ' + (j.country || '\u2014');
-    const a = j.assessment;
-    if (a) {
-      const riskCls = a.risk_score >= 80 ? 'error' : (a.risk_score >= 50 ? 'warn' : 'success');
-      const actCls = (a.recommended_action || '').indexOf('block') === 0 ? 'error' : (a.recommended_action === 'monitor' ? 'warn' : 'success');
-      const conf = Math.round((a.confidence || 0) * 100);
-      let html = '<div class="assessment-row">'
-        + '<span class="kv-pill"><span class="k">actor</span><span class="v">' + escapeHtml(a.actor_type) + '</span></span>'
-        + '<span class="kv-pill ' + riskCls + '"><span class="k">risk</span><span class="v">' + a.risk_score + '/100</span></span>'
-        + '<span class="kv-pill"><span class="k">confidence</span><span class="v">' + conf + '%</span></span>'
-        + '<span class="kv-pill ' + actCls + '"><span class="k">action</span><span class="v">' + escapeHtml(a.recommended_action) + '</span></span>'
-        + '</div>'
-        + '<div class="assessment-prose">' + escapeHtml(a.reasoning) + '</div>';
-      if (a.indicators && a.indicators.length) {
-        html += '<div class="indicators">';
-        for (const i of a.indicators) html += '<span class="indicator">' + escapeHtml(i) + '</span>';
-        html += '</div>';
-      }
-      if ((a.recommended_action || '').indexOf('block') === 0) {
-        html += '<div class="ai-modal-actions" style="margin-top:1rem"><button class="btn btn-sm btn-danger" id="ai-apply-block" data-ip="' + escapeAttr(j.ip) + '"><i class="icon-ban"></i><span>Apply ' + escapeHtml(a.recommended_action) + '</span></button></div>';
-      }
-      document.getElementById('ai-modal-body').innerHTML = html;
-      const applyBtn = document.getElementById('ai-apply-block');
-      if (applyBtn) {
-        applyBtn.addEventListener('click', function () {
-          blockIp(applyBtn.getAttribute('data-ip'), 'ai: ' + a.recommended_action + ' . risk=' + a.risk_score);
-          document.getElementById('ai-modal-bg').classList.remove('open');
-        });
-      }
+    metaEl.textContent = j.visit_count + ' visits observed . country ' + (j.country || '\u2014');
+    if (j.assessment) {
+      renderAssessmentPills(j, bodyEl);
     } else if (j.raw) {
-      document.getElementById('ai-modal-body').textContent = j.raw;
+      bodyEl.textContent = j.raw;
     }
   } catch (err) {
-    document.getElementById('ai-modal-body').textContent = 'Network error.';
+    bodyEl.textContent = 'Network error.';
+  }
+}
+
+function renderAssessmentPills(j, bodyEl) {
+  const a = j.assessment;
+  const riskCls = a.risk_score >= 80 ? 'error' : (a.risk_score >= 50 ? 'warn' : 'success');
+  const actCls = (a.recommended_action || '').indexOf('block') === 0 ? 'error' : (a.recommended_action === 'monitor' ? 'warn' : 'success');
+  const conf = Math.round((a.confidence || 0) * 100);
+  let html = '<div class="assessment-row">'
+    + '<span class="kv-pill"><span class="k">actor</span><span class="v">' + escapeHtml(a.actor_type) + '</span></span>'
+    + '<span class="kv-pill ' + riskCls + '"><span class="k">risk</span><span class="v">' + a.risk_score + '/100</span></span>'
+    + '<span class="kv-pill"><span class="k">confidence</span><span class="v">' + conf + '%</span></span>'
+    + '<span class="kv-pill ' + actCls + '"><span class="k">action</span><span class="v">' + escapeHtml(a.recommended_action) + '</span></span>'
+    + '</div>'
+    + '<div class="assessment-prose">' + escapeHtml(a.reasoning) + '</div>';
+  if (a.indicators && a.indicators.length) {
+    html += '<div class="indicators">';
+    for (const i of a.indicators) html += '<span class="indicator">' + escapeHtml(i) + '</span>';
+    html += '</div>';
+  }
+  if ((a.recommended_action || '').indexOf('block') === 0) {
+    html += '<div class="ai-modal-actions" style="margin-top:1rem"><button class="btn btn-sm btn-danger" id="ai-apply-block" data-ip="' + escapeAttr(j.ip) + '"><i class="icon-ban"></i><span>Apply ' + escapeHtml(a.recommended_action) + '</span></button></div>';
+  }
+  bodyEl.innerHTML = html;
+  const applyBtn = document.getElementById('ai-apply-block');
+  if (applyBtn) {
+    applyBtn.addEventListener('click', function () {
+      blockIp(applyBtn.getAttribute('data-ip'), 'ai: ' + a.recommended_action + ' . risk=' + a.risk_score);
+      document.getElementById('ai-modal-bg').classList.remove('open');
+    });
   }
 }
 
@@ -833,6 +935,35 @@ async function loadClusters() {
 }
 loadClusters();
 setInterval(loadClusters, 60000);
+
+// Anomaly alerts (real-time via SSE + initial load from log)
+var anomalyBuffer = [];
+function renderAnomalies() {
+  const root = document.getElementById('anomaly-table');
+  if (!root) return;
+  if (!anomalyBuffer.length) {
+    root.innerHTML = '<div class="empty">No anomalies detected yet. Patterns build up as traffic flows in.</div>';
+    return;
+  }
+  root.innerHTML = anomalyBuffer.slice(0, 20).map(function (a) {
+    const dotCls = a.novelty === 'suspicious' ? 'suspicious' : (a.novelty === 'novel' ? 'novel' : 'expected');
+    return '<div class="anomaly-row">'
+      + '<div class="anomaly-dot ' + dotCls + '"></div>'
+      + '<div>'
+      + '<div class="pattern">' + escapeHtml(a.pattern || '') + '</div>'
+      + '<div class="summary">' + escapeHtml(a.summary || '') + ' <span class="cls-pill ' + dotCls + '">' + escapeHtml(a.novelty || '') + '</span> <span class="cls-pill muted">' + escapeHtml(a.attention || '') + '</span></div>'
+      + '</div>'
+      + '<div class="time">' + (a.timestamp ? fmtAgo(a.timestamp) : '') + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+RH.on('anomaly_detected', function (a) {
+  anomalyBuffer.unshift(a);
+  if (anomalyBuffer.length > 20) anomalyBuffer.pop();
+  renderAnomalies();
+});
+renderAnomalies();
 
 // Tunnel health
 async function loadTunnelHealth() {

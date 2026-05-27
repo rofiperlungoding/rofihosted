@@ -97,7 +97,7 @@ window.RH = (function () {
       backoff = 1000;
       setLiveBadge('live');
     });
-    ['stats_tick', 'visit', 'login_attempt', 'blocklist_change', 'uptime_probe'].forEach(function (name) {
+    ['stats_tick', 'visit', 'login_attempt', 'blocklist_change', 'uptime_probe', 'digest_ready', 'tunnel_health', 'anomaly_detected'].forEach(function (name) {
       es.addEventListener(name, function (ev) {
         try { emit(name, JSON.parse(ev.data)); } catch (e) {}
       });
