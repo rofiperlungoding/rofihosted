@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=18">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=18">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=18">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=19">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=19">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=19">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .dbc-stats {
@@ -37,6 +37,29 @@
     font-weight: 600;
     color: var(--text);
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .apikey-create { margin-top: .8rem; }
+  .apikey-scopes { display: flex; gap: 1rem; font-size: .82rem; }
+  .apikey-scopes label { display: flex; align-items: center; gap: .35rem; }
+  .apikey-table {
+    width: 100%; margin-top: 1rem; border-collapse: collapse; font-size: .85rem;
+  }
+  .apikey-table th, .apikey-table td {
+    padding: .5rem .65rem; text-align: left; border-bottom: 1px solid var(--border-soft);
+  }
+  .apikey-table th { color: var(--text-3); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+  .apikey-table td { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .8rem; color: var(--text); }
+  .apikey-table .scope-pill {
+    display: inline-block; padding: .1rem .45rem; border-radius: 4px;
+    background: var(--surface-2); font-size: .68rem; margin-right: .25rem;
+    border: 1px solid var(--border-soft);
+  }
+  .apikey-table .status-active { color: #16a34a; font-weight: 600; }
+  .apikey-table .status-revoked { color: var(--text-3); font-weight: 600; }
+  .apikey-fresh-key {
+    background: var(--surface-2); padding: .6rem .8rem; border-radius: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85rem;
+    word-break: break-all; user-select: text; margin-top: .5rem;
   }
 </style>
 </head>
@@ -167,6 +190,39 @@
     </div>
 
     <div class="form-card">
+      <h2>API keys</h2>
+      <p class="lead">Tokens that authorize your other apps and scripts to talk to <code>/v1/*</code> endpoints. Different from your operator login (which uses cookies). Each key has scopes; right now <code>sql</code> is the only one wired up (gives access to <code>POST /v1/execute</code> for arbitrary SQLite queries against DBs in <code>~/data/dbs/</code>).</p>
+      <p class="hint">A new key is shown once at creation. Save it somewhere safe; we only store its hash. Revoke any time, no grace period.</p>
+
+      <div class="apikey-create">
+        <input type="text" id="apikey-name" class="input" placeholder="Name (e.g. laptop-cli)" maxlength="64" style="margin-bottom:.6rem">
+        <div class="apikey-scopes">
+          <label><input type="checkbox" id="apikey-scope-sql" checked> sql</label>
+        </div>
+        <div class="submit-row" style="margin-top: .8rem">
+          <button type="button" class="btn btn-accent" id="apikey-create-btn"><span>Create key</span><i class="icon-key"></i></button>
+        </div>
+      </div>
+
+      <div id="apikey-fresh" class="alert" style="display:none; margin-top: 1rem"></div>
+
+      <table class="apikey-table" id="apikey-table" style="display:none">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Scopes</th>
+            <th>Created</th>
+            <th>Last used</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="apikey-rows"></tbody>
+      </table>
+      <div id="apikey-empty" class="hint">No API keys yet.</div>
+    </div>
+
+    <div class="form-card">
       <h2>Operator rules</h2>
       <p class="lead">Define your own event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and a list of actions. Actions are limited to <code>block</code>, <code>log</code>, and <code>increment</code>. Single-user, no sandboxing nightmare. Stored in <code>~/.hp-server-rules.jsonl</code>.</p>
       <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
@@ -181,8 +237,8 @@
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=18"></script>
-<script src="https://rofihosted.space/app.js?v=18"></script>
+<script src="https://rofihosted.space/theme.js?v=19"></script>
+<script src="https://rofihosted.space/app.js?v=19"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -312,6 +368,114 @@
     });
     loadDbcStats();
     setInterval(loadDbcStats, 30000);
+
+    // API keys
+    const apikeyRows = document.getElementById('apikey-rows');
+    const apikeyTable = document.getElementById('apikey-table');
+    const apikeyEmpty = document.getElementById('apikey-empty');
+    const apikeyFresh = document.getElementById('apikey-fresh');
+    const apikeyName = document.getElementById('apikey-name');
+    const apikeyCreateBtn = document.getElementById('apikey-create-btn');
+    const apikeyScopeSql = document.getElementById('apikey-scope-sql');
+
+    function fmtTs(t) {
+      if (!t) return '\u2014';
+      const d = new Date(t * 1000);
+      return d.toISOString().slice(0, 16).replace('T', ' ');
+    }
+    function escapeHtmlS(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function renderApikeys(keys) {
+      apikeyRows.innerHTML = '';
+      if (!keys || keys.length === 0) {
+        apikeyTable.style.display = 'none';
+        apikeyEmpty.style.display = '';
+        return;
+      }
+      apikeyEmpty.style.display = 'none';
+      apikeyTable.style.display = '';
+      keys.forEach(function (k) {
+        const tr = document.createElement('tr');
+        const scopeHtml = (k.scopes || []).map(function (s) { return '<span class="scope-pill">' + escapeHtmlS(s) + '</span>'; }).join('');
+        const statusHtml = k.revoked
+          ? '<span class="status-revoked">revoked</span>'
+          : '<span class="status-active">active</span>';
+        const action = k.revoked
+          ? ''
+          : '<button type="button" class="btn btn-sm" data-id="' + escapeHtmlS(k.id) + '">Revoke</button>';
+        tr.innerHTML = '<td>' + escapeHtmlS(k.name) + '</td>'
+          + '<td>' + scopeHtml + '</td>'
+          + '<td>' + fmtTs(k.created_at) + '</td>'
+          + '<td>' + (k.last_used ? fmtTs(k.last_used) : 'never') + '</td>'
+          + '<td>' + statusHtml + '</td>'
+          + '<td>' + action + '</td>';
+        const btn = tr.querySelector('button');
+        if (btn) {
+          btn.addEventListener('click', function () { revokeKey(k.id); });
+        }
+        apikeyRows.appendChild(tr);
+      });
+    }
+
+    function loadApikeys() {
+      fetch('/api/apikeys').then(function (r) { return r.json(); }).then(function (j) {
+        if (j.ok) renderApikeys(j.keys);
+      }).catch(function () {});
+    }
+
+    function revokeKey(id) {
+      if (!confirm('Revoke this API key? It will stop working immediately.')) return;
+      const fd = new FormData();
+      fd.append('id', id);
+      fetch('/api/apikeys/revoke', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function () { loadApikeys(); });
+    }
+
+    apikeyCreateBtn.addEventListener('click', function () {
+      const name = (apikeyName.value || '').trim();
+      if (!name) {
+        apikeyFresh.className = 'alert error';
+        apikeyFresh.innerHTML = '<i class="icon-exclamation"></i> Name is required.';
+        apikeyFresh.style.display = '';
+        return;
+      }
+      const scopes = [];
+      if (apikeyScopeSql.checked) scopes.push('sql');
+      if (scopes.length === 0) {
+        apikeyFresh.className = 'alert error';
+        apikeyFresh.innerHTML = '<i class="icon-exclamation"></i> Pick at least one scope.';
+        apikeyFresh.style.display = '';
+        return;
+      }
+      apikeyCreateBtn.disabled = true;
+      const fd = new FormData();
+      fd.append('name', name);
+      fd.append('scopes', scopes.join(','));
+      fetch('/api/apikeys/create', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          apikeyCreateBtn.disabled = false;
+          if (!j.ok) {
+            apikeyFresh.className = 'alert error';
+            apikeyFresh.innerHTML = '<i class="icon-exclamation"></i> Create failed: ' + escapeHtmlS(j.err || 'unknown');
+            apikeyFresh.style.display = '';
+            return;
+          }
+          apikeyFresh.className = 'alert success';
+          apikeyFresh.innerHTML = '<i class="icon-check"></i> Key created. Copy it now, you will not see it again.'
+            + '<div class="apikey-fresh-key">' + escapeHtmlS(j.key) + '</div>';
+          apikeyFresh.style.display = '';
+          apikeyName.value = '';
+          loadApikeys();
+        });
+    });
+
+    loadApikeys();
 
     // Operator rules
     const rulesText = document.getElementById('rules-json');

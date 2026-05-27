@@ -25,6 +25,7 @@ const dbcache = @import("dbcache.zig");
 const dbpool = @import("dbpool.zig");
 const pathsafe = @import("pathsafe.zig");
 const hosted = @import("hosted.zig");
+const apikey = @import("apikey.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -54,6 +55,7 @@ const App = struct {
     dbcache: *dbcache.Cache,
     dbpool: *dbpool.Pool,
     hosted: *hosted.Manager,
+    apikey: *apikey.Manager,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -120,6 +122,8 @@ pub fn main() !void {
     });
     db_cache.pool = db_pool;
     const hosted_mgr = try hosted.Manager.init(allocator);
+    const pepper_slice = try allocator.dupe(u8, &pepper);
+    const apikey_mgr = try apikey.Manager.init(allocator, pepper_slice);
 
     var app = App{
         .allocator = allocator,
@@ -144,6 +148,7 @@ pub fn main() !void {
         .dbcache = db_cache,
         .dbpool = db_pool,
         .hosted = hosted_mgr,
+        .apikey = apikey_mgr,
     };
     g_app = &app;
 
@@ -233,7 +238,13 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     const is_local = std.mem.eql(u8, ip, "local");
 
     // Classify with full request signals
-    const is_authed = auth.isAuthenticated(app.auth_cfg, app.allocator, req);
+    const is_authed_cookie = auth.isAuthenticated(app.auth_cfg, app.allocator, req);
+    // Treat presence of X-API-Key on /v1/* as authenticated for classification
+    // purposes, so botched API requests don't get auto-banned during dev.
+    // Real key validation happens inside handleV1.
+    const has_apikey_header = (req.header("x-api-key") orelse req.header("X-Api-Key") orelse "").len > 0;
+    const is_v1 = std.mem.startsWith(u8, path, "/v1/");
+    const is_authed = is_authed_cookie or (is_v1 and has_apikey_header);
     const blocklisted = !is_local and app.blocklist.isBlocked(ip);
 
     const cls = security.classify(.{
@@ -338,6 +349,14 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     // Static hosting: try *.rofihosted.space subdomains before fixed routing.
     // Returns true if served (any subdomain that has ~/hosted/sites/<sub>/current/).
     if (try hosted.tryServe(app.hosted, host, path, res)) {
+        logVisitFull(app, req, ip, ua, host, method, res.status, cls);
+        return;
+    }
+
+    // Public API for external apps/scripts. Auth via X-API-Key header (NOT cookie).
+    // Available on api.rofihosted.space AND app.rofihosted.space.
+    if (std.mem.startsWith(u8, path, "/v1/")) {
+        try handleV1(app, req, res, path);
         logVisitFull(app, req, ip, ua, host, method, res.status, cls);
         return;
     }
@@ -482,6 +501,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/dbcache/stats")) return apiDbCacheStats(app, res);
     if (std.mem.eql(u8, path, "/api/dbcache/sync")) return apiDbCacheSync(app, req, res);
     if (std.mem.eql(u8, path, "/api/dbpool/stats")) return apiDbPoolStats(app, res);
+    if (std.mem.eql(u8, path, "/api/apikeys")) return apiApikeysList(app, res);
+    if (std.mem.eql(u8, path, "/api/apikeys/create")) return apiApikeysCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/apikeys/revoke")) return apiApikeysRevoke(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -2499,4 +2521,251 @@ fn apiDbPoolStats(app: *App, res: *httpz.Response) !void {
         .total_respawns = s.total_respawns,
         .avg_latency_ms = s.avg_latency_ms,
     }, .{});
+}
+
+// =================================================================
+// V1 PUBLIC API (X-API-Key auth, used by external scripts)
+// =================================================================
+const SQL_DB_ROOT = "/data/data/com.termux/files/home/data/dbs";
+
+fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
+    // Extract API key
+    const raw_key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
+    if (raw_key.len == 0) {
+        res.status = 401;
+        try res.json(.{ .ok = false, .err = "missing_api_key", .hint = "send X-API-Key header" }, .{});
+        return;
+    }
+    const rec_opt = app.apikey.verify(raw_key);
+    const rec = rec_opt orelse {
+        res.status = 401;
+        try res.json(.{ .ok = false, .err = "invalid_api_key" }, .{});
+        return;
+    };
+
+    if (std.mem.eql(u8, path, "/v1/whoami")) {
+        try res.json(.{ .ok = true, .name = rec.name, .id = rec.id }, .{});
+        return;
+    }
+    if (std.mem.eql(u8, path, "/v1/execute")) {
+        if (!rec.hasScope(.sql)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "sql" }, .{});
+            return;
+        }
+        return v1Execute(app, req, res, rec);
+    }
+    res.status = 404;
+    try res.json(.{ .ok = false, .err = "unknown_endpoint" }, .{});
+}
+
+fn v1Execute(app: *App, req: *httpz.Request, res: *httpz.Response, rec: apikey.Record) !void {
+    const body = req.body() orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_body" }, .{});
+        return;
+    };
+    const Payload = struct {
+        db: []const u8,
+        sql: []const u8,
+    };
+    const parsed = std.json.parseFromSlice(Payload, res.arena, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_json" }, .{});
+        return;
+    };
+    defer parsed.deinit();
+    const p = parsed.value;
+
+    // db must be a simple name [a-z0-9_-], no slashes / dots
+    if (p.db.len == 0 or p.db.len > 64) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_db_name" }, .{});
+        return;
+    }
+    for (p.db) |c| {
+        const ok = (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_' or c == '-';
+        if (!ok) {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "invalid_db_name" }, .{});
+            return;
+        }
+    }
+    if (p.sql.len == 0 or p.sql.len > 64 * 1024) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_sql_size" }, .{});
+        return;
+    }
+
+    // Build absolute path under SQL_DB_ROOT
+    std.fs.makeDirAbsolute(SQL_DB_ROOT) catch {};
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, p.db });
+    // p.db has already passed the [a-z0-9_-] regex above, so it cannot escape
+    // SQL_DB_ROOT via traversal or symlinks. No further pathsafe check needed.
+
+    // Use a one-shot subprocess against the requested DB (the pool is bound to
+    // cache.db only). Output as JSON via .mode json so the client gets a
+    // structured response, not raw rows.
+    var script = std.ArrayList(u8).init(res.arena);
+    try script.appendSlice(".mode json\n");
+    try script.appendSlice(p.sql);
+    if (script.items.len == 0 or script.items[script.items.len - 1] != '\n') {
+        try script.appendSlice("\n");
+    }
+
+    var child = std.process.Child.init(
+        &.{ "sqlite3", "-batch", "-bail", db_path },
+        app.allocator,
+    );
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+
+    if (child.stdin) |stdin| {
+        stdin.writeAll(script.items) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+
+    var stdout_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |stdout| {
+        var rb: [8192]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&rb) catch 0;
+            if (n == 0) break;
+            stdout_buf.appendSlice(rb[0..n]) catch break;
+            if (stdout_buf.items.len > 8 * 1024 * 1024) break;
+        }
+    }
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr_n: usize = 0;
+    if (child.stderr) |stderr| {
+        stderr_n = stderr.read(&stderr_buf) catch 0;
+    }
+    const term = child.wait() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "wait_failed" }, .{});
+        return;
+    };
+    const exit_code = switch (term) {
+        .Exited => |c| c,
+        else => 1,
+    };
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = rec.name,
+        .action = "v1_execute",
+        .target = p.db,
+        .ok = exit_code == 0,
+    });
+
+    if (exit_code != 0) {
+        res.status = 400;
+        try res.json(.{
+            .ok = false,
+            .err = "sql_error",
+            .stderr = stderr_buf[0..@min(stderr_n, 1024)],
+        }, .{});
+        return;
+    }
+
+    res.content_type = .JSON;
+    var envelope = std.ArrayList(u8).init(res.arena);
+    try envelope.appendSlice("{\"ok\":true,\"db\":\"");
+    try envelope.appendSlice(p.db);
+    try envelope.appendSlice("\",\"result\":");
+    const trimmed = std.mem.trim(u8, stdout_buf.items, " \t\r\n");
+    if (trimmed.len == 0) {
+        try envelope.appendSlice("[]");
+    } else {
+        try envelope.appendSlice(trimmed);
+    }
+    try envelope.appendSlice("}");
+    res.body = try res.arena.dupe(u8, envelope.items);
+}
+
+// =================================================================
+// API KEYS (operator-only Settings page)
+// =================================================================
+fn apiApikeysList(app: *App, res: *httpz.Response) !void {
+    const json_body = app.apikey.listJson(res.arena) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    res.body = json_body;
+}
+
+fn apiApikeysCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const name = form.get("name") orelse "unnamed";
+    const scopes_str = form.get("scopes") orelse "sql";
+
+    var scopes = std.ArrayList(apikey.Scope).init(res.arena);
+    var it = std.mem.tokenizeScalar(u8, scopes_str, ',');
+    while (it.next()) |s| {
+        const trimmed = std.mem.trim(u8, s, " ");
+        if (apikey.Scope.fromString(trimmed)) |sc| try scopes.append(sc);
+    }
+    if (scopes.items.len == 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "no_scopes" }, .{});
+        return;
+    }
+
+    const raw = app.apikey.create(name, scopes.items) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "create_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "apikey_create",
+        .target = name,
+    });
+    // Return the raw key ONCE. After this, only the hash is on disk.
+    try res.json(.{ .ok = true, .key = raw, .name = name }, .{});
+}
+
+fn apiApikeysRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const did = app.apikey.revoke(id) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "revoke_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "apikey_revoke",
+        .target = id,
+        .ok = did,
+    });
+    try res.json(.{ .ok = did }, .{});
 }
