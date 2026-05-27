@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Projects / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=21">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=21">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=21">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  .projects-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem; margin-top: 1rem;
+  }
+  .project-card {
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    display: flex; flex-direction: column; gap: .55rem;
+    transition: border-color .15s;
+  }
+  .project-card:hover { border-color: var(--accent); }
+  .project-card .project-head {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem;
+  }
+  .project-card .project-name {
+    font-size: 1rem; font-weight: 600; color: var(--text);
+  }
+  .project-card .project-sub {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .76rem; color: var(--text-3);
+  }
+  .project-card .project-sub a { color: var(--accent); text-decoration: none !important; }
+  .project-card .project-meta {
+    display: flex; gap: .35rem; flex-wrap: wrap; font-size: .7rem;
+  }
+  .project-card .badge {
+    padding: .15rem .5rem; border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .68rem;
+    color: var(--text-2);
+  }
+  .project-card .badge.runtime-static { color: #16a34a; border-color: rgba(22,163,74,.4); }
+  .project-card .badge.runtime-node { color: #84cc16; border-color: rgba(132,204,22,.4); }
+  .project-card .badge.runtime-python { color: #3b82f6; border-color: rgba(59,130,246,.4); }
+  .project-card .badge.runtime-bun { color: #eab308; border-color: rgba(234,179,8,.4); }
+  .project-card .badge.status-running { color: #16a34a; }
+  .project-card .badge.status-failed { color: #ef4444; }
+  .project-card .badge.status-stopped { color: var(--text-3); }
+  .project-card .actions {
+    display: flex; gap: .4rem; margin-top: .3rem;
+  }
+
+  /* Wizard modal */
+  .wiz-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100; padding: 1rem;
+  }
+  .wiz-overlay.show { display: flex; }
+  .wiz-card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 1.5rem 1.6rem;
+    width: 100%; max-width: 560px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
+  }
+  .wiz-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: .9rem;
+  }
+  .wiz-title {
+    font-size: 1.1rem; font-weight: 600; color: var(--text);
+  }
+  .wiz-step {
+    color: var(--text-3); font-size: .78rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .wiz-stepper {
+    display: flex; gap: .35rem; margin-bottom: 1rem;
+  }
+  .wiz-stepper .dot {
+    flex: 1; height: 4px; border-radius: 2px;
+    background: var(--border-soft);
+    transition: background .15s;
+  }
+  .wiz-stepper .dot.done { background: var(--accent); }
+  .wiz-body label { display: block; font-size: .78rem; color: var(--text-2); margin: .8rem 0 .35rem; font-weight: 500; }
+  .wiz-body label .hint-inline { color: var(--text-3); font-weight: 400; font-size: .72rem; }
+  .wiz-body .input { width: 100%; }
+  .wiz-runtime-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: .5rem; margin-top: .35rem;
+  }
+  .wiz-runtime-grid .opt {
+    padding: .7rem .5rem; border: 1px solid var(--border-soft);
+    border-radius: 8px; text-align: center; cursor: pointer;
+    font-size: .82rem; color: var(--text-2);
+    transition: border-color .15s, background .15s;
+  }
+  .wiz-runtime-grid .opt:hover { border-color: var(--accent); }
+  .wiz-runtime-grid .opt.selected {
+    border-color: var(--accent); color: var(--text);
+    background: rgba(167,139,250,.1);
+  }
+  .wiz-secret-row {
+    display: grid; grid-template-columns: 1fr 1fr auto;
+    gap: .35rem; margin-top: .35rem; align-items: center;
+  }
+  .wiz-secret-row input { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; }
+  .wiz-secret-existing { font-size: .76rem; color: var(--text-3); margin-top: .35rem; }
+  .wiz-secret-existing .key {
+    display: inline-block; padding: .1rem .45rem; margin: .15rem .25rem 0 0;
+    background: var(--surface-2); border-radius: 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .72rem;
+    cursor: pointer;
+  }
+  .wiz-secret-existing .key:hover { color: #ef4444; }
+  .wiz-foot {
+    display: flex; justify-content: space-between; gap: .5rem; margin-top: 1.4rem;
+  }
+  .wiz-foot .btn { min-width: 100px; }
+
+  /* Detail panel */
+  .detail-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 99; padding: 1rem;
+  }
+  .detail-overlay.show { display: flex; }
+  .detail-card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 1.5rem 1.6rem;
+    width: 100%; max-width: 720px;
+    max-height: 90vh; overflow-y: auto;
+  }
+  .detail-row {
+    display: grid; grid-template-columns: 130px 1fr;
+    gap: .5rem; padding: .45rem 0;
+    border-bottom: 1px solid var(--border-soft);
+    align-items: center;
+  }
+  .detail-row:last-child { border-bottom: 0; }
+  .detail-row .label { font-size: .76rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  .detail-row .value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; color: var(--text); }
+  .detail-row .value.hilite { color: var(--accent); }
+
+  .empty-state {
+    text-align: center; padding: 3rem 1rem;
+    color: var(--text-3);
+  }
+  .empty-state h3 { color: var(--text-2); font-weight: 500; margin: 0 0 .5rem; }
+  .empty-state p { margin: 0 0 1rem; font-size: .9rem; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-paper-clip"></i>API</a>
+    <a class="nav-link active" href="/projects"><i class="icon-rocket"></i>Projects</a>
+    <div class="nav-section">Operations</div>
+    <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <div class="nav-foot">
+      <a class="logout" href="/logout"><i class="icon-logout"></i>Sign out</a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="drawer-toggle" data-drawer-toggle aria-label="Open menu"><i class="icon-menu"></i></button>
+      <div class="topbar-title">Projects</div>
+      <div class="topbar-right">
+        <button id="new-project-btn" class="btn btn-accent btn-sm"><i class="icon-plus"></i><span>New project</span></button>
+        <button class="theme-toggle" data-theme-toggle aria-label="Toggle theme"></button>
+        <span class="ws-status" id="ws-status">connecting</span>
+      </div>
+    </header>
+
+    <div class="form-card">
+      <h2>Your projects</h2>
+      <p class="lead">Each project owns a subdomain at <code>&lt;name&gt;.rofihosted.space</code> with its own working tree, encrypted secrets vault, and lifecycle. Static deploys serve from the latest release symlink. Backend runtimes (Node/Python/Bun) reverse-proxy to a project-allocated port (Phase C, coming).</p>
+
+      <div id="projects-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Wizard modal -->
+<div class="wiz-overlay" id="wiz-overlay" role="dialog" aria-modal="true">
+  <div class="wiz-card">
+    <div class="wiz-head">
+      <div class="wiz-title" id="wiz-title">New project</div>
+      <div class="wiz-step" id="wiz-step">step 1 of 4</div>
+    </div>
+    <div class="wiz-stepper">
+      <div class="dot done"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+    </div>
+    <div class="wiz-body" id="wiz-body"></div>
+    <div id="wiz-alert" class="alert" style="display:none; margin-top: 1rem"></div>
+    <div class="wiz-foot">
+      <button type="button" class="btn" id="wiz-cancel-btn"><span>Cancel</span></button>
+      <div style="flex:1"></div>
+      <button type="button" class="btn" id="wiz-back-btn" style="display:none"><span>Back</span></button>
+      <button type="button" class="btn btn-accent" id="wiz-next-btn"><span>Next</span><i class="icon-arrow-right"></i></button>
+    </div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="detail-overlay" id="detail-overlay" role="dialog" aria-modal="true">
+  <div class="detail-card">
+    <div class="wiz-head">
+      <div class="wiz-title" id="detail-title">Project detail</div>
+      <button type="button" class="btn btn-sm" id="detail-close-btn">Close</button>
+    </div>
+    <div id="detail-body"></div>
+  </div>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=21"></script>
+<script src="https://rofihosted.space/app.js?v=21"></script>
+<script>
+RH.loadCurrentUser();
+
+(function () {
+  const escapeHtml = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  const fmtTs = function (t) {
+    if (!t) return '\u2014';
+    return new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+  };
+
+  // ---------- Project list rendering ----------
+  let allProjects = [];
+
+  function renderProjects() {
+    const wrap = document.getElementById('projects-list');
+    if (!allProjects.length) {
+      wrap.innerHTML = '<div class="empty-state">'
+        + '<h3>No projects yet</h3>'
+        + '<p>Click <strong>New project</strong> above to deploy your first one.</p>'
+        + '</div>';
+      return;
+    }
+    let html = '<div class="projects-grid">';
+    allProjects.forEach(function (p) {
+      const url = 'https://' + p.subdomain + '.rofihosted.space';
+      html += '<div class="project-card" data-id="' + escapeHtml(p.id) + '">'
+        + '<div class="project-head">'
+        +   '<div>'
+        +     '<div class="project-name">' + escapeHtml(p.name) + '</div>'
+        +     '<div class="project-sub"><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(p.subdomain) + '.rofihosted.space</a></div>'
+        +   '</div>'
+        + '</div>'
+        + '<div class="project-meta">'
+        +   '<span class="badge runtime-' + escapeHtml(p.runtime) + '">' + escapeHtml(p.runtime) + '</span>'
+        +   '<span class="badge status-' + escapeHtml(p.status) + '">' + escapeHtml(p.status) + '</span>'
+        +   (p.port ? '<span class="badge">:' + p.port + '</span>' : '')
+        + '</div>'
+        + '<div class="actions">'
+        +   '<button type="button" class="btn btn-sm" data-action="detail">Details</button>'
+        +   '<button type="button" class="btn btn-sm" data-action="delete">Delete</button>'
+        + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('.project-card').forEach(function (card) {
+      const id = card.dataset.id;
+      card.querySelector('[data-action="detail"]').addEventListener('click', function () { showDetail(id); });
+      card.querySelector('[data-action="delete"]').addEventListener('click', function () { deleteProject(id); });
+    });
+  }
+
+  function loadProjects() {
+    fetch('/api/projects').then(function (r) { return r.json(); }).then(function (j) {
+      if (j.ok) {
+        allProjects = j.projects || [];
+        renderProjects();
+      }
+    });
+  }
+
+  function deleteProject(id) {
+    if (!confirm('Delete this project? The working tree under ~/data/projects/<id>/ stays on disk; only the registry entry and subdomain claim are removed.')) return;
+    const fd = new FormData();
+    fd.append('id', id);
+    fetch('/api/projects/delete', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function () { loadProjects(); });
+  }
+
+  // ---------- Detail modal ----------
+  function showDetail(id) {
+    const p = allProjects.find(function (x) { return x.id === id; });
+    if (!p) return;
+    document.getElementById('detail-title').textContent = p.name;
+    const url = 'https://' + p.subdomain + '.rofihosted.space';
+    let html = ''
+      + row('ID', '<span class="value">' + escapeHtml(p.id) + '</span>')
+      + row('URL', '<a class="value hilite" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(url) + '</a>')
+      + row('Runtime', '<span class="value">' + escapeHtml(p.runtime) + '</span>')
+      + row('Status', '<span class="value">' + escapeHtml(p.status) + '</span>')
+      + (p.port ? row('Port', '<span class="value">' + p.port + '</span>') : '')
+      + (p.repo_url ? row('Repo', '<a class="value hilite" href="' + escapeHtml(p.repo_url) + '" target="_blank" rel="noopener">' + escapeHtml(p.repo_url) + '</a>') : '')
+      + (p.branch ? row('Branch', '<span class="value">' + escapeHtml(p.branch) + '</span>') : '')
+      + (p.install_cmd ? row('Install', '<span class="value">' + escapeHtml(p.install_cmd) + '</span>') : '')
+      + (p.build_cmd ? row('Build', '<span class="value">' + escapeHtml(p.build_cmd) + '</span>') : '')
+      + (p.start_cmd ? row('Start', '<span class="value">' + escapeHtml(p.start_cmd) + '</span>') : '')
+      + row('Created', '<span class="value">' + fmtTs(p.created_at) + '</span>')
+      + row('Last deploy', '<span class="value">' + (p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never') + '</span>');
+
+    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Secrets</h3>'
+      + '<div id="detail-secrets" class="wiz-secret-existing">Loading...</div>'
+      + '<div class="wiz-secret-row" style="margin-top:.6rem">'
+      +   '<input class="input" id="detail-sk-key" placeholder="KEY">'
+      +   '<input class="input" id="detail-sk-val" type="password" placeholder="value">'
+      +   '<button type="button" class="btn btn-sm" id="detail-sk-add">Add</button>'
+      + '</div>';
+
+    document.getElementById('detail-body').innerHTML = html;
+    document.getElementById('detail-overlay').classList.add('show');
+
+    loadSecrets(id);
+    document.getElementById('detail-sk-add').addEventListener('click', function () { addSecret(id); });
+  }
+
+  function row(label, valueHtml) {
+    return '<div class="detail-row"><span class="label">' + escapeHtml(label) + '</span>' + valueHtml + '</div>';
+  }
+
+  function loadSecrets(id) {
+    fetch('/api/projects/secrets/list?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const wrap = document.getElementById('detail-secrets');
+        if (!wrap) return;
+        if (!j.ok) { wrap.textContent = 'Failed to load secrets.'; return; }
+        if (!j.keys || j.keys.length === 0) { wrap.innerHTML = '<em>No secrets yet. Values are AES-256-GCM encrypted at rest.</em>'; return; }
+        wrap.innerHTML = j.keys.map(function (k) {
+          return '<span class="key" data-k="' + escapeHtml(k) + '" title="Click to delete">' + escapeHtml(k) + '</span>';
+        }).join('');
+        wrap.querySelectorAll('.key').forEach(function (el) {
+          el.addEventListener('click', function () {
+            if (!confirm('Delete secret ' + el.dataset.k + '?')) return;
+            const fd = new FormData();
+            fd.append('project_id', id);
+            fd.append('key', el.dataset.k);
+            fetch('/api/projects/secrets/delete', { method: 'POST', body: fd })
+              .then(function (r) { return r.json(); })
+              .then(function () { loadSecrets(id); });
+          });
+        });
+      });
+  }
+
+  function addSecret(id) {
+    const k = document.getElementById('detail-sk-key').value.trim();
+    const v = document.getElementById('detail-sk-val').value;
+    if (!k) return;
+    const fd = new FormData();
+    fd.append('project_id', id);
+    fd.append('key', k);
+    fd.append('value', v);
+    fetch('/api/projects/secrets/set', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.ok) {
+          document.getElementById('detail-sk-key').value = '';
+          document.getElementById('detail-sk-val').value = '';
+          loadSecrets(id);
+        } else {
+          alert('Failed: ' + (j.err || 'unknown'));
+        }
+      });
+  }
+
+  document.getElementById('detail-close-btn').addEventListener('click', function () {
+    document.getElementById('detail-overlay').classList.remove('show');
+  });
+
+  // ---------- Wizard ----------
+  const wizState = {
+    step: 1,
+    name: '',
+    subdomain: '',
+    repo_url: '',
+    branch: 'main',
+    runtime: 'static',
+    install_cmd: '',
+    build_cmd: '',
+    start_cmd: '',
+    secrets: [], // [{key, value}, ...] applied after project create
+    createdId: null,
+  };
+
+  function openWizard() {
+    Object.assign(wizState, {
+      step: 1, name: '', subdomain: '', repo_url: '', branch: 'main',
+      runtime: 'static', install_cmd: '', build_cmd: '', start_cmd: '',
+      secrets: [], createdId: null,
+    });
+    renderWizard();
+    document.getElementById('wiz-overlay').classList.add('show');
+    document.getElementById('wiz-alert').style.display = 'none';
+  }
+  function closeWizard() {
+    document.getElementById('wiz-overlay').classList.remove('show');
+  }
+
+  function renderWizard() {
+    const stepNames = ['Source', 'Subdomain', 'Runtime', 'Secrets'];
+    document.getElementById('wiz-title').textContent = 'New project: ' + stepNames[wizState.step - 1];
+    document.getElementById('wiz-step').textContent = 'step ' + wizState.step + ' of 4';
+    const dots = document.querySelectorAll('.wiz-stepper .dot');
+    dots.forEach(function (d, i) {
+      if (i < wizState.step) d.classList.add('done');
+      else d.classList.remove('done');
+    });
+
+    const body = document.getElementById('wiz-body');
+    if (wizState.step === 1) {
+      body.innerHTML = ''
+        + '<label>Project name <span class="hint-inline">- shown in the dashboard</span></label>'
+        + '<input class="input" id="wiz-name" maxlength="64" value="' + escapeHtml(wizState.name) + '" placeholder="My blog">'
+        + '<label>Git repo URL <span class="hint-inline">- optional, leave blank for upload-only</span></label>'
+        + '<input class="input" id="wiz-repo" value="' + escapeHtml(wizState.repo_url) + '" placeholder="https://github.com/you/repo.git">'
+        + '<label>Branch <span class="hint-inline">- default main</span></label>'
+        + '<input class="input" id="wiz-branch" value="' + escapeHtml(wizState.branch) + '" placeholder="main">';
+    } else if (wizState.step === 2) {
+      body.innerHTML = ''
+        + '<label>Subdomain <span class="hint-inline">- [a-z0-9-], 1-63 chars, will be served at &lt;sub&gt;.rofihosted.space</span></label>'
+        + '<input class="input" id="wiz-sub" maxlength="63" value="' + escapeHtml(wizState.subdomain) + '" placeholder="my-blog">'
+        + '<p class="hint" id="wiz-sub-preview" style="margin-top:.6rem"></p>';
+      const sub = document.getElementById('wiz-sub');
+      const preview = document.getElementById('wiz-sub-preview');
+      const updatePreview = function () {
+        const v = sub.value.trim();
+        preview.innerHTML = v ? 'will be reachable at <strong>https://' + escapeHtml(v) + '.rofihosted.space</strong>' : '';
+      };
+      sub.addEventListener('input', updatePreview);
+      updatePreview();
+    } else if (wizState.step === 3) {
+      const opts = ['static', 'node', 'python', 'bun', 'generic'];
+      const optsHtml = opts.map(function (r) {
+        const sel = wizState.runtime === r ? 'selected' : '';
+        return '<div class="opt ' + sel + '" data-r="' + r + '">' + r + '</div>';
+      }).join('');
+      const showCmds = wizState.runtime !== 'static';
+      body.innerHTML = ''
+        + '<label>Runtime</label>'
+        + '<div class="wiz-runtime-grid">' + optsHtml + '</div>'
+        + '<label>Install command <span class="hint-inline">- runs once after clone (optional)</span></label>'
+        + '<input class="input" id="wiz-install" value="' + escapeHtml(wizState.install_cmd) + '" placeholder="npm ci">'
+        + '<label>Build command <span class="hint-inline">- runs after install (optional)</span></label>'
+        + '<input class="input" id="wiz-build" value="' + escapeHtml(wizState.build_cmd) + '" placeholder="npm run build">'
+        + (showCmds ? '<label>Start command <span class="hint-inline">- long-running, will be supervised</span></label>'
+            + '<input class="input" id="wiz-start" value="' + escapeHtml(wizState.start_cmd) + '" placeholder="node server.js">' : '');
+      body.querySelectorAll('.opt').forEach(function (el) {
+        el.addEventListener('click', function () {
+          wizState.runtime = el.dataset.r;
+          // Persist current inputs before re-rendering
+          if (document.getElementById('wiz-install')) wizState.install_cmd = document.getElementById('wiz-install').value;
+          if (document.getElementById('wiz-build')) wizState.build_cmd = document.getElementById('wiz-build').value;
+          if (document.getElementById('wiz-start')) wizState.start_cmd = document.getElementById('wiz-start').value;
+          renderWizard();
+        });
+      });
+    } else if (wizState.step === 4) {
+      let secretsHtml = '';
+      wizState.secrets.forEach(function (s, i) {
+        secretsHtml += '<div class="wiz-secret-row" data-i="' + i + '">'
+          + '<input class="input wiz-sk" value="' + escapeHtml(s.key) + '" placeholder="KEY">'
+          + '<input class="input wiz-sv" type="password" value="' + escapeHtml(s.value) + '" placeholder="value">'
+          + '<button type="button" class="btn btn-sm" data-rm>&minus;</button>'
+          + '</div>';
+      });
+      body.innerHTML = ''
+        + '<p class="hint">Optional. Anything you put here gets AES-256-GCM encrypted at rest and surfaces as env vars to your project at start time. Add as many as you need.</p>'
+        + '<div id="wiz-secrets-list">' + secretsHtml + '</div>'
+        + '<button type="button" class="btn btn-sm" id="wiz-add-secret" style="margin-top:.5rem"><i class="icon-plus"></i><span>Add secret</span></button>';
+      document.getElementById('wiz-add-secret').addEventListener('click', function () {
+        // Persist current values into state before re-rendering
+        captureSecrets();
+        wizState.secrets.push({ key: '', value: '' });
+        renderWizard();
+      });
+      document.querySelectorAll('[data-rm]').forEach(function (el) {
+        el.addEventListener('click', function () {
+          captureSecrets();
+          const i = parseInt(el.parentElement.dataset.i, 10);
+          wizState.secrets.splice(i, 1);
+          renderWizard();
+        });
+      });
+    }
+
+    // Footer state
+    document.getElementById('wiz-back-btn').style.display = wizState.step > 1 ? '' : 'none';
+    document.getElementById('wiz-next-btn').innerHTML = wizState.step === 4
+      ? '<span>Create project</span><i class="icon-check"></i>'
+      : '<span>Next</span><i class="icon-arrow-right"></i>';
+  }
+
+  function captureSecrets() {
+    const list = document.getElementById('wiz-secrets-list');
+    if (!list) return;
+    wizState.secrets = [];
+    list.querySelectorAll('.wiz-secret-row').forEach(function (row) {
+      const k = row.querySelector('.wiz-sk').value.trim();
+      const v = row.querySelector('.wiz-sv').value;
+      wizState.secrets.push({ key: k, value: v });
+    });
+  }
+
+  function captureCurrent() {
+    if (wizState.step === 1) {
+      wizState.name = (document.getElementById('wiz-name').value || '').trim();
+      wizState.repo_url = (document.getElementById('wiz-repo').value || '').trim();
+      wizState.branch = (document.getElementById('wiz-branch').value || 'main').trim();
+    } else if (wizState.step === 2) {
+      wizState.subdomain = (document.getElementById('wiz-sub').value || '').trim().toLowerCase();
+    } else if (wizState.step === 3) {
+      const inst = document.getElementById('wiz-install');
+      const bld = document.getElementById('wiz-build');
+      const st = document.getElementById('wiz-start');
+      if (inst) wizState.install_cmd = inst.value;
+      if (bld) wizState.build_cmd = bld.value;
+      if (st) wizState.start_cmd = st.value;
+    } else if (wizState.step === 4) {
+      captureSecrets();
+    }
+  }
+
+  function validate(step) {
+    if (step === 1) {
+      if (!wizState.name) return 'Name is required.';
+      if (wizState.name.length > 64) return 'Name too long (max 64 chars).';
+    } else if (step === 2) {
+      if (!wizState.subdomain) return 'Subdomain is required.';
+      if (!/^[a-z0-9](-?[a-z0-9])*$/.test(wizState.subdomain) || wizState.subdomain.length > 63) {
+        return 'Subdomain must be [a-z0-9-], no leading/trailing dash, max 63 chars.';
+      }
+      if (allProjects.find(function (p) { return p.subdomain === wizState.subdomain; })) {
+        return 'Subdomain already claimed by another project.';
+      }
+    }
+    return null;
+  }
+
+  document.getElementById('new-project-btn').addEventListener('click', openWizard);
+  document.getElementById('wiz-cancel-btn').addEventListener('click', closeWizard);
+  document.getElementById('wiz-back-btn').addEventListener('click', function () {
+    captureCurrent();
+    if (wizState.step > 1) {
+      wizState.step--;
+      renderWizard();
+    }
+  });
+  document.getElementById('wiz-next-btn').addEventListener('click', function () {
+    captureCurrent();
+    const err = validate(wizState.step);
+    if (err) {
+      const a = document.getElementById('wiz-alert');
+      a.className = 'alert error';
+      a.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(err);
+      a.style.display = '';
+      return;
+    }
+    document.getElementById('wiz-alert').style.display = 'none';
+    if (wizState.step < 4) {
+      wizState.step++;
+      renderWizard();
+      return;
+    }
+    // Final step: create the project, then push secrets one at a time.
+    submitWizard();
+  });
+
+  function submitWizard() {
+    const fd = new FormData();
+    fd.append('name', wizState.name);
+    fd.append('subdomain', wizState.subdomain);
+    fd.append('repo_url', wizState.repo_url);
+    fd.append('branch', wizState.branch);
+    fd.append('runtime', wizState.runtime);
+    fd.append('install_cmd', wizState.install_cmd);
+    fd.append('build_cmd', wizState.build_cmd);
+    fd.append('start_cmd', wizState.start_cmd);
+    document.getElementById('wiz-next-btn').disabled = true;
+    fetch('/api/projects/create', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        document.getElementById('wiz-next-btn').disabled = false;
+        if (!j.ok) {
+          const a = document.getElementById('wiz-alert');
+          a.className = 'alert error';
+          a.innerHTML = '<i class="icon-exclamation"></i> Create failed: ' + escapeHtml(j.err || 'unknown');
+          a.style.display = '';
+          return;
+        }
+        wizState.createdId = j.id;
+        // Push secrets in sequence
+        const valid = wizState.secrets.filter(function (s) { return s.key && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s.key); });
+        if (valid.length === 0) {
+          finishWizard();
+          return;
+        }
+        let i = 0;
+        const next = function () {
+          if (i >= valid.length) { finishWizard(); return; }
+          const s = valid[i++];
+          const f = new FormData();
+          f.append('project_id', j.id);
+          f.append('key', s.key);
+          f.append('value', s.value);
+          fetch('/api/projects/secrets/set', { method: 'POST', body: f })
+            .then(function (r) { return r.json(); })
+            .then(next).catch(next);
+        };
+        next();
+      });
+  }
+
+  function finishWizard() {
+    closeWizard();
+    loadProjects();
+  }
+
+  loadProjects();
+})();
+
+// SSE keep-alive
+RH.on('ready', function () { document.getElementById('ws-status').className = 'ws-status live'; document.getElementById('ws-status').textContent = 'live'; });
+RH.on('disconnected', function () { document.getElementById('ws-status').className = 'ws-status offline'; document.getElementById('ws-status').textContent = 'offline'; });
+RH.connectStream();
+</script>
+</body>
+</html>

@@ -27,6 +27,8 @@ const pathsafe = @import("pathsafe.zig");
 const hosted = @import("hosted.zig");
 const apikey = @import("apikey.zig");
 const webhook = @import("webhook.zig");
+const projects = @import("projects.zig");
+const projsecrets = @import("projsecrets.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -58,6 +60,8 @@ const App = struct {
     hosted: *hosted.Manager,
     apikey: *apikey.Manager,
     webhook: *webhook.Manager,
+    projects: *projects.Manager,
+    pepper: []const u8,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -127,6 +131,7 @@ pub fn main() !void {
     const pepper_slice = try allocator.dupe(u8, &pepper);
     const apikey_mgr = try apikey.Manager.init(allocator, pepper_slice);
     const webhook_mgr = try webhook.Manager.init(allocator);
+    const projects_mgr = try projects.Manager.init(allocator);
     // Wire bus -> webhook fan-out so any event published also fires matching
     // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
     bus.pub_callback = webhookFanOut;
@@ -157,6 +162,8 @@ pub fn main() !void {
         .hosted = hosted_mgr,
         .apikey = apikey_mgr,
         .webhook = webhook_mgr,
+        .projects = projects_mgr,
+        .pepper = pepper_slice,
     };
     g_app = &app;
 
@@ -354,6 +361,13 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         }
     }
 
+    // Project-aware subdomain routing. Static projects served from
+    // ~/data/projects/<id>/current/. Backend projects (later phase) reverse-proxied.
+    if (try tryServeProject(app, host, path, res)) {
+        logVisitFull(app, req, ip, ua, host, method, res.status, cls);
+        return;
+    }
+
     // Static hosting: try *.rofihosted.space subdomains before fixed routing.
     // Returns true if served (any subdomain that has ~/hosted/sites/<sub>/current/).
     if (try hosted.tryServe(app.hosted, host, path, res)) {
@@ -515,6 +529,13 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/webhooks")) return apiWebhooksList(app, res);
     if (std.mem.eql(u8, path, "/api/webhooks/create")) return apiWebhooksCreate(app, req, res);
     if (std.mem.eql(u8, path, "/api/webhooks/delete")) return apiWebhooksDelete(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects")) return apiProjectsList(app, res);
+    if (std.mem.eql(u8, path, "/api/projects/create")) return apiProjectsCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/update")) return apiProjectsUpdate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/delete")) return apiProjectsDelete(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/secrets/list")) return apiProjectSecretsList(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/secrets/set")) return apiProjectSecretsSet(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/secrets/delete")) return apiProjectSecretsDelete(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -563,6 +584,11 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/security")) {
         res.content_type = .HTML;
         res.body = @embedFile("templates/app-security.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/projects")) {
+        res.content_type = .HTML;
+        res.body = @embedFile("templates/app-projects.html");
         return;
     }
     return notFound(res);
@@ -2878,4 +2904,388 @@ fn apiWebhooksDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .ok = did,
     });
     try res.json(.{ .ok = did }, .{});
+}
+
+// =================================================================
+// PROJECTS (Netlify-style deployable units, full lifecycle)
+// =================================================================
+
+/// Try to serve a request from a project that owns the host's subdomain.
+/// Returns true if the request was handled (200/404/etc set on res).
+fn tryServeProject(app: *App, host: []const u8, req_path: []const u8, res: *httpz.Response) !bool {
+    const sub = hosted.extractSubdomain(host) orelse return false;
+    const project = app.projects.getBySubdomain(sub) orelse return false;
+
+    if (project.runtime == .static) {
+        return tryServeProjectStatic(app, project, req_path, res);
+    }
+
+    // Backend / dynamic project: reverse proxy is a Phase C item. For now,
+    // emit a clear placeholder so the operator sees what's happening.
+    res.status = 503;
+    res.content_type = .TEXT;
+    res.body = "backend project not running yet (Phase C: reverse proxy + supervisor)\n";
+    return true;
+}
+
+fn tryServeProjectStatic(app: *App, project: projects.Project, req_path: []const u8, res: *httpz.Response) !bool {
+    _ = app;
+    pathsafe.validateRequestPath(req_path) catch {
+        res.status = 400;
+        res.content_type = .TEXT;
+        res.body = "bad path\n";
+        return true;
+    };
+
+    const lookup = if (req_path.len == 1 and req_path[0] == '/') "/index.html" else req_path;
+
+    const proj_root = try std.fmt.allocPrint(
+        res.arena,
+        "{s}/{s}/current",
+        .{ projects.PROJECTS_DIR, project.id },
+    );
+
+    // Confirm current/ exists
+    var rbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const canonical = std.fs.realpath(proj_root, &rbuf) catch {
+        res.status = 503;
+        res.content_type = .TEXT;
+        res.body = "project not deployed yet\n";
+        return true;
+    };
+
+    const resolved = pathsafe.resolveWithinRoot(res.arena, canonical, lookup) catch |err| switch (err) {
+        error.FileNotFound, error.Unreadable => {
+            res.status = 404;
+            res.content_type = .TEXT;
+            res.body = "not found\n";
+            return true;
+        },
+        else => {
+            res.status = 400;
+            res.content_type = .TEXT;
+            res.body = "bad path\n";
+            return true;
+        },
+    };
+
+    const file = std.fs.openFileAbsolute(resolved, .{}) catch {
+        res.status = 404;
+        res.content_type = .TEXT;
+        res.body = "not found\n";
+        return true;
+    };
+    defer file.close();
+    const stat = file.stat() catch {
+        res.status = 404;
+        res.content_type = .TEXT;
+        res.body = "not found\n";
+        return true;
+    };
+    if (stat.kind == .directory) {
+        // dir hit -> try /index.html
+        const idx = try std.fmt.allocPrint(res.arena, "{s}/index.html", .{resolved});
+        const idx_file = std.fs.openFileAbsolute(idx, .{}) catch {
+            res.status = 404;
+            res.content_type = .TEXT;
+            res.body = "not found\n";
+            return true;
+        };
+        defer idx_file.close();
+        const body = try idx_file.readToEndAlloc(res.arena, 16 * 1024 * 1024);
+        res.status = 200;
+        res.header("Content-Type", "text/html; charset=utf-8");
+        res.header("Cache-Control", "public, max-age=60");
+        res.body = body;
+        return true;
+    }
+
+    const body = try file.readToEndAlloc(res.arena, 16 * 1024 * 1024);
+    const ct = projectMimeFromPath(resolved);
+    res.status = 200;
+    res.header("Content-Type", ct);
+    res.header("Cache-Control", "public, max-age=60");
+    res.body = body;
+    return true;
+}
+
+fn projectMimeFromPath(p: []const u8) []const u8 {
+    const ext_idx = std.mem.lastIndexOfScalar(u8, p, '.') orelse return "application/octet-stream";
+    const ext = p[ext_idx..];
+    if (std.mem.eql(u8, ext, ".html") or std.mem.eql(u8, ext, ".htm")) return "text/html; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".css")) return "text/css; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".js") or std.mem.eql(u8, ext, ".mjs")) return "application/javascript; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".json")) return "application/json; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".svg")) return "image/svg+xml";
+    if (std.mem.eql(u8, ext, ".png")) return "image/png";
+    if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) return "image/jpeg";
+    if (std.mem.eql(u8, ext, ".webp")) return "image/webp";
+    if (std.mem.eql(u8, ext, ".gif")) return "image/gif";
+    if (std.mem.eql(u8, ext, ".ico")) return "image/x-icon";
+    if (std.mem.eql(u8, ext, ".woff2")) return "font/woff2";
+    if (std.mem.eql(u8, ext, ".woff")) return "font/woff";
+    if (std.mem.eql(u8, ext, ".txt")) return "text/plain; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".md")) return "text/markdown; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".wasm")) return "application/wasm";
+    return "application/octet-stream";
+}
+
+fn apiProjectsList(app: *App, res: *httpz.Response) !void {
+    const json_body = app.projects.listJson(res.arena) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    res.body = json_body;
+}
+
+fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const name = form.get("name") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_name" }, .{});
+        return;
+    };
+    const subdomain = form.get("subdomain") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_subdomain" }, .{});
+        return;
+    };
+    const runtime_str = form.get("runtime") orelse "static";
+    const runtime = projects.Runtime.fromString(runtime_str) orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_runtime" }, .{});
+        return;
+    };
+
+    const project = app.projects.create(.{
+        .name = name,
+        .subdomain = subdomain,
+        .repo_url = form.get("repo_url") orelse "",
+        .branch = form.get("branch") orelse "main",
+        .runtime = runtime,
+        .install_cmd = form.get("install_cmd") orelse "",
+        .build_cmd = form.get("build_cmd") orelse "",
+        .start_cmd = form.get("start_cmd") orelse "",
+    }) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.SubdomainTaken => "subdomain_taken",
+            error.InvalidSubdomain => "invalid_subdomain",
+            error.InvalidName => "invalid_name",
+            error.PortExhausted => "port_exhausted",
+            else => "create_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_create",
+        .target = project.subdomain,
+    });
+    try res.json(.{ .ok = true, .id = project.id, .port = project.port }, .{});
+}
+
+fn apiProjectsUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    var input = projects.Manager.UpdateInput{};
+    if (form.get("name")) |v| input.name = v;
+    if (form.get("repo_url")) |v| input.repo_url = v;
+    if (form.get("branch")) |v| input.branch = v;
+    if (form.get("install_cmd")) |v| input.install_cmd = v;
+    if (form.get("build_cmd")) |v| input.build_cmd = v;
+    if (form.get("start_cmd")) |v| input.start_cmd = v;
+
+    const updated = app.projects.update(id, input) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.NotFound => "not_found",
+            error.InvalidName => "invalid_name",
+            else => "update_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_update",
+        .target = updated.id,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiProjectsDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    app.projects.delete(id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.NotFound => "not_found",
+            else => "delete_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_delete",
+        .target = id,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+// id-validating helper: must be 16 hex chars.
+fn isValidProjectId(id: []const u8) bool {
+    if (id.len != 16) return false;
+    for (id) |c| {
+        const ok = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f');
+        if (!ok) return false;
+    }
+    return true;
+}
+
+fn apiProjectSecretsList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const id = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const project_id = id.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(project_id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+
+    const keys = projsecrets.Vault.listKeys(res.arena, app.pepper, project_id) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "vault_unreadable" }, .{});
+        return;
+    };
+    try res.json(.{ .ok = true, .keys = keys }, .{});
+}
+
+fn apiProjectSecretsSet(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const project_id = form.get("project_id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_project_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(project_id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+    const k = form.get("key") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_key" }, .{});
+        return;
+    };
+    const v = form.get("value") orelse "";
+    if (!projsecrets.isValidKey(k)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_key" }, .{});
+        return;
+    }
+
+    projsecrets.Vault.setOne(app.allocator, app.pepper, project_id, k, v) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.InvalidKey => "invalid_key",
+            error.TooLarge => "too_large",
+            else => "set_failed",
+        };
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "secret_set",
+        .target = project_id,
+        .detail = k,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiProjectSecretsDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const project_id = form.get("project_id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_project_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const k = form.get("key") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_key" }, .{});
+        return;
+    };
+    projsecrets.Vault.setOne(app.allocator, app.pepper, project_id, k, "") catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "delete_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "secret_delete",
+        .target = project_id,
+        .detail = k,
+    });
+    try res.json(.{ .ok = true }, .{});
 }
