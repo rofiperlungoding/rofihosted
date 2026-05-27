@@ -38,6 +38,7 @@ const App = struct {
     bus: *events.Bus,
     ai_cfg: *ai.Config,
     annotation_cache: *ai.AnnotationCache,
+    semantic_cache: *ai.SemanticCache,
     tunnel_status: *tunnel_health.Status,
     geoblock: *geoblock.Config,
     embeddings: *embeddings.Store,
@@ -83,6 +84,8 @@ pub fn main() !void {
     ai_cfg.* = ai.Config.fromEnv(allocator);
     const annotation_cache = try allocator.create(ai.AnnotationCache);
     annotation_cache.* = ai.AnnotationCache.init(allocator);
+    const semantic_cache = try allocator.create(ai.SemanticCache);
+    semantic_cache.* = ai.SemanticCache.init(allocator);
     const tunnel_status = try allocator.create(tunnel_health.Status);
     tunnel_status.* = .{};
     const geo_cfg = try geoblock.Config.init(allocator);
@@ -102,6 +105,7 @@ pub fn main() !void {
         .bus = bus,
         .ai_cfg = ai_cfg,
         .annotation_cache = annotation_cache,
+        .semantic_cache = semantic_cache,
         .tunnel_status = tunnel_status,
         .geoblock = geo_cfg,
         .embeddings = emb_store,
@@ -395,6 +399,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/ai/policy/latest")) return apiPolicyLatest(app, res);
     if (std.mem.eql(u8, path, "/api/ai/policy/run")) return apiPolicyRun(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/query")) return apiAiQuery(app, req, res);
+    if (std.mem.eql(u8, path, "/api/ai/usage")) return apiAiUsage(app, res);
     if (std.mem.eql(u8, path, "/api/embeddings/clusters")) return apiEmbeddingsClusters(app, res);
     if (std.mem.eql(u8, path, "/api/embeddings/stats")) return apiEmbeddingsStats(app, res);
     if (std.mem.eql(u8, path, "/api/honeypot")) return apiHoneypotGet(app, res);
@@ -1902,4 +1907,35 @@ fn apiHoneypotUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .target = if (enabled) "on" else "off",
     });
     try res.json(.{ .ok = true }, .{});
+}
+
+// =================================================================
+// AI USAGE / OBSERVABILITY
+// =================================================================
+fn apiAiUsage(app: *App, res: *httpz.Response) !void {
+    app.ai_cfg.stats_mutex.lock();
+    const total_calls = app.ai_cfg.total_calls;
+    const prompt_tokens = app.ai_cfg.total_prompt_tokens;
+    const completion_tokens = app.ai_cfg.total_completion_tokens;
+    const cache_hits = app.ai_cfg.total_cache_hits;
+    const failures = app.ai_cfg.total_failures;
+    app.ai_cfg.stats_mutex.unlock();
+
+    const total_tokens = prompt_tokens + completion_tokens;
+    // Approximate cost: small model $0.15/M input + $0.60/M output
+    const cost_usd = @as(f64, @floatFromInt(prompt_tokens)) * 0.15 / 1_000_000.0 +
+        @as(f64, @floatFromInt(completion_tokens)) * 0.60 / 1_000_000.0;
+
+    try res.json(.{
+        .ok = true,
+        .total_calls = total_calls,
+        .total_tokens = total_tokens,
+        .prompt_tokens = prompt_tokens,
+        .completion_tokens = completion_tokens,
+        .cache_hits = cache_hits,
+        .failures = failures,
+        .semantic_cache_entries = app.semantic_cache.count(),
+        .estimated_cost_usd = cost_usd,
+        .uptime_seconds = std.time.timestamp() - app.started_at,
+    }, .{});
 }
