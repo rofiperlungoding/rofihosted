@@ -5,14 +5,14 @@ This document is a comprehensive context transfer for any AI assistant that need
 ## Identity
 
 - **Project name**: rofihosted
-- **Domain**: rofihosted.space (public landing), app.rofihosted.space (private console)
+- **Domain**: rofihosted.space (public landing), app.rofihosted.space (private console), `*.rofihosted.space` (static-site hosting for operator's projects)
 - **GitHub**: https://github.com/rofiperlungoding/rofihosted
 - **Operator**: Rofi (username `mrofid`), GitHub `rofiperlungoding`
 - **License**: MIT
 
 ## What this is
 
-A self-hosted control plane running on a Sharp Aquos Sense4 Plus phone (Snapdragon 720G, 8 GB RAM, Android 12, Termux). The phone sits on a home WiFi network with no public IP. A Cloudflare Tunnel exposes it to the internet. The entire server is a single Zig 0.14 binary (~13 MB, ~3 MB RSS idle) that handles HTTP, SSE, authentication, security, telemetry, file browsing, and AI features.
+A "kingdom of one" personal cloud running on a Sharp Aquos Sense4 Plus phone (Snapdragon 720G, 8 GB RAM, Android 12, Termux). The phone sits on a home WiFi network with no public IP. A Cloudflare Tunnel exposes it to the internet. The entire server is a single Zig 0.14 binary (~14 MB, ~3 MB RSS idle, ~30 MB warm) that handles HTTP, SSE, authentication, security, telemetry, file browsing, AI features, static site hosting at any `*.rofihosted.space`, an SQL-over-HTTP API for operator's other apps, and outbound webhooks.
 
 It is NOT a production SaaS. It is one person's home server that happens to be publicly accessible and well-engineered. The operator uses it to monitor and manage the phone remotely, learn Zig, and experiment with AI-powered security operations.
 
@@ -151,6 +151,67 @@ A tiny JSON DSL stored at `~/.hp-server-rules.jsonl` (one rule per line). Rules 
 - UI: textarea editor on the Settings page, live counters surfaced via `GET /api/rules`
 - Each rule is dispatched synchronously inside the request hot path, so conditions should stay small. Block actions feed straight into the same blocklist used by manual blocks.
 
+## Static site hosting (`*.rofihosted.space`)
+
+Operator's other projects (blogs, dashboards, tools) can be served as static sites at any `<sub>.rofihosted.space` without recompiling the binary.
+
+- Layout on disk:
+  - `~/hosted/sites/<sub>/releases/<UTC ts>/` for each deploy
+  - `~/hosted/sites/<sub>/current` symlink swapped atomically
+- Cloudflare DNS: wildcard CNAME `*.rofihosted.space` -> tunnel (added via `scripts/cf-route-wildcard.sh`).
+- Cloudflared ingress: simplified to `rofihosted.space` + `*.rofihosted.space`. Apex and reserved subdomains (`app`, `www`, `dashboard`, `status`, `api`, `files`) handled inside Zig server; everything else routes through the static-hosting layer.
+- Zig modules:
+  - `src/pathsafe.zig` - strict request path / subdomain validators, plus `resolveWithinRoot()` that uses `realpath()` to catch traversal and symlink escape.
+  - `src/hosted.zig` - per-site LRU cache (32 entries x 256 KB cap), MIME guessing for common web types, SPA fallback (touch `spa.flag` in current/), reserved subdomain blocklist.
+- Deploy workflow (`scripts/hosted-deploy.sh`):
+  1. Validate subdomain matches `[a-z0-9-]`, 1-63 chars
+  2. Copy source dir into `releases/<UTC ts>/`
+  3. `ln -sfn` swap of `current`
+  4. Prune old releases (keep last 5)
+  5. POST `/api/hosted/refresh?subdomain=<sub>` to bump in-process cache
+- API endpoints:
+  - `GET /api/hosted/stats` - per-site cache stats (hits, misses, deploys_seen)
+  - `GET /api/hosted/list` - all subdomains and their `current` targets
+  - `POST /api/hosted/refresh` (form: `subdomain=`) - drop in-memory cache for a site
+- Security: subdomain validator + path validator + realpath check inside `resolveWithinRoot` make traversal physically impossible. Reserved subdomain list means even `mkdir ~/hosted/sites/app` cannot override the real console.
+
+## V1 public API (`/v1/*`, X-API-Key auth)
+
+External apps and scripts (operator's laptop CLI, automation, mobile widgets) can talk to hp-server without a session cookie.
+
+- Auth via `X-API-Key: rh_<48 hex chars>` header. Keys are stored as SHA-256 hashes (with the same per-install pepper used for session HMAC) at `~/.hp-server-apikeys.jsonl`. Constant-time compare via `std.crypto.utils.timingSafeEql`.
+- Scopes: currently `sql` (gives access to `/v1/execute`). `read` reserved for future read-only `/api/*` mirroring.
+- Endpoints:
+  - `GET /v1/whoami` - returns `{name, id}` of the calling key
+  - `POST /v1/execute` - body `{db, sql}`, returns `{ok, db, result}`. Output uses `sqlite3 .mode json` so callers get structured rows. `db` must be a simple `[a-z0-9_-]` name resolving to `~/data/dbs/<db>.db`. Caps: 8 MB response, 64 KB SQL. All calls audited.
+- Operator-only management endpoints (cookie-gated, on `app.rofihosted.space`):
+  - `GET /api/apikeys` - list (no hashes returned)
+  - `POST /api/apikeys/create` (form: `name`, `scopes`) - returns the raw token ONCE
+  - `POST /api/apikeys/revoke` (form: `id`) - immediate invalidation, atomic file rewrite
+- UI: API keys form-card on `/settings`. Fresh key shown in a copy-paste-friendly monospace block, hash-only after that.
+- Classifier exemption: any `/v1/*` request with an `X-API-Key` header set is treated as authenticated for classifier/auto-ban purposes, so botched dev requests don't self-ban the dev IP.
+
+## SQLite subprocess pool
+
+Persistent `sqlite3 -batch -bail` workers keep DB connections warm across requests, dropping per-query latency from ~9 ms (one-shot subprocess) to ~1.8 ms.
+
+- `src/dbpool.zig`: N (default 3) long-lived sqlite3 shells with stdin/stdout pipes. Sentinel-based protocol (`SELECT '__SQL_DONE_<seq>__';` after each user query) marks query boundaries. Per-query timeout (15 s default) and max response cap (8 MB default). Workers respawn lazily on I/O errors.
+- Free-bit allocation via `u64` bitmap + try/spin-acquire. Each worker has its own mutex so two callers never interleave on the same shell.
+- Wired into `dbcache.execSqlCapture()` - if pool is set, fast path; on pool error, transparent fallback to one-shot subprocess.
+- `/api/dbpool/stats` exposes workers, free count, total_queries, errors, respawns, avg_latency_ms.
+
+## Outbound webhooks
+
+The lightweight alternative to embedding QuickJS for "react to internal events" automation. Operator points a webhook at any HTTPS endpoint (n8n, Cloudflare Worker, self-hosted receiver, Telegram via a bot, etc.) and gets POSTed JSON when events fire.
+
+- `src/webhook.zig`: persistent hooks at `~/.hp-server-webhooks.jsonl`. Each hook has name, URL, enabled flag, and a u16 events bitmask (`visit`, `login_attempt`, `blocklist_change`, `digest_ready`, `tunnel_health`, `anomaly_detected`, `rule_fired`).
+- Wire format: `POST <url>` with `Content-Type: application/json`, body `{"event": "<type>", "ts": <unix>, "payload": {...}}`. 5 second timeout, no retry queue (best-effort).
+- Dispatch via `curl` subprocess (same pattern as cloudflared/telegram). Stats per hook: fires, failures, last_status, last_fired.
+- Wiring: `events.Bus.pub_callback` is set in main.zig to `webhookFanOut()`, which translates the SSE event label back to a `webhook.EventType` and calls `mgr.fire()`. Decouples webhook module from Bus, no import cycle.
+- Endpoints: `GET /api/webhooks`, `POST /api/webhooks/create` (form: `name`, `url`, comma-separated `events`), `POST /api/webhooks/delete` (form: `id`).
+- UI: Webhooks form-card on `/settings`. Table shows fires/failures/last_status with green/red color coding.
+- Why webhooks instead of QuickJS: 0 attack surface (no script execution in-process), 0 OOM concerns, simpler ops. Operator can run as much logic as they want on the receiving side using whatever stack they prefer.
+
 ## AI features (comprehensive)
 
 All AI features are opt-in via `MISTRAL_API_KEY` in `~/.hp-server.env`. If the key is absent, everything degrades gracefully (server runs normally without AI).
@@ -280,7 +341,7 @@ All pages behind auth except the public landing. SaaS-style design with:
 | `/files` | Directory browser for ~/data and home |
 | `/api` | API explorer (documentation of all endpoints) |
 | `/security` | Daily digest, weekly policy, summary stats, top IPs with Explain/Block buttons, blocklist, login attempts, top UAs/paths/countries, tunnel health, behavioural clusters, anomaly alerts, log scrub findings, audit log |
-| `/settings` | Change credentials, geo-block toggle, honeypot toggle, database cache stats with manual sync, operator rules JSON editor |
+| `/settings` | Change credentials, geo-block toggle, honeypot toggle, database cache stats with manual sync, API keys (create/list/revoke), webhooks (create/list/delete), operator rules JSON editor |
 
 ### Real-time (SSE)
 
@@ -329,7 +390,21 @@ Mounted in the topbar of every authenticated page. Operator types natural langua
 - `POST /api/rules/replace` - replace the entire rule set (used by the JSON editor)
 - `GET /api/dbcache/stats` - cache row count, sync count, last sync time + duration
 - `GET /api/dbcache/sync` - trigger an incremental sync immediately
+- `GET /api/dbpool/stats` - persistent sqlite3 pool stats (workers, free, latency)
 - `GET /api/ai/scrub` - run a log scrub pass and return findings
+- `GET /api/hosted/list` - all hosted subdomains and their `current` targets
+- `GET /api/hosted/stats` - per-site cache stats
+- `POST /api/hosted/refresh` - drop in-memory cache for a site after deploy
+- `GET /api/apikeys` - list keys (no hashes)
+- `POST /api/apikeys/create` - create a new key, returns raw token once
+- `POST /api/apikeys/revoke` - revoke by id
+- `GET /api/webhooks` - list webhooks with stats
+- `POST /api/webhooks/create` - register a webhook
+- `POST /api/webhooks/delete` - delete by id
+
+### V1 public API (X-API-Key header, NOT cookie)
+- `GET /v1/whoami` - identifies the calling API key
+- `POST /v1/execute` - run SQL against `~/data/dbs/<db>.db`, returns JSON rows
 - `POST /api/ai/explain` - structured IP assessment
 - `POST /api/ai/explain/stream` - streaming IP explanation (SSE)
 - `GET /api/ai/digest/latest` - latest daily digest
@@ -413,7 +488,8 @@ All `.zig`, `.html`, `.css`, `.js` files are pure 7-bit ASCII. JS uses `\u00B0` 
 - v0.1.0: Initial deployment (Zig binary, Cloudflare Tunnel, auth, classifier, auto-ban, SSE, security headers)
 - v0.2.0: AI features (annotation, explain, digest), reliability (watchdog, tunnel health, backup, graceful shutdown), security (pepper, geoblock, audit log), quality (bundled font, CI)
 - Post-v0.2.0: AI v2 (structured outputs, embeddings, honeypot, weekly policy, query bar), AI v3 (streaming, observability, injection defense, semantic cache, reflection, anomaly detection), full frontend wiring
-- Current HEAD: buffered visit writes (`writebuf.zig`, 5s flush + SIGTERM-safe), operator rule engine (`rules.zig`, JSON DSL with 4 triggers and 3 action types), SQLite read-side cache (`dbcache.zig`, subprocess pattern, 5min sync, query-bar fast path), AI log scrubbing (`/api/ai/scrub`), Settings page database cache panel + Security page log scrub panel
+- Storage v2: buffered visit writes (`writebuf.zig`, 5s flush + SIGTERM-safe), operator rule engine (`rules.zig`, JSON DSL with 4 triggers and 3 action types), SQLite read-side cache (`dbcache.zig`, subprocess pattern, 5min sync, query-bar fast path), AI log scrubbing (`/api/ai/scrub`)
+- Current HEAD: kingdom of one expansion. `pathsafe.zig` (request path + subdomain validators + realpath escape check), `hosted.zig` static site hosting at `*.rofihosted.space` with atomic symlink deploys + per-site LRU cache + SPA fallback, `dbpool.zig` persistent sqlite3 subprocess pool (5x latency improvement), `apikey.zig` scoped tokens for `/v1/execute` SQL-over-HTTP, `webhook.zig` outbound HTTP fan-out wired into the event bus, watchdog v2 (HTTP /health probe + 384MB RSS ceiling + PREFIX export fix for cloudflared respawn)
 
 ## Extending this project
 

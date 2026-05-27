@@ -6,6 +6,36 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: kingdom of one expansion
+
+- **Static site hosting** at any `<sub>.rofihosted.space`. Layout: `~/hosted/sites/<sub>/releases/<UTC ts>/` with a `current` symlink that gets atomically swapped on deploy. Per-site LRU cache (32 entries x 256 KB cap). MIME guessing for common web types. SPA fallback (touch `spa.flag` in current/). New modules `pathsafe.zig` (strict path/subdomain validators + realpath-based escape check) and `hosted.zig`. Cloudflared ingress simplified to wildcard, Zig server dispatches by host. Reserved subdomain list (`app`, `www`, `dashboard`, `status`, `api`, `files`) so the static layer can never override the real console. New endpoints `/api/hosted/{stats,list,refresh}`. New deploy helper `scripts/hosted-deploy.sh`.
+
+- **Persistent sqlite3 subprocess pool** (`dbpool.zig`). N (default 3) long-lived `sqlite3 -batch -bail` workers with stdin/stdout pipes, sentinel-based query boundary protocol, per-query timeout (15 s), max response cap (8 MB). Wired into `dbcache.execSqlCapture()` as a fast path with transparent fallback to one-shot subprocess on pool error. Measured drop: ~9 ms/query (one-shot baseline) -> ~1.8 ms/query (pool, 30-call warmup, observed via `/api/dbpool/stats`).
+
+- **API key manager** (`apikey.zig`). Scoped tokens for the operator's other apps and scripts. Format `rh_<48 hex chars>`. Stored as SHA-256 hashes (with the same per-install pepper used for session HMAC) at `~/.hp-server-apikeys.jsonl`. Constant-time compare via `std.crypto.utils.timingSafeEql`. Atomic rewrite on revoke. Currently exposes one scope: `sql`. New endpoints: `GET /api/apikeys`, `POST /api/apikeys/create`, `POST /api/apikeys/revoke`. UI form-card on Settings page.
+
+- **`/v1/execute` SQL-over-HTTP** endpoint. Auth via `X-API-Key` header (NOT cookie). Body `{db, sql}`, returns `{ok, db, result}` with rows formatted via `sqlite3 .mode json`. `db` must be `[a-z0-9_-]` and resolves to `~/data/dbs/<db>.db`. 64 KB SQL cap, 8 MB response cap. All calls audited. Also `/v1/whoami` for key identification. Classifier exemption: `/v1/*` with `X-API-Key` header set is treated as authenticated for auto-ban purposes.
+
+- **Outbound webhook dispatcher** (`webhook.zig`). Operator-configured HTTP endpoints get POSTed `{event, ts, payload}` envelopes when internal events fire. 7 event types subscribable per hook, u16 events bitmask, persisted to `~/.hp-server-webhooks.jsonl`. Dispatch via curl subprocess (5 s timeout, no retry queue). Per-hook stats: fires, failures, last_status, last_fired. New endpoints `/api/webhooks{,/create,/delete}` plus a UI form-card on Settings. Wiring: `events.Bus.pub_callback` is set to `webhookFanOut()` in main.zig, decoupling the webhook module from the bus (no import cycle). Replaces the consultant-suggested QuickJS embed: 0 attack surface, 0 OOM concerns, simpler ops.
+
+### Changed
+- Watchdog v2 (`scripts/watchdog.sh`): explicit `PREFIX` export so cloudflared respawn from a clean env (boot, watchdog) still gets `/etc/resolv.conf` bound. HTTP `/health` probe with consecutive-failure threshold (3) catches deadlocks that `pgrep` misses. Hard 384 MB RSS ceiling triggers SIGTERM-then-restart so the visit write buffer flushes before Android's OOM killer hits.
+- All template asset query strings bumped to `?v=20`.
+
+### Added: AI v3 (mid-cycle, before kingdom of one)
+- **Streaming explain** at `POST /api/ai/explain/stream` (SSE token-by-token from Mistral). Frontend tries streaming first, falls back to structured `/api/ai/explain` if SSE fails.
+- **AI observability**: `~/data/ai-calls.jsonl` logs every Mistral call with feature, model, prompt/completion tokens, latency_ms, status. `/api/ai/usage` returns cumulative stats and estimated cost.
+- **Prompt injection defense**: all attacker-controlled data (UAs, paths, query text) is sanitized via `sanitizeUntrusted()` and wrapped in `<UNTRUSTED>...</UNTRUSTED>` tags. System prompts explicitly tell the model to treat that content as data only.
+- **Semantic prompt cache** for the query bar: embed the question, cache hit if cosine >= 0.95 against any cached question (10 min TTL, 256 max entries). On hit, returns instantly with no Mistral call and no token spend.
+- **Reflection pass** on weekly policy: medium model drafts, small model audits and softens aggressive recommendations.
+- **Anomaly detection**: when a new embedding pattern's nearest neighbor cosine < 0.7, fires `ai.explainAnomaly()` and publishes `anomaly_detected` SSE event.
+
+### Added: storage v2
+- **Buffered visit writes** (`writebuf.zig`): 5s flush interval with 256 KB cap, SIGTERM-safe (flush before httpz.stop). Reduces flash wear and syscall overhead. All `store.readVisits` callsites migrated to `readVisitsFresh(app, ...)` so reads see pending buffer data.
+- **Operator rule engine** (`rules.zig`): JSON DSL at `~/.hp-server-rules.jsonl`. 4 triggers (on_visit, on_login_attempt, on_blocklist_change, on_anomaly), AND-ed conditions (eq/neq/contains/not_contains/starts_with/ends_with), 3 action types (block, log, increment). CRUD via `GET/POST /api/rules` and `/api/rules/replace`. Settings page JSON editor.
+- **SQLite read-side cache** (`dbcache.zig`): WAL + synchronous=NORMAL, indexes on common filter columns, FTS5 over (path, ua, ip). 5-minute incremental sync from `visits.jsonl` based on byte offset. Subprocess pattern (sqlite3 CLI) because Termux's CRT files aren't shipped where Zig's linker expects.
+- **AI log scrubbing** (`/api/ai/scrub`): asks Mistral "is anything in last 7 days' scanner traffic actually a zero-day?". Returns structured findings with severity and category, persisted to `~/data/scrub.jsonl`.
+
 ### Added: AI v2
 
 - **Structured outputs everywhere**: auto-ban annotation and IP explain now use Mistral's `response_format: json_schema` mode and return typed assessments (`actor_type`, `risk_score 0-100`, `confidence 0.0-1.0`, `recommended_action: allow|monitor|block_24h|block_permanent`, indicators array). The Security UI renders these as colored pills and offers a one-click "Apply this action" button when the AI recommends a block.
@@ -16,10 +46,9 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - New endpoints (auth-required): `POST /api/ai/query`, `GET /api/ai/policy/latest`, `GET /api/ai/policy/run`, `GET /api/embeddings/clusters`, `GET /api/embeddings/stats`, `GET /api/honeypot`, `POST /api/honeypot/update`.
 - New per-feature rate limits in `ai.zig`: 1 embed/5s, 1 honeypot-gen/min, 1 policy/week, 1 query/4s.
 
-### Changed
+### Changed (AI v2)
 - `ai.zig` reorganised around two primitives: `complete()` for free text (digest only) and `completeJson()` for schema-validated structured output. The latter sends `response_format: {"type":"json_schema","json_schema":{...,"strict":true}}` so Mistral validates server-side.
 - `/api/ai/explain` now returns a typed `assessment` field instead of free-text `profile`. Falls back to `raw` if the model fails to conform to the schema.
-- All template asset query strings bumped to `?v=15`.
 
 ## [0.2.0] - 2026-05-27
 
