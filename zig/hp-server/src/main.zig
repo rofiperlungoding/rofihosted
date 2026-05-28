@@ -579,6 +579,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/projects/cron/toggle")) return apiCronToggle(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/cron/run")) return apiCronRun(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/preview-repo")) return apiProjectsPreviewRepo(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/analyze")) return apiProjectsAnalyze(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/projects/users")) return apiProjectsUsers(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/projects/tables")) return apiProjectsTables(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/log-stream")) return apiProjectsLogStream(app, req, res);
@@ -4464,4 +4465,166 @@ fn apiProjectsLogStream(app: *App, req: *httpz.Request, res: *httpz.Response) !v
         std.Thread.sleep(500 * std.time.ns_per_ms);
     }
     stream.writeAll("event: end\ndata: done\n\n") catch {};
+}
+
+// =================================================================
+// PROJECT AI ANALYZER (best-fit deploy config)
+// =================================================================
+fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    if (!app.ai_cfg.enabled()) {
+        res.status = 503;
+        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
+        return;
+    }
+    const body = req.body() orelse "";
+    const Payload = struct {
+        repo_url: []const u8,
+        branch: []const u8 = "main",
+    };
+    const parsed = std.json.parseFromSlice(Payload, res.arena, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_json" }, .{});
+        return;
+    };
+    defer parsed.deinit();
+    const p = parsed.value;
+    if (p.repo_url.len == 0 or p.repo_url.len > 512) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_repo_url" }, .{});
+        return;
+    }
+    if (!std.mem.startsWith(u8, p.repo_url, "https://") and !std.mem.startsWith(u8, p.repo_url, "git@")) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_protocol" }, .{});
+        return;
+    }
+
+    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    std.fs.makeDirAbsolute(tmp_root) catch {};
+    var rand: [8]u8 = undefined;
+    std.crypto.random.bytes(&rand);
+    const cs = "0123456789abcdef";
+    var rand_hex: [16]u8 = undefined;
+    for (rand, 0..) |b, i| {
+        rand_hex[i * 2] = cs[b >> 4];
+        rand_hex[i * 2 + 1] = cs[b & 0xf];
+    }
+    const tmp_dir = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_root, &rand_hex });
+    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    // Shallow clone
+    var argv = [_][]const u8{ "git", "clone", "--depth=1", "--single-branch", "--branch", p.branch, p.repo_url, tmp_dir };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+    var clone_err_buf: [1024]u8 = undefined;
+    var clone_err_n: usize = 0;
+    if (child.stderr) |stderr| clone_err_n = stderr.read(&clone_err_buf) catch 0;
+    const term = child.wait() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "wait_failed" }, .{});
+        return;
+    };
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        else => -1,
+    };
+    if (exit_code != 0) {
+        res.status = 400;
+        try res.json(.{
+            .ok = false,
+            .err = "clone_failed",
+            .stderr = clone_err_buf[0..@min(clone_err_n, 512)],
+        }, .{});
+        return;
+    }
+
+    // Detect framework first
+    const sug = detect.detect(res.arena, tmp_dir) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "detect_failed" }, .{});
+        return;
+    };
+
+    // Read package.json (truncated)
+    const pkg_path = try std.fmt.allocPrint(res.arena, "{s}/package.json", .{tmp_dir});
+    var pkg_content: []const u8 = "";
+    if (std.fs.openFileAbsolute(pkg_path, .{})) |pf| {
+        defer pf.close();
+        pkg_content = pf.readToEndAlloc(res.arena, 6 * 1024) catch "";
+    } else |_| {}
+
+    // Read README (truncated)
+    const readme_paths = [_][]const u8{ "README.md", "readme.md", "README", "Readme.md" };
+    var readme_content: []const u8 = "";
+    for (readme_paths) |rp| {
+        const path_full = std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_dir, rp }) catch continue;
+        if (std.fs.openFileAbsolute(path_full, .{})) |rf| {
+            defer rf.close();
+            readme_content = rf.readToEndAlloc(res.arena, 2 * 1024) catch "";
+            if (readme_content.len > 0) break;
+        } else |_| {}
+    }
+
+    // List repo root files (only top-level, max 50)
+    var file_list_buf = std.ArrayList(u8).init(res.arena);
+    if (std.fs.openDirAbsolute(tmp_dir, .{ .iterate = true })) |*dir_const| {
+        var dir = dir_const.*;
+        defer dir.close();
+        var it = dir.iterate();
+        var count: u32 = 0;
+        while (it.next() catch null) |entry| {
+            if (entry.name.len == 0 or entry.name[0] == '.') continue;
+            if (count >= 50) break;
+            file_list_buf.appendSlice(entry.name) catch break;
+            file_list_buf.append('\n') catch break;
+            count += 1;
+        }
+    } else |_| {}
+
+    const ai_result = ai.analyzeProject(app.ai_cfg, res.arena, .{
+        .framework_hint = sug.framework_hint,
+        .detected_runtime = sug.runtime,
+        .detected_install = sug.install_cmd,
+        .detected_build = sug.build_cmd,
+        .detected_start = sug.start_cmd,
+        .detected_publish = sug.publish_dir,
+        .package_json_excerpt = pkg_content,
+        .readme_excerpt = readme_content,
+        .file_list = file_list_buf.items,
+    }) orelse {
+        res.status = 502;
+        try res.json(.{ .ok = false, .err = "ai_failed" }, .{});
+        return;
+    };
+
+    // ai_result is already a JSON object. Wrap it with detection metadata.
+    var envelope = std.ArrayList(u8).init(res.arena);
+    try envelope.appendSlice("{\"ok\":true,\"detected\":{");
+    try envelope.appendSlice("\"framework_hint\":");
+    try std.json.stringify(sug.framework_hint, .{}, envelope.writer());
+    try envelope.appendSlice(",\"runtime\":");
+    try std.json.stringify(sug.runtime, .{}, envelope.writer());
+    try envelope.appendSlice(",\"install_cmd\":");
+    try std.json.stringify(sug.install_cmd, .{}, envelope.writer());
+    try envelope.appendSlice(",\"build_cmd\":");
+    try std.json.stringify(sug.build_cmd, .{}, envelope.writer());
+    try envelope.appendSlice(",\"start_cmd\":");
+    try std.json.stringify(sug.start_cmd, .{}, envelope.writer());
+    try envelope.appendSlice(",\"publish_dir\":");
+    try std.json.stringify(sug.publish_dir, .{}, envelope.writer());
+    try envelope.appendSlice("},\"ai\":");
+    try envelope.appendSlice(ai_result);
+    try envelope.appendSlice("}");
+    res.content_type = .JSON;
+    res.body = try res.arena.dupe(u8, envelope.items);
 }

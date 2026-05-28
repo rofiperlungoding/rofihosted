@@ -117,7 +117,23 @@
           <input class="input" id="wiz-repo" placeholder="https://github.com/you/repo" style="margin-bottom:.8rem">
           <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Branch</label>
           <input class="input" id="wiz-branch" value="main" placeholder="main" style="margin-bottom:.8rem">
-          <div id="wiz-detect-status" style="font-size:.76rem; color:var(--text-3); min-height:1.2rem"></div>
+          <div style="display:flex; gap:.5rem; align-items:center; margin-top:.4rem">
+            <button class="btn btn-sm" id="wiz-ai-analyze" type="button"><i class="icon-magic-wand"></i><span>Ask AI for best fit</span></button>
+            <span style="font-size:.72rem; color:var(--text-3)">Optional. AI inspects the repo and pre-fills optimal commands + flags.</span>
+          </div>
+          <div id="wiz-detect-status" style="font-size:.76rem; color:var(--text-3); margin-top:.6rem; min-height:1.2rem"></div>
+
+          <!-- AI analysis result panel -->
+          <div id="wiz-ai-result" style="display:none; margin-top:.8rem; padding:.8rem 1rem; background:var(--surface-2); border:1px solid var(--accent); border-radius:8px">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.5rem">
+              <strong style="font-size:.82rem; color:var(--accent)"><i class="icon-magic-wand"></i> AI analysis</strong>
+              <span id="wiz-ai-confidence" style="font-size:.72rem; color:var(--text-3); font-family:ui-monospace,monospace"></span>
+            </div>
+            <div id="wiz-ai-summary" style="font-size:.82rem; color:var(--text); margin-bottom:.6rem; line-height:1.45"></div>
+            <div id="wiz-ai-concerns" style="font-size:.76rem; color:var(--warning); margin-bottom:.4rem; line-height:1.45"></div>
+            <div id="wiz-ai-opts" style="font-size:.76rem; color:var(--text-2); margin-bottom:.4rem; line-height:1.45"></div>
+            <div id="wiz-ai-env" style="font-size:.76rem; color:var(--text-2); line-height:1.45"></div>
+          </div>
         </div>
 
         <!-- Step 2: Configure -->
@@ -273,6 +289,88 @@ RH.loadCurrentUser();
     document.getElementById('wiz-start-row').style.display = isStatic ? 'none' : '';
   });
 
+  // AI analyze button
+  document.getElementById('wiz-ai-analyze').addEventListener('click', function () {
+    var repo = document.getElementById('wiz-repo').value.trim();
+    var branch = document.getElementById('wiz-branch').value.trim() || 'main';
+    if (!repo) { showAlert('Paste a repo URL first.'); return; }
+    var btn = this;
+    var statusEl = document.getElementById('wiz-detect-status');
+    var resultEl = document.getElementById('wiz-ai-result');
+    btn.disabled = true;
+    statusEl.textContent = 'AI is analyzing your repo. This may take 10-20 seconds...';
+    resultEl.style.display = 'none';
+
+    fetch('/api/projects/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_url: repo, branch: branch })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      btn.disabled = false;
+      statusEl.textContent = '';
+      if (!j.ok) { showAlert('AI analysis failed: ' + (j.err || 'unknown')); return; }
+
+      var det = j.detected || {};
+      var ai = j.ai || {};
+
+      // Fill the form fields with AI's recommended values
+      document.getElementById('wiz-name').value = (ai.summary || '').split(/[.\s-]/)[0] || '';
+      document.getElementById('wiz-runtime').value = ai.runtime || det.runtime || 'static';
+      document.getElementById('wiz-install').value = ai.install_cmd || det.install_cmd || '';
+      document.getElementById('wiz-build').value = ai.build_cmd || det.build_cmd || '';
+      document.getElementById('wiz-publish').value = ai.publish_dir || det.publish_dir || '';
+      document.getElementById('wiz-start').value = ai.start_cmd || det.start_cmd || '';
+      var isStatic = (ai.runtime || det.runtime) === 'static';
+      document.getElementById('wiz-publish-row').style.display = isStatic ? '' : 'none';
+      document.getElementById('wiz-start-row').style.display = isStatic ? 'none' : '';
+
+      // Pre-load expected env vars into wizard envs (without values, operator fills them)
+      if (Array.isArray(ai.expected_env)) {
+        ai.expected_env.forEach(function (e) {
+          if (e.key && !wiz.envs.find(function (x) { return x.key === e.key; })) {
+            wiz.envs.push({ key: e.key, value: '', _hint: e.description, _required: e.required });
+          }
+        });
+      }
+
+      // Render the AI result panel
+      var conf = Math.round((ai.confidence || 0) * 100);
+      document.getElementById('wiz-ai-confidence').textContent = 'confidence ' + conf + '%';
+      document.getElementById('wiz-ai-summary').textContent = ai.summary || '';
+
+      var concerns = ai.concerns || [];
+      if (concerns.length) {
+        document.getElementById('wiz-ai-concerns').innerHTML = '<strong>Concerns:</strong> '
+          + concerns.map(escapeHtml).join('<br>');
+      } else {
+        document.getElementById('wiz-ai-concerns').innerHTML = '';
+      }
+
+      var opts = ai.optimizations || [];
+      if (opts.length) {
+        document.getElementById('wiz-ai-opts').innerHTML = '<strong>Optimizations applied:</strong> '
+          + opts.map(escapeHtml).join('<br>');
+      } else {
+        document.getElementById('wiz-ai-opts').innerHTML = '';
+      }
+
+      var envHints = (ai.expected_env || []).map(function (e) {
+        return escapeHtml(e.key) + (e.required ? ' <em>(required)</em>' : '') + ' - ' + escapeHtml(e.description);
+      });
+      if (envHints.length) {
+        document.getElementById('wiz-ai-env').innerHTML = '<strong>Suggested env vars (added to step 3):</strong> '
+          + envHints.join('<br>');
+      } else {
+        document.getElementById('wiz-ai-env').innerHTML = '';
+      }
+      resultEl.style.display = '';
+    }).catch(function () {
+      btn.disabled = false;
+      statusEl.textContent = '';
+      showAlert('Network error during AI analysis.');
+    });
+  });
+
   // Env var add
   document.getElementById('wiz-env-add').addEventListener('click', function () {
     var k = document.getElementById('wiz-env-key').value.trim();
@@ -287,10 +385,16 @@ RH.loadCurrentUser();
   function renderEnvList() {
     var html = '';
     wiz.envs.forEach(function (e, i) {
-      html += '<div style="display:flex; align-items:center; gap:.4rem; padding:.3rem 0; border-bottom:1px solid var(--border-soft)">'
-        + '<span style="font-family:ui-monospace,monospace; font-size:.78rem; color:var(--text); flex:1">' + escapeHtml(e.key) + '</span>'
-        + '<span style="font-size:.74rem; color:var(--text-3)">set</span>'
+      var hint = e._hint ? ' <span style="color:var(--text-3); font-weight:400">- ' + escapeHtml(e._hint) + '</span>' : '';
+      var req = e._required ? ' <span style="color:var(--warning); font-weight:600">required</span>' : '';
+      var hasValue = e.value && e.value.length > 0;
+      html += '<div style="padding:.4rem 0; border-bottom:1px solid var(--border-soft)">'
+        + '<div style="display:flex; align-items:center; gap:.4rem">'
+        + '<span style="font-family:ui-monospace,monospace; font-size:.78rem; color:var(--text); flex:1">' + escapeHtml(e.key) + req + '</span>'
+        + (hasValue ? '<span style="font-size:.74rem; color:#16a34a">set</span>' : '<input class="input" data-edit="' + i + '" type="password" placeholder="value" style="width:140px; font-size:.78rem; padding:.3rem .5rem">')
         + '<button class="btn btn-sm" data-rm="' + i + '" style="padding:.1rem .4rem; font-size:.7rem">x</button>'
+        + '</div>'
+        + (hint ? '<div style="font-size:.7rem; color:var(--text-3); margin-top:.2rem">' + escapeHtml(e._hint || '') + '</div>' : '')
         + '</div>';
     });
     document.getElementById('wiz-env-list').innerHTML = html;
@@ -298,6 +402,11 @@ RH.loadCurrentUser();
       b.addEventListener('click', function () {
         wiz.envs.splice(parseInt(b.dataset.rm, 10), 1);
         renderEnvList();
+      });
+    });
+    document.querySelectorAll('[data-edit]').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        wiz.envs[parseInt(inp.dataset.edit, 10)].value = inp.value;
       });
     });
   }
@@ -354,6 +463,7 @@ RH.loadCurrentUser();
         showAlert('Subdomain must be lowercase letters, numbers, and dashes (1-63 chars, no leading/trailing dash).');
         return;
       }
+      renderEnvList();
       showStep(3);
       return;
     }
