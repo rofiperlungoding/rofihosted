@@ -479,6 +479,62 @@ window.RH = (function () {
     root.innerHTML = '<div class="rh-ask-explanation">' + escapeHtml(ex) + '</div>' + body;
   }
 
+  // --- Power monitor banner ---
+  // Sharp Aquos S40P bootloops when unplugged, so we surface charger state
+  // prominently on every dashboard page. Polls /api/system/power every 30s
+  // and renders a top-of-page banner when discharging.
+  function startPowerBanner() {
+    var lastStatus = null;
+
+    function ensureBanner() {
+      var el = document.getElementById('rh-power-banner');
+      if (el) return el;
+      el = document.createElement('div');
+      el.id = 'rh-power-banner';
+      el.style.cssText = 'display:none; position:sticky; top:0; left:0; right:0; z-index:50; padding:.65rem 1rem; font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; font-size:.85rem; font-weight:500; text-align:center; line-height:1.45; backdrop-filter:blur(6px);';
+      var main = document.querySelector('.main');
+      if (main) main.insertBefore(el, main.firstChild);
+      else document.body.insertBefore(el, document.body.firstChild);
+      return el;
+    }
+
+    function paint(status, pct) {
+      var el = ensureBanner();
+      if (status === 'discharging' || status === 'not_charging') {
+        el.style.display = '';
+        el.style.background = 'rgba(239, 68, 68, 0.15)';
+        el.style.borderBottom = '1px solid rgba(239, 68, 68, 0.4)';
+        el.style.color = '#ef4444';
+        el.innerHTML = '<i class="icon-power" style="margin-right:.4rem"></i><strong>Charger disconnected</strong> &mdash; ' + pct + '% battery, device may bootloop. Reconnect AC power.';
+      } else if (status === 'charging' || status === 'full') {
+        // Hide cleanly when plugged again.
+        el.style.display = 'none';
+      } else {
+        el.style.display = 'none';
+      }
+    }
+
+    async function tick() {
+      try {
+        var r = await fetch('/api/system/power');
+        var j = await r.json();
+        if (!j.ok || !j.available) return;
+        paint(j.status, j.percentage);
+        lastStatus = j.status;
+      } catch (e) {}
+    }
+    tick();
+    setInterval(tick, 30000);
+  }
+
+  // Auto-start the power banner once DOM is ready (every page that loads
+  // app.js gets it; cheap because it's just one fetch every 30s).
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startPowerBanner);
+  } else {
+    startPowerBanner();
+  }
+
   return {
     fmtUptime: fmtUptime, fmtAgo: fmtAgo, fmtSize: fmtSize, fmtKB: fmtKB, fmtTime: fmtTime,
     escapeHtml: escapeHtml, setText: setText, barClass: barClass,

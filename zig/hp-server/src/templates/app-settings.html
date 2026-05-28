@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=29">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=29">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=29">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=30">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=30">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=30">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .dbc-stats {
@@ -257,6 +257,38 @@
     </div>
 
     <div class="form-card">
+      <h2>Backups</h2>
+      <p class="lead">Snapshot the irreplaceable bits (registry, project DBs, encrypted secrets vaults) into a tarball. Local copies are kept in <code>~/backups/</code>; if Cloudflare R2 is configured, a copy is also pushed offsite. Run <code>~/r2-setup.sh</code> from the Shell page once to wire R2 credentials.</p>
+
+      <div style="display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem">
+        <button type="button" class="btn btn-accent" id="backup-now-local"><i class="icon-cloud-download"></i><span>Backup local now</span></button>
+        <button type="button" class="btn btn-accent" id="backup-now-r2"><i class="icon-cloud-upload"></i><span>Backup to R2 now</span></button>
+        <button type="button" class="btn" id="backup-refresh"><i class="icon-refresh"></i><span>Refresh list</span></button>
+      </div>
+
+      <div id="backup-alert" class="alert" style="display:none; margin-bottom: 1rem"></div>
+
+      <div style="display:grid; gap: 1rem; grid-template-columns: 1fr;" id="backup-grid">
+        <div>
+          <h3 style="font-size:.85rem; margin: 0 0 .5rem; color: var(--text-2)">Local <span id="bk-local-count" style="color: var(--text-3); font-weight: 400; font-size: .76rem"></span></h3>
+          <table id="bk-local-table" class="table" style="font-size: .82rem">
+            <thead><tr><th>name</th><th style="text-align:right">size</th><th style="text-align:right">when</th></tr></thead>
+            <tbody id="bk-local-rows"></tbody>
+          </table>
+          <div id="bk-local-empty" class="hint">No local backups yet.</div>
+        </div>
+        <div>
+          <h3 style="font-size:.85rem; margin: 0 0 .5rem; color: var(--text-2)">Cloudflare R2 <span id="bk-r2-count" style="color: var(--text-3); font-weight: 400; font-size: .76rem"></span></h3>
+          <table id="bk-r2-table" class="table" style="font-size: .82rem">
+            <thead><tr><th>name</th><th style="text-align:right">size</th></tr></thead>
+            <tbody id="bk-r2-rows"></tbody>
+          </table>
+          <div id="bk-r2-empty" class="hint">R2 not configured yet. Open <a href="/shell">Shell</a> and run <code>bash ~/r2-setup.sh</code>.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-card">
       <h2>Operator rules</h2>
       <p class="lead">Define your own event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and a list of actions. Actions are limited to <code>block</code>, <code>log</code>, and <code>increment</code>. Single-user, no sandboxing nightmare. Stored in <code>~/.hp-server-rules.jsonl</code>.</p>
       <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
@@ -271,8 +303,8 @@
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=29"></script>
-<script src="https://rofihosted.space/app.js?v=29"></script>
+<script src="https://rofihosted.space/theme.js?v=30"></script>
+<script src="https://rofihosted.space/app.js?v=30"></script>
 <script>
   (function () {
     const params = new URLSearchParams(location.search);
@@ -602,6 +634,107 @@
 
     loadWebhooks();
     setInterval(loadWebhooks, 30000);
+
+    // ---- Backups card ----
+    function fmtSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+      return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+    function fmtAgo(unix) {
+      var ago = Math.floor(Date.now() / 1000 - unix);
+      if (ago < 60) return ago + 's ago';
+      if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
+      if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+      return Math.floor(ago / 86400) + 'd ago';
+    }
+    function showBackupAlert(msg, kind) {
+      var a = document.getElementById('backup-alert');
+      a.className = 'alert ' + (kind || '');
+      a.innerHTML = '<i class="icon-' + (kind === 'success' ? 'check' : kind === 'error' ? 'exclamation' : 'info') + '"></i> ' + msg;
+      a.style.display = '';
+    }
+    function loadBackups() {
+      fetch('/api/system/backups').then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) return;
+        var localRows = document.getElementById('bk-local-rows');
+        var localEmpty = document.getElementById('bk-local-empty');
+        var localCount = document.getElementById('bk-local-count');
+        localRows.innerHTML = '';
+        if (j.local && j.local.length) {
+          j.local.sort(function (a, b) { return b.mtime - a.mtime; });
+          j.local.forEach(function (b) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td style="font-family:ui-monospace,monospace; font-size:.78rem">' + RH.escapeHtml(b.name) + '</td>'
+              + '<td style="text-align:right">' + fmtSize(b.size) + '</td>'
+              + '<td style="text-align:right; color: var(--text-3)">' + fmtAgo(b.mtime) + '</td>';
+            localRows.appendChild(tr);
+          });
+          localEmpty.style.display = 'none';
+          document.getElementById('bk-local-table').style.display = '';
+          localCount.textContent = '(' + j.local.length + ')';
+        } else {
+          localEmpty.style.display = '';
+          document.getElementById('bk-local-table').style.display = 'none';
+          localCount.textContent = '';
+        }
+
+        var r2Rows = document.getElementById('bk-r2-rows');
+        var r2Empty = document.getElementById('bk-r2-empty');
+        var r2Count = document.getElementById('bk-r2-count');
+        r2Rows.innerHTML = '';
+        if (j.remote && j.remote.length) {
+          j.remote.sort(function (a, b) { return a.name < b.name ? 1 : -1; });
+          j.remote.forEach(function (b) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td style="font-family:ui-monospace,monospace; font-size:.78rem">' + RH.escapeHtml(b.name) + '</td>'
+              + '<td style="text-align:right">' + fmtSize(b.size) + '</td>';
+            r2Rows.appendChild(tr);
+          });
+          r2Empty.style.display = 'none';
+          document.getElementById('bk-r2-table').style.display = '';
+          r2Count.textContent = '(' + j.remote.length + ')';
+        } else {
+          if (j.r2_configured) {
+            r2Empty.textContent = 'R2 configured but no backups uploaded yet. Click "Backup to R2 now".';
+          } else {
+            r2Empty.innerHTML = 'R2 not configured yet. Open <a href="/shell">Shell</a> and run <code>bash ~/r2-setup.sh</code>.';
+          }
+          r2Empty.style.display = '';
+          document.getElementById('bk-r2-table').style.display = 'none';
+          r2Count.textContent = '';
+        }
+      });
+    }
+    function runBackup(target) {
+      var btn = document.getElementById('backup-now-' + target);
+      btn.disabled = true;
+      var orig = btn.querySelector('span').textContent;
+      btn.querySelector('span').textContent = 'Running...';
+      fetch('/api/system/backup?target=' + target, { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          btn.disabled = false;
+          btn.querySelector('span').textContent = orig;
+          if (j.ok) {
+            showBackupAlert('Backup complete (' + j.elapsed_ms + 'ms). Exit code ' + j.exit_code + '.', 'success');
+          } else {
+            var detail = j.stderr || j.stdout || j.err || 'unknown error';
+            showBackupAlert('Backup failed: ' + RH.escapeHtml(detail.slice ? detail.slice(0, 300) : detail), 'error');
+          }
+          loadBackups();
+        })
+        .catch(function (e) {
+          btn.disabled = false;
+          btn.querySelector('span').textContent = orig;
+          showBackupAlert('Network error: ' + e.message, 'error');
+        });
+    }
+    document.getElementById('backup-now-local').addEventListener('click', function () { runBackup('local'); });
+    document.getElementById('backup-now-r2').addEventListener('click', function () { runBackup('r2'); });
+    document.getElementById('backup-refresh').addEventListener('click', loadBackups);
+    loadBackups();
 
     // Operator rules
     const rulesText = document.getElementById('rules-json');

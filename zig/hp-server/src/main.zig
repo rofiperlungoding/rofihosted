@@ -28,6 +28,7 @@ const hosted = @import("hosted.zig");
 const apikey = @import("apikey.zig");
 const webhook = @import("webhook.zig");
 const projects = @import("projects.zig");
+const powermon = @import("powermon.zig");
 const projsecrets = @import("projsecrets.zig");
 const builder = @import("builder.zig");
 const supervisor = @import("supervisor.zig");
@@ -70,6 +71,7 @@ const App = struct {
     builder: *builder.Orchestrator,
     supervisor: *supervisor.Supervisor,
     cron: *cron.Manager,
+    powermon: *powermon.PowerMon,
     pepper: []const u8,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
@@ -145,6 +147,8 @@ pub fn main() !void {
     const supervisor_mgr = try supervisor.Supervisor.init(allocator, pepper_slice, projects_mgr);
     builder_orch.supervisor = @ptrCast(supervisor_mgr);
     const cron_mgr = try cron.Manager.init(allocator, pepper_slice, projects_mgr);
+    const powermon_inst = try allocator.create(powermon.PowerMon);
+    powermon_inst.* = powermon.PowerMon.init(allocator, tg_cfg, bus);
     // Wire bus -> webhook fan-out so any event published also fires matching
     // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
     bus.pub_callback = webhookFanOut;
@@ -179,6 +183,7 @@ pub fn main() !void {
         .builder = builder_orch,
         .supervisor = supervisor_mgr,
         .cron = cron_mgr,
+        .powermon = powermon_inst,
         .pepper = pepper_slice,
     };
     g_app = &app;
@@ -202,6 +207,11 @@ pub fn main() !void {
 
     const checker = try std.Thread.spawn(.{}, uptime.checkerLoop, .{ allocator, uptime_path, &store_mutex, tg_cfg, bus });
     checker.detach();
+
+    // Power monitor: alerts on charger disconnect (this device bootloops on
+    // unplug, so plug-status changes are critical).
+    const power_thread = try std.Thread.spawn(.{}, powermon.PowerMon.run, .{powermon_inst});
+    power_thread.detach();
 
     const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path, uptime_path, &store_mutex });
     rotator.detach();
@@ -595,6 +605,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     // Built-in shell + system info (replaces SSH for the operator)
     if (std.mem.eql(u8, path, "/api/system/exec")) return apiSystemExec(app, req, res);
     if (std.mem.eql(u8, path, "/api/system/info")) return apiSystemInfo(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/power")) return apiSystemPower(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/backup")) return apiSystemBackup(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/backups")) return apiSystemBackups(app, req, res);
 
     // Status badges (private, auth-gated)
     if (std.mem.startsWith(u8, path, "/badge/") and std.mem.endsWith(u8, path, ".svg")) {
@@ -2926,6 +2939,180 @@ fn apiSystemInfo(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .disk_free_mb = disk_free_mb,
         .system_uptime_s = hp_uptime_s,
         .home = home,
+    }, .{});
+}
+
+fn apiSystemPower(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = req;
+    const r = app.powermon.snapshot();
+    const c = app.powermon.snapshotCounters();
+    // raw status string is null-padded; trim before sending.
+    var raw_end: usize = 0;
+    while (raw_end < r.raw.len and r.raw[raw_end] != 0) : (raw_end += 1) {}
+    try res.json(.{
+        .ok = true,
+        .available = r.available,
+        .percentage = r.percentage,
+        .status = r.status.label(),
+        .status_raw = r.raw[0..raw_end],
+        .last_check_unix = r.last_check_unix,
+        .is_plugged = r.status.isPlugged(),
+        .transitions_unplug = c.unplug,
+        .transitions_replug = c.replug,
+    }, .{});
+}
+
+fn apiSystemBackup(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    // Optional: ?target=local|r2 (default both: local always, r2 if rclone configured)
+    const q = req.query() catch null;
+    var target: []const u8 = "auto";
+    if (q) |qq| if (qq.get("target")) |t| {
+        target = t;
+    };
+
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const script = if (std.mem.eql(u8, target, "local"))
+        try std.fmt.allocPrint(res.arena, "{s}/backup-quick.sh", .{home})
+    else
+        try std.fmt.allocPrint(res.arena, "{s}/backup-r2.sh", .{home});
+
+    var argv = [_][]const u8{ "sh", "-c", script };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    const t0 = std.time.milliTimestamp();
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+
+    var out_buf = std.ArrayList(u8).init(res.arena);
+    var err_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |so| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = so.read(&tmp) catch break;
+            if (n == 0) break;
+            try out_buf.appendSlice(tmp[0..n]);
+            if (out_buf.items.len > 64 * 1024) break;
+        }
+    }
+    if (child.stderr) |se| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = se.read(&tmp) catch break;
+            if (n == 0) break;
+            try err_buf.appendSlice(tmp[0..n]);
+            if (err_buf.items.len > 64 * 1024) break;
+        }
+    }
+    const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        .Signal => |s| -@as(i32, @intCast(s)),
+        else => -1,
+    };
+    const elapsed_ms = std.time.milliTimestamp() - t0;
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "system_backup",
+        .target = target,
+        .ok = exit_code == 0,
+    });
+
+    // The scripts emit JSON-ish summary on the last stdout line; pass it
+    // through but also wrap with the script's exit_code for the dashboard.
+    try res.json(.{
+        .ok = exit_code == 0,
+        .target = target,
+        .exit_code = exit_code,
+        .elapsed_ms = elapsed_ms,
+        .stdout = out_buf.items,
+        .stderr = err_buf.items,
+    }, .{});
+}
+
+fn apiSystemBackups(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = req;
+    _ = app;
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+
+    // List local backups: ~/backups/rofihosted-*.tar.gz
+    var local = std.ArrayList(struct { name: []const u8, size: u64, mtime: i64 }).init(res.arena);
+    {
+        const backups_dir = try std.fmt.allocPrint(res.arena, "{s}/backups", .{home});
+        var dir = std.fs.openDirAbsolute(backups_dir, .{ .iterate = true }) catch null;
+        if (dir) |*d| {
+            defer d.close();
+            var it = d.iterate();
+            while (it.next() catch null) |entry| {
+                if (entry.kind != .file) continue;
+                if (!std.mem.startsWith(u8, entry.name, "rofihosted-")) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".tar.gz")) continue;
+                const full = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ backups_dir, entry.name });
+                const stat = std.fs.cwd().statFile(full) catch continue;
+                try local.append(.{
+                    .name = try res.arena.dupe(u8, entry.name),
+                    .size = stat.size,
+                    .mtime = @as(i64, @intCast(@divTrunc(stat.mtime, std.time.ns_per_s))),
+                });
+            }
+        }
+    }
+
+    // List remote backups via rclone (best effort, may fail if R2 not configured)
+    var remote_list = std.ArrayList(struct { name: []const u8, size: u64 }).init(res.arena);
+    var r2_configured = false;
+    {
+        // Use 'sh -c' so we can source ~/.hp-server.env and get R2_BUCKET
+        const cmd = "if [ -f ~/.hp-server.env ]; then . ~/.hp-server.env; fi; " ++
+            "if [ -n \"${R2_BUCKET:-}\" ] && command -v rclone >/dev/null; then " ++
+            "rclone lsl \"r2:${R2_BUCKET}/rofihosted/\" 2>/dev/null | head -50; fi";
+        var argv = [_][]const u8{ "sh", "-c", cmd };
+        var child = std.process.Child.init(&argv, res.arena);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch {};
+        var buf = std.ArrayList(u8).init(res.arena);
+        if (child.stdout) |so| {
+            var tmp: [4096]u8 = undefined;
+            while (true) {
+                const n = so.read(&tmp) catch break;
+                if (n == 0) break;
+                try buf.appendSlice(tmp[0..n]);
+                if (buf.items.len > 32 * 1024) break;
+            }
+        }
+        _ = child.wait() catch {};
+        // rclone lsl format: "  size YYYY-MM-DD HH:MM:SS.fff name"
+        var lines = std.mem.tokenizeScalar(u8, buf.items, '\n');
+        while (lines.next()) |line| {
+            r2_configured = true;
+            const trimmed = std.mem.trimLeft(u8, line, &std.ascii.whitespace);
+            var it = std.mem.tokenizeScalar(u8, trimmed, ' ');
+            const size_s = it.next() orelse continue;
+            _ = it.next() orelse continue; // date
+            _ = it.next() orelse continue; // time
+            const name = it.rest();
+            const size = std.fmt.parseInt(u64, size_s, 10) catch continue;
+            try remote_list.append(.{
+                .name = try res.arena.dupe(u8, std.mem.trim(u8, name, &std.ascii.whitespace)),
+                .size = size,
+            });
+        }
+    }
+
+    try res.json(.{
+        .ok = true,
+        .local = local.items,
+        .remote = remote_list.items,
+        .r2_configured = r2_configured,
     }, .{});
 }
 
