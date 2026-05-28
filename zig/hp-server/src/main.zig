@@ -4218,30 +4218,10 @@ fn apiProjectsPreviewRepo(app: *App, req: *httpz.Request, res: *httpz.Response) 
     const tmp_dir = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_root, &rand_hex });
     defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
-    // git clone --depth=1 --single-branch --branch <branch> <url> <tmp_dir>
-    var argv = [_][]const u8{ "git", "clone", "--depth=1", "--single-branch", "--branch", p.branch, p.repo_url, tmp_dir };
-    var child = std.process.Child.init(&argv, res.arena);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
-        return;
-    };
+    // git clone with auto-fallback to default branch if requested branch fails
     var stderr_buf: [2048]u8 = undefined;
     var stderr_n: usize = 0;
-    if (child.stderr) |stderr| stderr_n = stderr.read(&stderr_buf) catch 0;
-    const term = child.wait() catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "wait_failed" }, .{});
-        return;
-    };
-    const exit_code: i32 = switch (term) {
-        .Exited => |c| @intCast(c),
-        else => -1,
-    };
-    if (exit_code != 0) {
+    const used_branch = cloneWithFallback(res.arena, p.repo_url, p.branch, tmp_dir, &stderr_buf, &stderr_n) orelse {
         res.status = 400;
         try res.json(.{
             .ok = false,
@@ -4249,7 +4229,7 @@ fn apiProjectsPreviewRepo(app: *App, req: *httpz.Request, res: *httpz.Response) 
             .stderr = stderr_buf[0..@min(stderr_n, 1024)],
         }, .{});
         return;
-    }
+    };
 
     const sug = detect.detect(res.arena, tmp_dir) catch {
         res.status = 500;
@@ -4263,6 +4243,7 @@ fn apiProjectsPreviewRepo(app: *App, req: *httpz.Request, res: *httpz.Response) 
         .ok = true,
         .suggested_name = name_hint,
         .suggested_subdomain = sub_hint,
+        .actual_branch = used_branch,
         .runtime = sug.runtime,
         .install_cmd = sug.install_cmd,
         .build_cmd = sug.build_cmd,
@@ -4515,30 +4496,10 @@ fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
     const tmp_dir = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_root, &rand_hex });
     defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
-    // Shallow clone
-    var argv = [_][]const u8{ "git", "clone", "--depth=1", "--single-branch", "--branch", p.branch, p.repo_url, tmp_dir };
-    var child = std.process.Child.init(&argv, res.arena);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
-        return;
-    };
+    // Shallow clone with fallback to default branch if the requested one fails
     var clone_err_buf: [1024]u8 = undefined;
     var clone_err_n: usize = 0;
-    if (child.stderr) |stderr| clone_err_n = stderr.read(&clone_err_buf) catch 0;
-    const term = child.wait() catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "wait_failed" }, .{});
-        return;
-    };
-    const exit_code: i32 = switch (term) {
-        .Exited => |c| @intCast(c),
-        else => -1,
-    };
-    if (exit_code != 0) {
+    const used_branch = cloneWithFallback(res.arena, p.repo_url, p.branch, tmp_dir, &clone_err_buf, &clone_err_n) orelse {
         res.status = 400;
         try res.json(.{
             .ok = false,
@@ -4546,7 +4507,7 @@ fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
             .stderr = clone_err_buf[0..@min(clone_err_n, 512)],
         }, .{});
         return;
-    }
+    };
 
     // Detect framework first
     const sug = detect.detect(res.arena, tmp_dir) catch {
@@ -4610,7 +4571,9 @@ fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
     // ai_result is already a JSON object. Wrap it with detection metadata.
     var envelope = std.ArrayList(u8).init(res.arena);
     try envelope.appendSlice("{\"ok\":true,\"detected\":{");
-    try envelope.appendSlice("\"framework_hint\":");
+    try envelope.appendSlice("\"actual_branch\":");
+    try std.json.stringify(used_branch, .{}, envelope.writer());
+    try envelope.appendSlice(",\"framework_hint\":");
     try std.json.stringify(sug.framework_hint, .{}, envelope.writer());
     try envelope.appendSlice(",\"runtime\":");
     try std.json.stringify(sug.runtime, .{}, envelope.writer());
@@ -4627,4 +4590,123 @@ fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
     try envelope.appendSlice("}");
     res.content_type = .JSON;
     res.body = try res.arena.dupe(u8, envelope.items);
+}
+
+/// Resolve the default branch of a remote repo via `git ls-remote --symref <url> HEAD`.
+/// Output looks like:
+///   ref: refs/heads/master <TAB> HEAD
+///   <sha> <TAB> HEAD
+/// Returns owned slice with just the branch name (e.g. "master") or null on failure.
+fn resolveDefaultBranch(allocator: std.mem.Allocator, repo_url: []const u8) ?[]u8 {
+    var argv = [_][]const u8{ "git", "ls-remote", "--symref", repo_url, "HEAD" };
+    var child = std.process.Child.init(&argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return null;
+    var out_buf = std.ArrayList(u8).init(allocator);
+    defer out_buf.deinit();
+    if (child.stdout) |so| {
+        var rb: [1024]u8 = undefined;
+        while (true) {
+            const n = so.read(&rb) catch 0;
+            if (n == 0) break;
+            out_buf.appendSlice(rb[0..n]) catch break;
+        }
+    }
+    _ = child.wait() catch {};
+    // Parse the first line "ref: refs/heads/<branch>\tHEAD"
+    const first_nl = std.mem.indexOfScalar(u8, out_buf.items, '\n') orelse return null;
+    const first_line = out_buf.items[0..first_nl];
+    const prefix = "ref: refs/heads/";
+    if (!std.mem.startsWith(u8, first_line, prefix)) return null;
+    const after = first_line[prefix.len..];
+    const tab = std.mem.indexOfScalar(u8, after, '\t') orelse after.len;
+    const branch = std.mem.trim(u8, after[0..tab], " \t\r\n");
+    if (branch.len == 0 or branch.len > 128) return null;
+    return allocator.dupe(u8, branch) catch null;
+}
+
+/// Try to clone <repo_url> at <branch> into <dest>. If branch fails, attempt
+/// to resolve the actual default branch and retry once. Returns the actual
+/// branch name used on success, or null on failure (with stderr_buf populated).
+fn cloneWithFallback(
+    allocator: std.mem.Allocator,
+    repo_url: []const u8,
+    requested_branch: []const u8,
+    dest: []const u8,
+    stderr_out: []u8,
+    stderr_n_out: *usize,
+) ?[]u8 {
+    stderr_n_out.* = 0;
+
+    // Attempt 1: requested branch
+    {
+        var argv = [_][]const u8{ "git", "clone", "--depth=1", "--single-branch", "--branch", requested_branch, repo_url, dest };
+        var child = std.process.Child.init(&argv, allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Pipe;
+        child.spawn() catch return null;
+        // Drain stderr fully (small reads can miss the actual error message)
+        if (child.stderr) |stderr| {
+            var written: usize = 0;
+            while (written < stderr_out.len) {
+                const n = stderr.read(stderr_out[written..]) catch 0;
+                if (n == 0) break;
+                written += n;
+            }
+            stderr_n_out.* = written;
+        }
+        const term = child.wait() catch return null;
+        const exit_code: i32 = switch (term) {
+            .Exited => |c| @intCast(c),
+            else => -1,
+        };
+        if (exit_code == 0) return allocator.dupe(u8, requested_branch) catch null;
+    }
+
+    // Attempt 2: resolve default branch, retry if different
+    const default_branch = resolveDefaultBranch(allocator, repo_url) orelse return null;
+    if (std.mem.eql(u8, default_branch, requested_branch)) {
+        // Same branch; original failure stands.
+        allocator.free(default_branch);
+        return null;
+    }
+
+    // Clean up partial dir from first attempt if it exists
+    std.fs.deleteTreeAbsolute(dest) catch {};
+
+    var argv = [_][]const u8{ "git", "clone", "--depth=1", "--single-branch", "--branch", default_branch, repo_url, dest };
+    var child = std.process.Child.init(&argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        allocator.free(default_branch);
+        return null;
+    };
+    stderr_n_out.* = 0;
+    if (child.stderr) |stderr| {
+        var written: usize = 0;
+        while (written < stderr_out.len) {
+            const n = stderr.read(stderr_out[written..]) catch 0;
+            if (n == 0) break;
+            written += n;
+        }
+        stderr_n_out.* = written;
+    }
+    const term = child.wait() catch {
+        allocator.free(default_branch);
+        return null;
+    };
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        else => -1,
+    };
+    if (exit_code != 0) {
+        allocator.free(default_branch);
+        return null;
+    }
+    return default_branch;
 }

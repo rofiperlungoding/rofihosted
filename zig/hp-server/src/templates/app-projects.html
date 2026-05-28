@@ -308,10 +308,20 @@ RH.loadCurrentUser();
     }).then(function (r) { return r.json(); }).then(function (j) {
       btn.disabled = false;
       statusEl.textContent = '';
-      if (!j.ok) { showAlert('AI analysis failed: ' + (j.err || 'unknown')); return; }
+      if (!j.ok) {
+        var detail = j.err || 'unknown';
+        if (j.stderr) detail += ' \u2014 ' + j.stderr.replace(/\s+/g, ' ').slice(0, 250);
+        showAlert('AI analysis failed: ' + detail);
+        return;
+      }
 
       var det = j.detected || {};
       var ai = j.ai || {};
+
+      // If the server fell back to a different default branch, update the input
+      if (det.actual_branch && det.actual_branch !== branch) {
+        document.getElementById('wiz-branch').value = det.actual_branch;
+      }
 
       // Fill the form fields with AI's recommended values
       document.getElementById('wiz-name').value = (ai.summary || '').split(/[.\s-]/)[0] || '';
@@ -430,6 +440,9 @@ RH.loadCurrentUser();
           nextBtn.disabled = false;
           document.getElementById('wiz-detect-status').textContent = '';
           if (j.ok) {
+            if (j.actual_branch && j.actual_branch !== branch) {
+              document.getElementById('wiz-branch').value = j.actual_branch;
+            }
             document.getElementById('wiz-name').value = j.suggested_name || '';
             document.getElementById('wiz-sub').value = j.suggested_subdomain || '';
             document.getElementById('wiz-runtime').value = j.runtime || 'static';
@@ -442,8 +455,12 @@ RH.loadCurrentUser();
             var isStatic = j.runtime === 'static';
             document.getElementById('wiz-publish-row').style.display = isStatic ? '' : 'none';
             document.getElementById('wiz-start-row').style.display = isStatic ? 'none' : '';
+            showStep(2);
+          } else {
+            var detail = j.err || 'unknown';
+            if (j.stderr) detail += ' \u2014 ' + j.stderr.replace(/\s+/g, ' ').slice(0, 250);
+            showAlert('Repo preview failed: ' + detail);
           }
-          showStep(2);
         }).catch(function () {
           nextBtn.disabled = false;
           document.getElementById('wiz-detect-status').textContent = '';
