@@ -32,6 +32,7 @@ const projsecrets = @import("projsecrets.zig");
 const builder = @import("builder.zig");
 const supervisor = @import("supervisor.zig");
 const proxy = @import("proxy.zig");
+const projauth = @import("projauth.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -2945,6 +2946,14 @@ fn tryServeProject(app: *App, req: *httpz.Request, host: []const u8, req_path: [
     const sub = hosted.extractSubdomain(host) orelse return false;
     const project = app.projects.getBySubdomain(sub) orelse return false;
 
+    // Built-in auth endpoints under /auth/* are intercepted by hp-server even
+    // for backend projects, so the project's own code never sees raw passwords.
+    // The project verifies tokens by hitting <sub>/auth/verify with the user's
+    // bearer token.
+    if (std.mem.startsWith(u8, req_path, "/auth/")) {
+        return tryServeAuth(app, req, project, req_path, res);
+    }
+
     if (project.runtime == .static) {
         return tryServeProjectStatic(app, project, req_path, res);
     }
@@ -3617,4 +3626,87 @@ fn apiProjectsStatus(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .crash_count = s.crash_count,
         .last_exit = s.last_exit,
     }, .{});
+}
+
+// =================================================================
+// PROJECT AUTH (built-in signup/login/verify per project)
+// =================================================================
+fn tryServeAuth(app: *App, req: *httpz.Request, project: projects.Project, req_path: []const u8, res: *httpz.Response) !bool {
+    var svc = projauth.Service.init(app.allocator, app.pepper, app.dbpool);
+
+    // CORS for any origin so the project's own SPA can call these endpoints
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method == .OPTIONS) {
+        res.status = 204;
+        res.body = "";
+        return true;
+    }
+
+    if (std.mem.eql(u8, req_path, "/auth/signup") or std.mem.eql(u8, req_path, "/auth/login")) {
+        const body = req.body() orelse "";
+        const Payload = struct { email: []const u8, password: []const u8 };
+        const parsed = std.json.parseFromSlice(Payload, res.arena, body, .{
+            .allocate = .alloc_always,
+            .ignore_unknown_fields = true,
+        }) catch {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "invalid_json" }, .{});
+            return true;
+        };
+        defer parsed.deinit();
+        const p = parsed.value;
+
+        if (std.mem.eql(u8, req_path, "/auth/signup")) {
+            const r = svc.signup(project.id, p.email, p.password) catch |err| {
+                const code: []const u8 = switch (err) {
+                    error.InvalidEmail => "invalid_email",
+                    error.WeakPassword => "weak_password",
+                    error.EmailTaken => "email_taken",
+                    else => "signup_failed",
+                };
+                res.status = 400;
+                try res.json(.{ .ok = false, .err = code }, .{});
+                return true;
+            };
+            // Token owned by allocator; copy to arena and free original.
+            const token_arena = try res.arena.dupe(u8, r.token);
+            app.allocator.free(r.token);
+            try res.json(.{ .ok = true, .user_id = r.user_id, .token = token_arena }, .{});
+            return true;
+        } else {
+            const r = svc.login(project.id, p.email, p.password) catch {
+                res.status = 401;
+                try res.json(.{ .ok = false, .err = "auth_failed" }, .{});
+                return true;
+            };
+            const token_arena = try res.arena.dupe(u8, r.token);
+            app.allocator.free(r.token);
+            try res.json(.{ .ok = true, .user_id = r.user_id, .token = token_arena }, .{});
+            return true;
+        }
+    }
+
+    if (std.mem.eql(u8, req_path, "/auth/verify")) {
+        const auth_h = req.header("authorization") orelse req.header("Authorization") orelse "";
+        const prefix = "Bearer ";
+        if (auth_h.len <= prefix.len or !std.mem.startsWith(u8, auth_h, prefix)) {
+            res.status = 401;
+            try res.json(.{ .ok = false, .err = "missing_bearer" }, .{});
+            return true;
+        }
+        const token = auth_h[prefix.len..];
+        const user_id = svc.verifyToken(project.id, token) catch {
+            res.status = 401;
+            try res.json(.{ .ok = false, .err = "invalid_token" }, .{});
+            return true;
+        };
+        try res.json(.{ .ok = true, .user_id = user_id }, .{});
+        return true;
+    }
+
+    res.status = 404;
+    try res.json(.{ .ok = false, .err = "unknown_auth_endpoint" }, .{});
+    return true;
 }

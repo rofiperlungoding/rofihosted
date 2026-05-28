@@ -135,6 +135,11 @@ pub const Supervisor = struct {
         try env_map.put("ROFI_PROJECT_ID", project_id);
         try env_map.put("ROFI_SUBDOMAIN", project.subdomain);
         try env_map.put("HOST", "127.0.0.1");
+        // Auto-injected DB path so the project can use a per-tenant SQLite
+        // without needing to know about hp-server's storage layout.
+        const db_path = try std.fmt.allocPrint(self.allocator, "{s}/data/dbs/{s}.db", .{ HOME, project_id });
+        defer self.allocator.free(db_path);
+        try env_map.put("ROFI_DB_PATH", db_path);
         // Hint Node-style ecosystems toward production unless operator overrode it
         if (env_map.get("NODE_ENV") == null) try env_map.put("NODE_ENV", "production");
 

@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=23">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=23">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=23">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=24">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=24">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=24">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -240,8 +240,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=23"></script>
-<script src="https://rofihosted.space/app.js?v=23"></script>
+<script src="https://rofihosted.space/theme.js?v=24"></script>
+<script src="https://rofihosted.space/app.js?v=24"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -362,6 +362,15 @@ RH.loadCurrentUser();
         +   '<button type="button" class="btn btn-sm" id="detail-secret-copy">Copy</button>'
         + '</div>';
     }
+
+    // Auth-as-a-service hint, always shown (works for static and backend alike)
+    const authBase = 'https://' + p.subdomain + '.rofihosted.space/auth';
+    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Built-in auth</h3>'
+      + '<p class="hint" style="margin-top:.4rem">Three ready-to-call HTTPS endpoints, with an automatic per-project SQLite users table. JWT uses HS256, signed with a key derived from your install pepper plus this project id. JWT TTL is 7 days.</p>'
+      + row('Signup', '<span class="value">POST ' + escapeHtml(authBase) + '/signup  {email, password}</span>')
+      + row('Login', '<span class="value">POST ' + escapeHtml(authBase) + '/login   {email, password}</span>')
+      + row('Verify', '<span class="value">GET ' + escapeHtml(authBase) + '/verify  Authorization: Bearer &lt;token&gt;</span>')
+      + row('User DB', '<span class="value">~/data/dbs/' + escapeHtml(p.id) + '.db (also exposed as ROFI_DB_PATH)</span>');
 
     html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Secrets</h3>'
       + '<div id="detail-secrets" class="wiz-secret-existing">Loading...</div>'
