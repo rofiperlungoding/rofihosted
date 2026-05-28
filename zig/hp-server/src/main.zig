@@ -3627,9 +3627,16 @@ fn apiProjectsRestart(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
-    app.supervisor.restart(id) catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "restart_failed" }, .{});
+    app.supervisor.restart(id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.NotFound => "not_found",
+            error.StaticProject => "static_project",
+            error.NoStartCommand => "no_start_cmd",
+            error.AlreadyRunning => "already_running",
+            else => "restart_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
         return;
     };
     audit.append(.{
