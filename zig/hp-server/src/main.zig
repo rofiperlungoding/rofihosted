@@ -213,6 +213,12 @@ pub fn main() !void {
     const power_thread = try std.Thread.spawn(.{}, powermon.PowerMon.run, .{powermon_inst});
     power_thread.detach();
 
+    // Hourly backup loop: triggers ~/backup-r2.sh every 3600s. Best-effort,
+    // skips silently if R2 is not configured. The script also rotates remote
+    // copies (keeps last 168 = 7 days hourly).
+    const backup_thread = try std.Thread.spawn(.{}, hourlyBackupLoop, .{});
+    backup_thread.detach();
+
     const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path, uptime_path, &store_mutex });
     rotator.detach();
 
@@ -3428,6 +3434,60 @@ fn apiApikeysRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         .ok = did,
     });
     try res.json(.{ .ok = did }, .{});
+}
+
+// =================================================================
+// HOURLY BACKUP (built-in scheduler, no termux crond required)
+// =================================================================
+fn hourlyBackupLoop() void {
+    // Initial 5 minute delay so the rest of the system has time to settle.
+    // We do not want the first backup running during boot when projects are
+    // still respawning.
+    std.Thread.sleep(5 * 60 * std.time.ns_per_s);
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+
+    while (true) {
+        // Build the script path each loop so it's always fresh
+        const allocator = std.heap.page_allocator;
+        const script = std.fmt.allocPrint(allocator, "{s}/backup-r2.sh", .{home}) catch {
+            std.Thread.sleep(60 * 60 * std.time.ns_per_s);
+            continue;
+        };
+        defer allocator.free(script);
+
+        // Skip if backup-r2.sh doesn't exist
+        std.fs.accessAbsolute(script, .{}) catch {
+            std.Thread.sleep(60 * 60 * std.time.ns_per_s);
+            continue;
+        };
+
+        var argv = [_][]const u8{ "sh", "-c", script };
+        var child = std.process.Child.init(&argv, allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+        child.spawn() catch {
+            std.Thread.sleep(60 * 60 * std.time.ns_per_s);
+            continue;
+        };
+
+        // Drain output briefly (we don't need much)
+        var out_buf: [1024]u8 = undefined;
+        var n: usize = 0;
+        if (child.stdout) |so| n = so.readAll(&out_buf) catch 0;
+        const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+        const ok = switch (term) {
+            .Exited => |c| c == 0,
+            else => false,
+        };
+        if (ok) {
+            std.log.info("hourly backup OK: {s}", .{out_buf[0..@min(n, 200)]});
+        } else {
+            std.log.warn("hourly backup failed: {s}", .{out_buf[0..@min(n, 200)]});
+        }
+
+        std.Thread.sleep(60 * 60 * std.time.ns_per_s); // 1 hour
+    }
 }
 
 // =================================================================

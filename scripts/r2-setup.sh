@@ -33,6 +33,7 @@ access_key_id = $R2_ACCESS_KEY_ID
 secret_access_key = $R2_SECRET_ACCESS_KEY
 endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
 acl = private
+no_check_bucket = true
 EOF
     chmod 600 "$RCLONE_CONF"
 
@@ -71,6 +72,7 @@ access_key_id = $access_key
 secret_access_key = $secret
 endpoint = https://${account_id}.r2.cloudflarestorage.com
 acl = private
+no_check_bucket = true
 EOF
 chmod 600 "$RCLONE_CONF"
 
