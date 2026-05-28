@@ -54,15 +54,35 @@ log "updating $SHORT_BEFORE -> $SHORT_AFTER"
 git reset --hard origin/main >> "$LOG" 2>&1
 
 # Sync sources into the build tree, preserving cache + zig-out for fast rebuilds.
-rsync -a --delete \
-    --exclude='.zig-cache/' \
-    --exclude='zig-out/' \
-    "$SRC_REPO/zig/hp-server/" "$TARGET/" >> "$LOG" 2>&1
+# Prefer rsync (precise --delete + exclude); fall back to cp + manual delete
+# if rsync is not installed.
+if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+        --exclude='.zig-cache/' \
+        --exclude='zig-out/' \
+        "$SRC_REPO/zig/hp-server/" "$TARGET/" >> "$LOG" 2>&1
+    log "synced via rsync"
+else
+    log "rsync not found, using cp fallback"
+    # Copy fresh sources, but preserve build cache directories
+    for sub in src build.zig build.zig.zon; do
+        if [ -e "$SRC_REPO/zig/hp-server/$sub" ]; then
+            rm -rf "$TARGET/$sub" 2>/dev/null
+            cp -R "$SRC_REPO/zig/hp-server/$sub" "$TARGET/" 2>>"$LOG"
+        fi
+    done
+fi
 
 log "running rebuild.sh..."
+# Capture the binary's mtime before rebuild so we can verify it actually changed
+PRE_REBUILD_MTIME=0
+if [ -f "$TARGET/zig-out/bin/hp-server" ]; then
+    PRE_REBUILD_MTIME=$(stat -c %Y "$TARGET/zig-out/bin/hp-server" 2>/dev/null || echo 0)
+fi
+
 if ! "$HOME/rebuild.sh" >> "$LOG" 2>&1; then
     emit "{\"ok\":false,\"err\":\"rebuild_failed\",\"before\":\"$SHORT_BEFORE\",\"after\":\"$SHORT_AFTER\"}"
-    log "rebuild failed"
+    log "rebuild script returned non-zero"
     exit 1
 fi
 
@@ -72,8 +92,18 @@ if [ ! -x "$TARGET/zig-out/bin/hp-server" ]; then
     exit 1
 fi
 
-BIN_AGE_S=$(( $(date +%s) - $(stat -c %Y "$TARGET/zig-out/bin/hp-server") ))
-log "binary age = ${BIN_AGE_S}s"
+POST_REBUILD_MTIME=$(stat -c %Y "$TARGET/zig-out/bin/hp-server")
+BIN_AGE_S=$(( $(date +%s) - POST_REBUILD_MTIME ))
+log "binary age = ${BIN_AGE_S}s, mtime change: $PRE_REBUILD_MTIME -> $POST_REBUILD_MTIME"
+
+# If the binary mtime didn't advance, the build silently failed or was a
+# no-op. We treat this as a failure so the operator knows they're not
+# actually running the new code.
+if [ "$POST_REBUILD_MTIME" = "$PRE_REBUILD_MTIME" ]; then
+    emit "{\"ok\":false,\"err\":\"rebuild_did_not_produce_new_binary\",\"before\":\"$SHORT_BEFORE\",\"after\":\"$SHORT_AFTER\",\"binary_mtime_unchanged\":true,\"hint\":\"check ~/logs/self-update.log for compile errors\"}"
+    log "binary mtime unchanged; treating as failure"
+    exit 1
+fi
 
 # Trigger watchdog respawn. The current request is being served by hp-server
 # itself, so this kills our parent. We dispatch the kill in a subshell with a
