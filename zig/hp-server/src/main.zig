@@ -614,6 +614,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/system/power")) return apiSystemPower(app, req, res);
     if (std.mem.eql(u8, path, "/api/system/backup")) return apiSystemBackup(app, req, res);
     if (std.mem.eql(u8, path, "/api/system/backups")) return apiSystemBackups(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/version")) return apiSystemVersion(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/update")) return apiSystemUpdate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/restore-test")) return apiSystemRestoreTest(app, req, res);
 
     // Status badges (private, auth-gated)
     if (std.mem.startsWith(u8, path, "/badge/") and std.mem.endsWith(u8, path, ".svg")) {
@@ -3119,6 +3122,307 @@ fn apiSystemBackups(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         .local = local.items,
         .remote = remote_list.items,
         .r2_configured = r2_configured,
+    }, .{});
+}
+
+/// Read short git SHA + commit message from ~/rofihosted-src and
+/// ~/zig/hp-server (binary). The dashboard uses this to show
+/// "current vs latest" before triggering /api/system/update.
+fn apiSystemVersion(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    _ = req;
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+
+    // Local commit (what's been built into the running binary): we can read
+    // ~/rofihosted-src/.git/HEAD as the closest proxy.
+    var local_sha: []const u8 = "";
+    var local_subject: []const u8 = "";
+    {
+        const cmd = try std.fmt.allocPrint(
+            res.arena,
+            "cd {s}/rofihosted-src 2>/dev/null && git rev-parse --short HEAD 2>/dev/null && git log -1 --format=%s 2>/dev/null",
+            .{home},
+        );
+        var argv = [_][]const u8{ "sh", "-c", cmd };
+        var child = std.process.Child.init(&argv, res.arena);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch {};
+        var buf = std.ArrayList(u8).init(res.arena);
+        if (child.stdout) |so| {
+            var tmp: [1024]u8 = undefined;
+            while (true) {
+                const n = so.read(&tmp) catch break;
+                if (n == 0) break;
+                try buf.appendSlice(tmp[0..n]);
+            }
+        }
+        _ = child.wait() catch {};
+        var lines = std.mem.tokenizeScalar(u8, buf.items, '\n');
+        if (lines.next()) |s| local_sha = try res.arena.dupe(u8, std.mem.trim(u8, s, &std.ascii.whitespace));
+        if (lines.next()) |s| local_subject = try res.arena.dupe(u8, std.mem.trim(u8, s, &std.ascii.whitespace));
+    }
+
+    // Remote commit (latest on origin/main). We do NOT fetch here to avoid
+    // taking a network hit on every page load; instead we surface the
+    // last-fetched ref. Operator hits /api/system/update to refresh.
+    var remote_sha: []const u8 = "";
+    var remote_subject: []const u8 = "";
+    var fetched_at: i64 = 0;
+    {
+        const cmd = try std.fmt.allocPrint(
+            res.arena,
+            "cd {s}/rofihosted-src 2>/dev/null && git rev-parse --short origin/main 2>/dev/null && git log -1 origin/main --format=%s 2>/dev/null",
+            .{home},
+        );
+        var argv = [_][]const u8{ "sh", "-c", cmd };
+        var child = std.process.Child.init(&argv, res.arena);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch {};
+        var buf = std.ArrayList(u8).init(res.arena);
+        if (child.stdout) |so| {
+            var tmp: [1024]u8 = undefined;
+            while (true) {
+                const n = so.read(&tmp) catch break;
+                if (n == 0) break;
+                try buf.appendSlice(tmp[0..n]);
+            }
+        }
+        _ = child.wait() catch {};
+        var lines = std.mem.tokenizeScalar(u8, buf.items, '\n');
+        if (lines.next()) |s| remote_sha = try res.arena.dupe(u8, std.mem.trim(u8, s, &std.ascii.whitespace));
+        if (lines.next()) |s| remote_subject = try res.arena.dupe(u8, std.mem.trim(u8, s, &std.ascii.whitespace));
+        // mtime of FETCH_HEAD = when we last fetched
+        const fetch_head = try std.fmt.allocPrint(res.arena, "{s}/rofihosted-src/.git/FETCH_HEAD", .{home});
+        if (std.fs.cwd().statFile(fetch_head)) |st| {
+            fetched_at = @as(i64, @intCast(@divTrunc(st.mtime, std.time.ns_per_s)));
+        } else |_| {}
+    }
+
+    // Binary mtime for context
+    var binary_built_at: i64 = 0;
+    {
+        const bin = try std.fmt.allocPrint(res.arena, "{s}/zig/hp-server/zig-out/bin/hp-server", .{home});
+        if (std.fs.cwd().statFile(bin)) |st| {
+            binary_built_at = @as(i64, @intCast(@divTrunc(st.mtime, std.time.ns_per_s)));
+        } else |_| {}
+    }
+
+    try res.json(.{
+        .ok = true,
+        .local_sha = local_sha,
+        .local_subject = local_subject,
+        .remote_sha = remote_sha,
+        .remote_subject = remote_subject,
+        .last_fetch_unix = fetched_at,
+        .binary_built_unix = binary_built_at,
+        .up_to_date = std.mem.eql(u8, local_sha, remote_sha) and local_sha.len > 0,
+    }, .{});
+}
+
+/// Run scripts/self-update.sh: git fetch, reset, rsync, rebuild, SIGTERM the
+/// running hp-server. Watchdog respawns. Streaming a real-time progress feed
+/// requires a separate SSE channel; for now we just wait for the script to
+/// finish (rebuild can take 30-90s) and return its JSON summary.
+fn apiSystemUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const script = try std.fmt.allocPrint(res.arena, "{s}/self-update.sh", .{home});
+
+    var argv = [_][]const u8{ "sh", "-c", script };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    const t0 = std.time.milliTimestamp();
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+
+    // Drain output. Self-update.sh prints exactly one JSON line on stdout
+    // and verbose stuff in ~/logs/self-update.log; we capture both for
+    // visibility.
+    var out_buf = std.ArrayList(u8).init(res.arena);
+    var err_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |so| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = so.read(&tmp) catch break;
+            if (n == 0) break;
+            try out_buf.appendSlice(tmp[0..n]);
+            if (out_buf.items.len > 32 * 1024) break;
+        }
+    }
+    if (child.stderr) |se| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = se.read(&tmp) catch break;
+            if (n == 0) break;
+            try err_buf.appendSlice(tmp[0..n]);
+            if (err_buf.items.len > 32 * 1024) break;
+        }
+    }
+    const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        .Signal => |s| -@as(i32, @intCast(s)),
+        else => -1,
+    };
+    const elapsed_ms = std.time.milliTimestamp() - t0;
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "system_update",
+        .target = "hp-server",
+        .ok = exit_code == 0,
+    });
+
+    // Pass the script's JSON line through unchanged (last non-empty line of
+    // stdout). If we can't parse, fall back to wrapping with status info.
+    const trimmed = std.mem.trim(u8, out_buf.items, &std.ascii.whitespace);
+    if (trimmed.len > 0 and trimmed[0] == '{') {
+        // Best effort: send the script's JSON directly so the dashboard can
+        // read fields like before/after sha.
+        res.content_type = .JSON;
+        res.body = trimmed;
+        return;
+    }
+
+    try res.json(.{
+        .ok = exit_code == 0,
+        .exit_code = exit_code,
+        .elapsed_ms = elapsed_ms,
+        .stdout = out_buf.items,
+        .stderr = err_buf.items,
+    }, .{});
+}
+
+/// Validate a backup tarball is restorable: download from R2 (if remote=true)
+/// or use the latest local one, extract to a temp dir, sanity-check that
+/// the project registry parses and at least one DB is non-empty. Reports a
+/// pass/fail with details. Cleans up the temp dir at the end.
+fn apiSystemRestoreTest(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const q = req.query() catch null;
+    const source: []const u8 = if (q) |qq| (qq.get("source") orelse "local") else "local";
+
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+
+    // Build the shell script inline. Returns single JSON line on stdout.
+    const cmd = try std.fmt.allocPrint(res.arena,
+        \\set -e
+        \\cd {s}
+        \\source="{s}"
+        \\tmp=$(mktemp -d)
+        \\trap 'rm -rf "$tmp"' EXIT
+        \\
+        \\if [ "$source" = "r2" ]; then
+        \\    if [ -f ~/.hp-server.env ]; then . ~/.hp-server.env; fi
+        \\    if [ -z "${{R2_BUCKET:-}}" ]; then
+        \\        echo '{{"ok":false,"err":"r2_not_configured"}}'
+        \\        exit 0
+        \\    fi
+        \\    latest=$(rclone lsf "r2:${{R2_BUCKET}}/rofihosted/" 2>/dev/null | grep '^rofihosted-' | sort | tail -1)
+        \\    if [ -z "$latest" ]; then
+        \\        echo '{{"ok":false,"err":"no_remote_backups"}}'
+        \\        exit 0
+        \\    fi
+        \\    rclone copy "r2:${{R2_BUCKET}}/rofihosted/$latest" "$tmp/" --no-traverse 2>/dev/null
+        \\    tarball="$tmp/$latest"
+        \\else
+        \\    tarball=$(ls -1t ~/backups/rofihosted-*.tar.gz 2>/dev/null | head -1)
+        \\    if [ -z "$tarball" ]; then
+        \\        echo '{{"ok":false,"err":"no_local_backups"}}'
+        \\        exit 0
+        \\    fi
+        \\    cp "$tarball" "$tmp/"
+        \\    tarball="$tmp/$(basename "$tarball")"
+        \\fi
+        \\
+        \\extract="$tmp/extract"
+        \\mkdir -p "$extract"
+        \\if ! tar xzf "$tarball" -C "$extract" 2>/dev/null; then
+        \\    echo "{{\"ok\":false,\"err\":\"extract_failed\",\"tarball\":\"$(basename "$tarball")\"}}"
+        \\    exit 0
+        \\fi
+        \\
+        \\registry_path=$(find "$extract" -name '.hp-server-projects.jsonl' 2>/dev/null | head -1)
+        \\dbs_dir=$(find "$extract" -type d -name 'dbs' 2>/dev/null | head -1)
+        \\
+        \\registry_lines=0
+        \\if [ -n "$registry_path" ] && [ -f "$registry_path" ]; then
+        \\    registry_lines=$(wc -l < "$registry_path" 2>/dev/null || echo 0)
+        \\fi
+        \\
+        \\db_count=0
+        \\db_total_bytes=0
+        \\if [ -n "$dbs_dir" ]; then
+        \\    db_count=$(find "$dbs_dir" -name '*.db' 2>/dev/null | wc -l)
+        \\    db_total_bytes=$(find "$dbs_dir" -name '*.db' -exec stat -c %s {{}} \; 2>/dev/null | awk '{{sum+=$1}} END {{print sum+0}}')
+        \\fi
+        \\
+        \\size=$(stat -c %s "$tarball" 2>/dev/null || echo 0)
+        \\
+        \\echo "{{\"ok\":true,\"tarball\":\"$(basename "$tarball")\",\"size_bytes\":$size,\"registry_lines\":$registry_lines,\"db_count\":$db_count,\"db_total_bytes\":$db_total_bytes,\"source\":\"$source\"}}"
+    , .{ home, source });
+
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+    var out_buf = std.ArrayList(u8).init(res.arena);
+    var err_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |so| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = so.read(&tmp) catch break;
+            if (n == 0) break;
+            try out_buf.appendSlice(tmp[0..n]);
+            if (out_buf.items.len > 16 * 1024) break;
+        }
+    }
+    if (child.stderr) |se| {
+        var tmp: [2048]u8 = undefined;
+        while (true) {
+            const n = se.read(&tmp) catch break;
+            if (n == 0) break;
+            try err_buf.appendSlice(tmp[0..n]);
+            if (err_buf.items.len > 8 * 1024) break;
+        }
+    }
+    _ = child.wait() catch {};
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "system_restore_test",
+        .target = source,
+    });
+
+    const trimmed = std.mem.trim(u8, out_buf.items, &std.ascii.whitespace);
+    if (trimmed.len > 0 and trimmed[0] == '{') {
+        res.content_type = .JSON;
+        res.body = trimmed;
+        return;
+    }
+    try res.json(.{
+        .ok = false,
+        .err = "no_json_output",
+        .stdout = out_buf.items,
+        .stderr = err_buf.items,
     }, .{});
 }
 

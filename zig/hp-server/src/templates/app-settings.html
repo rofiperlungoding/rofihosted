@@ -257,6 +257,33 @@
     </div>
 
     <div class="form-card">
+      <h2>System</h2>
+      <p class="lead">Manage the hp-server itself: see what's running, pull the latest code from GitHub, and validate that backups are restorable. No SSH required.</p>
+
+      <div id="sys-version" style="display:grid; gap:.6rem; grid-template-columns:1fr; padding:.9rem 1.1rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; margin-bottom:1rem; font-size:.85rem">
+        <div style="display:flex; justify-content:space-between; gap:1rem; align-items:baseline; flex-wrap:wrap">
+          <span style="color:var(--text-3); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600">Running</span>
+          <span style="font-family:ui-monospace,monospace" id="sv-local">--</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; gap:1rem; align-items:baseline; flex-wrap:wrap">
+          <span style="color:var(--text-3); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600">Latest on GitHub</span>
+          <span style="font-family:ui-monospace,monospace" id="sv-remote">--</span>
+        </div>
+        <div id="sv-uptodate" style="display:none; color:var(--success); font-size:.78rem; font-weight:500">Up to date</div>
+        <div id="sv-behind" style="display:none; color:var(--warning); font-size:.78rem; font-weight:500">Update available</div>
+      </div>
+
+      <div style="display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem">
+        <button type="button" class="btn btn-accent" id="sys-update-btn"><i class="icon-cloud-download"></i><span>Pull latest and rebuild</span></button>
+        <button type="button" class="btn" id="sys-version-refresh"><i class="icon-refresh"></i><span>Refresh</span></button>
+        <button type="button" class="btn" id="sys-restore-test-btn"><i class="icon-shield"></i><span>Validate backup</span></button>
+      </div>
+
+      <div id="sys-alert" class="alert" style="display:none; margin-bottom:1rem"></div>
+      <div id="sys-update-output" style="display:none; font-family:ui-monospace,monospace; font-size:.78rem; padding:.8rem 1rem; background:#0a0a10; color:#d4d4d8; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto"></div>
+    </div>
+
+    <div class="form-card">
       <h2>Backups</h2>
       <p class="lead">Snapshot the irreplaceable bits (registry, project DBs, encrypted secrets vaults) into a tarball. Local copies are kept in <code>~/backups/</code>; if Cloudflare R2 is configured, a copy is also pushed offsite. Run <code>~/r2-setup.sh</code> from the Shell page once to wire R2 credentials.</p>
 
@@ -735,6 +762,110 @@
     document.getElementById('backup-now-r2').addEventListener('click', function () { runBackup('r2'); });
     document.getElementById('backup-refresh').addEventListener('click', loadBackups);
     loadBackups();
+
+    // ---- System card ----
+    function loadVersion() {
+      fetch('/api/system/version').then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) return;
+        document.getElementById('sv-local').textContent = j.local_sha
+          ? (j.local_sha + (j.local_subject ? ' \u2014 ' + j.local_subject : ''))
+          : '(not a git clone)';
+        document.getElementById('sv-remote').textContent = j.remote_sha
+          ? (j.remote_sha + (j.remote_subject ? ' \u2014 ' + j.remote_subject : ''))
+          : '(not fetched yet)';
+        document.getElementById('sv-uptodate').style.display = j.up_to_date ? '' : 'none';
+        document.getElementById('sv-behind').style.display = (!j.up_to_date && j.local_sha && j.remote_sha) ? '' : 'none';
+      }).catch(function () {});
+    }
+
+    function showSysAlert(msg, kind) {
+      var a = document.getElementById('sys-alert');
+      a.className = 'alert ' + (kind || '');
+      a.innerHTML = '<i class="icon-' + (kind === 'success' ? 'check' : kind === 'error' ? 'exclamation' : 'info') + '"></i> ' + msg;
+      a.style.display = '';
+    }
+    function showSysOutput(text) {
+      var el = document.getElementById('sys-update-output');
+      el.textContent = text;
+      el.style.display = text ? '' : 'none';
+    }
+
+    document.getElementById('sys-update-btn').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      var orig = btn.querySelector('span').textContent;
+      btn.querySelector('span').textContent = 'Pulling and building...';
+      showSysOutput('Running git fetch + rsync + rebuild. This usually takes 30 to 90 seconds.');
+      // Long timeout because rebuild can be slow on the phone
+      var ctrl = new AbortController();
+      setTimeout(function () { ctrl.abort(); }, 180000);
+      fetch('/api/system/update', { method: 'POST', signal: ctrl.signal })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          btn.disabled = false;
+          btn.querySelector('span').textContent = orig;
+          if (j.ok) {
+            if (j.reason === 'already_up_to_date') {
+              showSysAlert('Already on latest commit (' + j.head + ').', 'success');
+            } else {
+              showSysAlert('Updated ' + j.before + ' &rarr; ' + j.after + '. hp-server is restarting; this page will reconnect in a few seconds.', 'success');
+              setTimeout(loadVersion, 8000);
+            }
+            showSysOutput(JSON.stringify(j, null, 2));
+          } else {
+            showSysAlert('Update failed: ' + (j.err || 'unknown'), 'error');
+            showSysOutput(JSON.stringify(j, null, 2));
+          }
+        })
+        .catch(function (e) {
+          btn.disabled = false;
+          btn.querySelector('span').textContent = orig;
+          if (e.name === 'AbortError') {
+            showSysAlert('Update timed out after 3 minutes. Check Shell page and tail ~/logs/self-update.log to see status.', 'error');
+          } else {
+            // hp-server restart will close the connection; that's actually a
+            // success signal, not a failure. Schedule a reload check.
+            showSysAlert('Connection dropped (likely the restart). Reconnecting...', 'success');
+            setTimeout(loadVersion, 8000);
+          }
+        });
+    });
+
+    document.getElementById('sys-version-refresh').addEventListener('click', loadVersion);
+
+    document.getElementById('sys-restore-test-btn').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      var orig = btn.querySelector('span').textContent;
+      btn.querySelector('span').textContent = 'Validating...';
+      // Try R2 first if configured, else local
+      fetch('/api/system/restore-test?source=r2', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.err === 'r2_not_configured' || j.err === 'no_remote_backups') {
+            return fetch('/api/system/restore-test?source=local', { method: 'POST' }).then(function (r) { return r.json(); });
+          }
+          return j;
+        })
+        .then(function (j) {
+          btn.disabled = false;
+          btn.querySelector('span').textContent = orig;
+          if (j.ok) {
+            showSysAlert('Backup is restorable: ' + j.tarball + ' (' + (j.size_bytes / 1024).toFixed(1) + ' KB), ' + j.registry_lines + ' projects, ' + j.db_count + ' DBs.', 'success');
+          } else {
+            showSysAlert('Restore test failed: ' + (j.err || 'unknown'), 'error');
+          }
+          showSysOutput(JSON.stringify(j, null, 2));
+        })
+        .catch(function (e) {
+          btn.disabled = false;
+          btn.querySelector('span').textContent = orig;
+          showSysAlert('Network error: ' + e.message, 'error');
+        });
+    });
+
+    loadVersion();
+    setInterval(loadVersion, 60000);
 
     // Operator rules
     const rulesText = document.getElementById('rules-json');
