@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=26">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=26">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=26">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=27">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=27">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=27">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -294,8 +294,37 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=26"></script>
-<script src="https://rofihosted.space/app.js?v=26"></script>
+<!-- Delete project dialog with purge option -->
+<div id="delete-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; align-items:center; justify-content:center; padding:1rem">
+  <div style="background:var(--surface); border:1px solid var(--border-soft); border-radius:12px; padding:1.4rem 1.6rem; width:100%; max-width:520px; box-shadow:0 20px 60px rgba(0,0,0,.4)">
+    <h2 style="margin:0 0 .4rem; font-size:1rem; font-weight:600; color:var(--text); letter-spacing:-.01em">Delete project</h2>
+    <p id="delete-msg" style="margin:0 0 1rem; color:var(--text-2); font-size:.88rem; line-height:1.55"></p>
+
+    <div style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; padding:.85rem 1rem; margin-bottom:1rem">
+      <label style="display:flex; align-items:flex-start; gap:.6rem; cursor:pointer; font-size:.85rem; color:var(--text); line-height:1.45">
+        <input type="checkbox" id="delete-purge" style="margin-top:.25rem; flex-shrink:0">
+        <span>
+          <strong style="font-weight:600">Also wipe files and database</strong>
+          <span style="display:block; color:var(--text-3); font-size:.78rem; margin-top:.2rem">
+            Removes <code style="font-family:ui-monospace,monospace">~/data/projects/&lt;id&gt;/</code> (working tree, build artifacts, encrypted secrets vault, runtime logs) and <code style="font-family:ui-monospace,monospace">~/data/dbs/&lt;id&gt;.db</code> (auth + app data). This cannot be undone.
+          </span>
+        </span>
+      </label>
+    </div>
+
+    <p id="delete-warning" style="display:none; margin:0 0 1rem; padding:.7rem .85rem; background:rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.3); border-radius:8px; color:#ef4444; font-size:.8rem; line-height:1.45">
+      <i class="icon-exclamation"></i> Permanent delete is enabled. Files and database will be wiped from disk.
+    </p>
+
+    <div style="display:flex; justify-content:flex-end; gap:.5rem">
+      <button class="btn" id="delete-cancel">Cancel</button>
+      <button class="btn" id="delete-ok" style="background:#ef4444; border-color:#ef4444; color:#fff">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=27"></script>
+<script src="https://rofihosted.space/app.js?v=27"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -698,6 +727,48 @@ RH.loadCurrentUser();
     });
   }
 
+  // ---------- Delete project dialog (with optional purge) ----------
+  function uiDeleteProject(name) {
+    return new Promise(function (resolve) {
+      var overlay = document.getElementById('delete-overlay');
+      var msg = document.getElementById('delete-msg');
+      var purgeCb = document.getElementById('delete-purge');
+      var warn = document.getElementById('delete-warning');
+      var okBtn = document.getElementById('delete-ok');
+      var cancelBtn = document.getElementById('delete-cancel');
+
+      msg.textContent = 'Delete "' + name + '"? By default this only removes the registry entry and stops any supervised process. Files and database stay on disk so you can restore later.';
+      purgeCb.checked = false;
+      warn.style.display = 'none';
+      okBtn.textContent = 'Delete';
+      overlay.style.display = 'flex';
+
+      var onPurgeChange = function () {
+        warn.style.display = purgeCb.checked ? '' : 'none';
+        okBtn.textContent = purgeCb.checked ? 'Delete permanently' : 'Delete';
+      };
+      var cleanup = function (result) {
+        overlay.style.display = 'none';
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        overlay.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        purgeCb.removeEventListener('change', onPurgeChange);
+        resolve(result);
+      };
+      var onOk = function () { cleanup({ confirmed: true, purge: purgeCb.checked }); };
+      var onCancel = function () { cleanup({ confirmed: false, purge: false }); };
+      var onBackdrop = function (e) { if (e.target === overlay) cleanup({ confirmed: false, purge: false }); };
+      var onKey = function (e) { if (e.key === 'Escape') cleanup({ confirmed: false, purge: false }); };
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onKey);
+      purgeCb.addEventListener('change', onPurgeChange);
+      cancelBtn.focus();
+    });
+  }
+
   // ---------- Detail panel ----------
   var detailPanel = document.getElementById('detail-panel');
   var currentProject = null;
@@ -874,13 +945,11 @@ RH.loadCurrentUser();
 
   document.getElementById('d-delete').addEventListener('click', function () {
     if (!currentProject) return;
-    uiConfirm(
-      'Delete project',
-      'Delete "' + currentProject.name + '"? This removes the registry entry and stops any supervised process. The working tree at ~/data/projects/<id>/ stays on disk in case you want to restore.',
-      'Delete'
-    ).then(function (ok) {
-      if (!ok) return;
-      var p = new URLSearchParams(); p.set('id', currentProject.id);
+    uiDeleteProject(currentProject.name).then(function (choice) {
+      if (!choice.confirmed) return;
+      var p = new URLSearchParams();
+      p.set('id', currentProject.id);
+      if (choice.purge) p.set('purge', 'true');
       fetch('/api/projects/delete', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
         .then(function (r) { return r.json(); }).then(function (j) {
           if (j.ok) closeDetail();

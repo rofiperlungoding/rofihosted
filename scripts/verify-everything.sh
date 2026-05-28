@@ -136,8 +136,11 @@ check "POST <sub>/auth/login" POST "https://$SUB.rofihosted.space/auth/login" \
 RESP=$(curl -s -b "$CJ" "$BASE/api/projects/users?id=$PID")
 if echo "$RESP" | grep -q 'test@example.com'; then echo "PASS: GET /api/projects/users (sees test@example.com)"; else echo "FAIL: users -> $RESP"; fi
 
-# Cleanup
-check "POST /api/projects/delete" POST "$BASE/api/projects/delete" "id=$PID"
+# Cleanup with purge to verify the new flag also wipes files+db
+check "POST /api/projects/delete (purge=true)" POST "$BASE/api/projects/delete" "id=$PID&purge=true"
+if [ ! -d ~/data/projects/$PID ]; then echo "PASS: purge removed ~/data/projects/$PID"; else echo "FAIL: ~/data/projects/$PID still exists"; fi
+if [ ! -f ~/data/dbs/$PID.db ]; then echo "PASS: purge removed ~/data/dbs/$PID.db"; else echo "FAIL: ~/data/dbs/$PID.db still exists"; fi
+# Belt and suspenders in case we ever skipped purge
 rm -rf ~/data/projects/$PID ~/data/dbs/$PID.db
 
 echo

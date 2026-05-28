@@ -3223,6 +3223,17 @@ fn apiProjectsDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         try res.json(.{ .ok = false, .err = "missing_id" }, .{});
         return;
     };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const purge_raw = form.get("purge") orelse "";
+    const purge = std.mem.eql(u8, purge_raw, "true") or std.mem.eql(u8, purge_raw, "1") or std.mem.eql(u8, purge_raw, "on");
+
+    // Best-effort: stop any supervised process before pulling the registry entry.
+    app.supervisor.stop(id) catch {};
+
     app.projects.delete(id) catch |err| {
         const code: []const u8 = switch (err) {
             error.NotFound => "not_found",
@@ -3232,13 +3243,41 @@ fn apiProjectsDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         try res.json(.{ .ok = false, .err = code }, .{});
         return;
     };
+
+    var purged_files = false;
+    var purged_db = false;
+    if (purge) {
+        // Working tree (also contains secrets.bin and any logs under the project dir).
+        const proj_dir = std.fmt.allocPrint(res.arena, "{s}/{s}", .{ projects.PROJECTS_DIR, id }) catch null;
+        if (proj_dir) |dir| {
+            std.fs.deleteTreeAbsolute(dir) catch |err| {
+                std.log.warn("project_purge: deleteTreeAbsolute({s}) failed: {s}", .{ dir, @errorName(err) });
+            };
+            purged_files = true;
+        }
+        // Per-project auth/data DB.
+        const db_path = std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ projauth.DBS_DIR, id }) catch null;
+        if (db_path) |p| {
+            std.fs.deleteFileAbsolute(p) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => std.log.warn("project_purge: deleteFileAbsolute({s}) failed: {s}", .{ p, @errorName(err) }),
+            };
+            // Drop SQLite sidecar files too if the DB ever ran in WAL mode.
+            const wal = std.fmt.allocPrint(res.arena, "{s}-wal", .{p}) catch null;
+            if (wal) |w| std.fs.deleteFileAbsolute(w) catch {};
+            const shm = std.fmt.allocPrint(res.arena, "{s}-shm", .{p}) catch null;
+            if (shm) |s| std.fs.deleteFileAbsolute(s) catch {};
+            purged_db = true;
+        }
+    }
+
     audit.append(.{
         .timestamp = std.time.timestamp(),
         .actor = actor,
-        .action = "project_delete",
+        .action = if (purge) "project_delete_purge" else "project_delete",
         .target = id,
     });
-    try res.json(.{ .ok = true }, .{});
+    try res.json(.{ .ok = true, .purged_files = purged_files, .purged_db = purged_db }, .{});
 }
 
 // id-validating helper: must be 16 hex chars.
