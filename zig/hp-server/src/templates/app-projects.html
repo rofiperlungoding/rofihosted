@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=30">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=30">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=30">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=31">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=31">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=31">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -154,6 +154,16 @@
           <input class="input" id="e-publish" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
           <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">Branch</label>
           <input class="input" id="e-branch" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
+          <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">RAM limit (MB)</label>
+          <div style="display:flex; gap:.4rem; align-items:center; margin-bottom:.6rem">
+            <input type="number" min="0" step="32" class="input" id="e-rss-limit" style="font-family:ui-monospace,monospace; font-size:.8rem; flex:1" placeholder="0 = no limit">
+            <button type="button" class="btn btn-sm" data-rss-preset="0" style="font-size:.72rem; padding:.3rem .55rem">off</button>
+            <button type="button" class="btn btn-sm" data-rss-preset="128" style="font-size:.72rem; padding:.3rem .55rem">128</button>
+            <button type="button" class="btn btn-sm" data-rss-preset="256" style="font-size:.72rem; padding:.3rem .55rem">256</button>
+            <button type="button" class="btn btn-sm" data-rss-preset="384" style="font-size:.72rem; padding:.3rem .55rem">384</button>
+            <button type="button" class="btn btn-sm" data-rss-preset="512" style="font-size:.72rem; padding:.3rem .55rem">512</button>
+          </div>
+          <p class="hint" style="margin:0 0 .8rem; font-size:.72rem">Supervisor SIGTERMs the process if it stays above this limit for two consecutive 5-second samples. Auto-restarted with backoff. 0 disables the cap. Static projects ignore this.</p>
           <button class="btn btn-accent btn-sm" id="d-save-config" style="margin-top:.4rem"><span>Save</span></button>
         </div>
       </div>
@@ -324,8 +334,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=30"></script>
-<script src="https://rofihosted.space/app.js?v=30"></script>
+<script src="https://rofihosted.space/theme.js?v=31"></script>
+<script src="https://rofihosted.space/app.js?v=31"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -775,6 +785,7 @@ RH.loadCurrentUser();
   var currentProject = null;
   var currentLogKind = 'build';
   var logsPollHandle = null;
+  var statusPollHandle = null;
 
   function openDetail(id) {
     fetch('/api/projects').then(function (r) { return r.json(); }).then(function (j) {
@@ -787,11 +798,13 @@ RH.loadCurrentUser();
       wizEl.style.display = 'none';
       detailPanel.style.display = '';
       pollLogs();
+      pollStatus();
     });
   }
 
   function closeDetail() {
     if (logsPollHandle) { clearTimeout(logsPollHandle); logsPollHandle = null; }
+    if (statusPollHandle) { clearTimeout(statusPollHandle); statusPollHandle = null; }
     currentProject = null;
     detailPanel.style.display = 'none';
     listEl.style.display = '';
@@ -825,6 +838,8 @@ RH.loadCurrentUser();
       + '<span class="pill st-' + escapeHtml(p.status) + '">' + escapeHtml(p.status) + '</span>';
     if (p.port) metaHtml += '<span class="pill">port :' + p.port + '</span>';
     if (p.last_deploy_at) metaHtml += '<span class="pill">deployed ' + escapeHtml(fmtTs(p.last_deploy_at)) + '</span>';
+    metaHtml += '<span class="pill" id="d-rss-pill" style="display:none"></span>';
+    metaHtml += '<span class="pill" id="d-kill-pill" style="display:none; background:rgba(239,68,68,.15); color:#ef4444"></span>';
     document.getElementById('d-meta').innerHTML = metaHtml;
 
     // Start/Stop/Restart now work for BOTH static and backend projects.
@@ -875,7 +890,8 @@ RH.loadCurrentUser();
       ['Start command', p.start_cmd || '(static)'],
       ['Publish directory', p.publish_dir || '(repo root)'],
       ['Created', fmtTs(p.created_at)],
-      ['Last deploy', p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never']
+      ['Last deploy', p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never'],
+      ['RAM limit', p.rss_limit_mb ? (p.rss_limit_mb + ' MB') : 'no limit']
     ];
     var configHtml = '';
     configRows.forEach(function (r) {
@@ -892,6 +908,7 @@ RH.loadCurrentUser();
     document.getElementById('e-start').value = p.start_cmd || '';
     document.getElementById('e-publish').value = p.publish_dir || '';
     document.getElementById('e-branch').value = p.branch || 'main';
+    document.getElementById('e-rss-limit').value = p.rss_limit_mb || 0;
 
     // Webhook
     document.getElementById('d-webhook-url').textContent = location.origin + '/v1/github/' + p.id;
@@ -943,6 +960,59 @@ RH.loadCurrentUser();
         el.scrollTop = el.scrollHeight;
         if (logsPollHandle) clearTimeout(logsPollHandle);
         logsPollHandle = setTimeout(pollLogs, 3000);
+      });
+  }
+
+  // Poll supervisor status to surface live RSS + last_kill_reason on the
+  // detail panel. Fast (<5KB) JSON. Skipped silently for static projects
+  // since they have no supervisor entry.
+  function pollStatus() {
+    if (!currentProject) return;
+    if (currentProject.runtime === 'static') {
+      if (statusPollHandle) clearTimeout(statusPollHandle);
+      statusPollHandle = setTimeout(pollStatus, 10000);
+      return;
+    }
+    fetch('/api/projects/status?id=' + encodeURIComponent(currentProject.id))
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok || !currentProject) return;
+        var rssPill = document.getElementById('d-rss-pill');
+        var killPill = document.getElementById('d-kill-pill');
+        if (rssPill) {
+          if (j.rss_mb > 0) {
+            var label = j.rss_mb + ' MB';
+            if (j.rss_limit_mb > 0) {
+              var pct = Math.round((j.rss_mb / j.rss_limit_mb) * 100);
+              label += ' / ' + j.rss_limit_mb + ' (' + pct + '%)';
+              if (pct >= 90) rssPill.style.color = '#ef4444';
+              else if (pct >= 75) rssPill.style.color = '#f59e0b';
+              else rssPill.style.color = '';
+            }
+            rssPill.textContent = 'RAM ' + label;
+            rssPill.style.display = '';
+          } else {
+            rssPill.style.display = 'none';
+          }
+        }
+        if (killPill) {
+          if (j.last_kill_reason && j.last_kill_reason !== 'none' && j.state !== 'running') {
+            var reasonLabel = {
+              operator: 'stopped by you',
+              crash: 'crashed',
+              rss_quota: 'killed for OOM (quota)',
+            }[j.last_kill_reason] || j.last_kill_reason;
+            killPill.textContent = reasonLabel;
+            killPill.style.display = '';
+          } else {
+            killPill.style.display = 'none';
+          }
+        }
+      })
+      .catch(function () {})
+      .finally(function () {
+        if (!currentProject) return;
+        if (statusPollHandle) clearTimeout(statusPollHandle);
+        statusPollHandle = setTimeout(pollStatus, 5000);
       });
   }
 
@@ -1052,6 +1122,7 @@ RH.loadCurrentUser();
     p.set('start_cmd', document.getElementById('e-start').value);
     p.set('publish_dir', document.getElementById('e-publish').value);
     p.set('branch', document.getElementById('e-branch').value);
+    p.set('rss_limit_mb', String(parseInt(document.getElementById('e-rss-limit').value, 10) || 0));
     fetch('/api/projects/update', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
       .then(function (r) { return r.json(); }).then(function (j) {
         btn.disabled = false;
@@ -1063,6 +1134,14 @@ RH.loadCurrentUser();
           showDetailError('Save failed: ' + (j.err || 'unknown'));
         }
       });
+  });
+
+  // RSS preset chips: clicking one fills the input. Save still requires
+  // clicking the Save button so accidental clicks don't deploy a quota change.
+  document.querySelectorAll('button[data-rss-preset]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.getElementById('e-rss-limit').value = btn.dataset.rssPreset;
+    });
   });
 
   // Secrets

@@ -1,0 +1,54 @@
+feat: RAM quota slider in detail panel + rh deploy auto-detects runtime
+
+Two polish features on top of yesterday's RSS quota and rh CLI work.
+
+1. RAM limit slider on project detail panel (Config tab)
+
+zig/hp-server/src/templates/app-projects.html:
+- New form field e-rss-limit (number input) with 5 preset chips:
+  off, 128, 256, 384, 512 MB. Clicking a chip fills the input but Save
+  still requires the dedicated button so accidents don't deploy a
+  quota change.
+- Config rows now show "RAM limit: 256 MB" or "no limit".
+- Two new live pills on the meta row:
+  - d-rss-pill: shows live RSS as "RAM 142 MB / 256 (55%)". Color
+    grades to amber at 75% and red at 90%.
+  - d-kill-pill: shows last_kill_reason if set and process not
+    running, e.g. "killed for OOM (quota)" / "stopped by you" /
+    "crashed".
+- New pollStatus() runs every 5s alongside the existing log poller,
+  hits /api/projects/status. Skipped for static projects (no
+  supervisor entry to query).
+
+The status endpoint now returns rss_kb, rss_mb, rss_limit_mb, and
+last_kill_reason on top of the existing state/pid/crash_count fields.
+
+2. rh deploy auto-detects runtime
+
+cli/rh.mjs detectRuntime() heuristics, mirroring zig/.../detect.zig:
+- package.json + vite/astro/react-scripts: static, vite/dist
+- package.json + next: node, next start
+- package.json + express/fastify/hono/koa: node with respective starts
+- package.json with scripts.start: generic node
+- requirements.txt / pyproject.toml / Pipfile: python with sane defaults
+- bare index.html: static
+
+The detection result fills CreateInput when claiming a new subdomain so
+you don't have to manually wire install_cmd / build_cmd / start_cmd.
+
+Workflow change: 'rh deploy ./mydir mysub' will now create a Vite
+project as static with build_cmd=npm run build, publish_dir=dist
+automatically. Existing projects keep their saved config.
+
+Caveat: 'rh deploy' over zip-upload is only for static projects (the
+upload path skips install + build). For node/python, the CLI bails
+with a hint to use git-based deployment via the dashboard. Will add
+'rh deploy-from-repo' later if needed.
+
+Tested:
+- /v1/projects/status returns new rss_kb / last_kill_reason fields
+- detectRuntime() unit tested against test-vite-dir (PASS static),
+  test-express-dir (PASS node)
+- rh ls still works
+- verify-everything.sh: all PASS
+- Cache buster bumped to v=31 across all 16 templates

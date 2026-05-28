@@ -204,32 +204,148 @@ async function makeZip(dir) {
   fail(`cannot build zip: install 'zip' (linux/mac) or '7z' (windows)`);
 }
 
-async function cmdDeploy({ base, apiKey }, [dir, sub]) {
-  if (!dir || !sub) fail('usage: rh deploy <directory> <subdomain>');
+async function detectRuntime(dir) {
+  // Quick heuristics. Mirrors zig/hp-server/src/detect.zig but lighter.
+  // Returns { runtime, install_cmd, build_cmd, start_cmd, publish_dir, hint }.
+  const has = async (p) => !!(await fs.stat(path.join(dir, p)).catch(() => null));
+
+  if (await has('package.json')) {
+    const pkgRaw = await fs.readFile(path.join(dir, 'package.json'), 'utf8');
+    let pkg = {};
+    try { pkg = JSON.parse(pkgRaw); } catch {}
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    const scripts = pkg.scripts || {};
+    const installer = (await has('pnpm-lock.yaml')) ? 'pnpm install --frozen-lockfile'
+      : (await has('yarn.lock')) ? 'yarn install --frozen-lockfile'
+      : (await has('bun.lockb')) ? 'bun install'
+      : 'npm ci';
+    const runner = (await has('bun.lockb')) ? 'bun run' : (await has('pnpm-lock.yaml')) ? 'pnpm' : (await has('yarn.lock')) ? 'yarn' : 'npm run';
+
+    // SPA frameworks - static output
+    if (deps['vite'] || deps['@vitejs/plugin-react']) {
+      return {
+        runtime: 'static',
+        install_cmd: installer,
+        build_cmd: `${runner} build`,
+        start_cmd: '',
+        publish_dir: 'dist',
+        hint: 'Vite (build to dist/)',
+      };
+    }
+    if (deps['astro']) {
+      return { runtime: 'static', install_cmd: installer, build_cmd: `${runner} build`, start_cmd: '', publish_dir: 'dist', hint: 'Astro' };
+    }
+    if (deps['react-scripts']) {
+      return { runtime: 'static', install_cmd: installer, build_cmd: `${runner} build`, start_cmd: '', publish_dir: 'build', hint: 'Create React App' };
+    }
+    // SSR / Node servers
+    if (deps['next']) {
+      return { runtime: 'node', install_cmd: installer, build_cmd: `${runner} build`, start_cmd: `${runner} start`, publish_dir: '', hint: 'Next.js' };
+    }
+    if (deps['express'] || deps['fastify'] || deps['hono'] || deps['koa']) {
+      return {
+        runtime: 'node',
+        install_cmd: installer,
+        build_cmd: scripts.build ? `${runner} build` : '',
+        start_cmd: scripts.start ? `${runner} start` : 'node index.js',
+        publish_dir: '',
+        hint: 'Node server (Express/Fastify/Hono)',
+      };
+    }
+    if (scripts.start) {
+      return {
+        runtime: 'node',
+        install_cmd: installer,
+        build_cmd: scripts.build ? `${runner} build` : '',
+        start_cmd: `${runner} start`,
+        publish_dir: '',
+        hint: 'generic Node project (npm start)',
+      };
+    }
+    // Plain index.html with package.json
+    if (await has('index.html')) {
+      return { runtime: 'static', install_cmd: installer, build_cmd: scripts.build ? `${runner} build` : '', start_cmd: '', publish_dir: '', hint: 'static index.html' };
+    }
+    return { runtime: 'node', install_cmd: installer, build_cmd: '', start_cmd: '', publish_dir: '', hint: 'generic Node, please set start_cmd' };
+  }
+
+  if (await has('requirements.txt') || await has('pyproject.toml') || await has('Pipfile')) {
+    const installer = (await has('Pipfile')) ? 'pipenv install'
+      : (await has('pyproject.toml')) ? 'pip install --user -e .'
+      : 'pip install --user -r requirements.txt';
+    let start = 'python3 main.py';
+    if (await has('app.py')) start = 'python3 app.py';
+    if (await has('main.py') && !(await has('app.py'))) start = 'python3 main.py';
+    return { runtime: 'python', install_cmd: installer, build_cmd: '', start_cmd: start, publish_dir: '', hint: 'Python (PORT env var injected)' };
+  }
+
+  if (await has('index.html')) {
+    return { runtime: 'static', install_cmd: '', build_cmd: '', start_cmd: '', publish_dir: '', hint: 'plain HTML' };
+  }
+
+  return { runtime: 'static', install_cmd: '', build_cmd: '', start_cmd: '', publish_dir: '', hint: 'unknown, default to static' };
+}
+
+async function cmdDeploy({ base, apiKey }, args) {
+  // Parse args: rh deploy <dir> <sub> [--detect|--static]
+  const positional = args.filter(a => !a.startsWith('--'));
+  const flags = args.filter(a => a.startsWith('--'));
+  const [dir, sub] = positional;
+  if (!dir || !sub) fail('usage: rh deploy <directory> <subdomain> [--detect|--static]');
+
   const stat = await fs.stat(dir).catch(() => null);
   if (!stat || !stat.isDirectory()) fail(`not a directory: ${dir}`);
+
+  // Default to detection if neither flag given
+  const forceStatic = flags.includes('--static');
+  const detected = await detectRuntime(dir);
+  if (!forceStatic) {
+    console.log(`Detected: ${detected.hint} (runtime=${detected.runtime})`);
+  } else {
+    detected.runtime = 'static';
+    detected.install_cmd = '';
+    detected.build_cmd = '';
+    detected.start_cmd = '';
+    detected.publish_dir = '';
+  }
 
   // Look up project by subdomain
   const list = await api(base, apiKey, '/v1/projects');
   let project = (list.projects || []).find(p => p.subdomain === sub);
 
   if (!project) {
-    // Create as static, no repo URL (we'll just upload zips for it)
-    console.log(`Creating new static project '${sub}'...`);
+    console.log(`Creating new ${detected.runtime} project '${sub}'...`);
     const fd = new URLSearchParams();
     fd.set('name', sub);
     fd.set('subdomain', sub);
-    fd.set('runtime', 'static');
+    fd.set('runtime', detected.runtime);
+    if (detected.install_cmd) fd.set('install_cmd', detected.install_cmd);
+    if (detected.build_cmd) fd.set('build_cmd', detected.build_cmd);
+    if (detected.start_cmd) fd.set('start_cmd', detected.start_cmd);
+    if (detected.publish_dir) fd.set('publish_dir', detected.publish_dir);
     const created = await api(base, apiKey, '/v1/projects/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: fd.toString(),
     });
     if (!created.ok) fail(`create failed: ${created.err}`);
-    project = { id: created.id, subdomain: sub };
+    project = { id: created.id, subdomain: sub, runtime: detected.runtime };
     ok(`created project ${created.id}`);
   } else {
     console.log(`Using existing project ${project.id} (${project.runtime})`);
+  }
+
+  // For non-static projects we need a real build pipeline. The /v1/projects/upload
+  // endpoint only works for static (it skips install + build). Bail with a hint.
+  if (project.runtime !== 'static') {
+    console.log();
+    console.log(`This project is ${project.runtime}, not static.`);
+    console.log(`'rh deploy' over zip-upload only handles static sites.`);
+    console.log(`For ${project.runtime} projects, push your code to a git repo and trigger /v1/projects/deploy:`);
+    console.log(`  rh deploy-from-repo <subdomain>          # to be implemented`);
+    console.log();
+    console.log(`Or set repo_url + branch via the dashboard, then click Redeploy.`);
+    fail('non-static deploy not supported via zip upload');
   }
 
   console.log(`Zipping ${dir}...`);
@@ -302,6 +418,7 @@ async function main() {
     console.log(`  rh backup [--r2]           trigger a backup`);
     console.log(`  rh ls                      list all projects`);
     console.log(`  rh deploy <dir> <sub>      zip and upload a directory as static project`);
+    console.log(`    --static                 force static (skip auto-detect)`);
     console.log(`  rh logs <subdomain>        tail build + runtime logs`);
     console.log();
     console.log(`config: ~/.rofihosted/config.json or env ROFIHOSTED_API_KEY`);
