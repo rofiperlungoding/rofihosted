@@ -103,9 +103,6 @@
 <script src="https://rofihosted.space/app.js?v=25"></script>
 <script>
 RH.loadCurrentUser();
-RH.connectStream();
-RH.on('ready', function () { document.getElementById('ws-status').className = 'ws-badge live'; document.getElementById('ws-status').innerHTML = '<span class="dot"></span> live'; });
-RH.on('disconnected', function () { document.getElementById('ws-status').className = 'ws-badge offline'; document.getElementById('ws-status').innerHTML = '<span class="dot"></span> offline'; });
 
 (function () {
   var escapeHtml = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
