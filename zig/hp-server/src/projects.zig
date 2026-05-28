@@ -85,6 +85,10 @@ pub const Project = struct {
     webhook_secret: []const u8, // hex string used to HMAC-verify GitHub push webhooks
     port: u16, // 0 for static
     status: Status,
+    /// Maximum resident memory (MB) allowed for this project's process. The
+    /// supervisor polls /proc/<pid>/status and SIGTERMs the child if it
+    /// exceeds this for two consecutive samples. 0 = no limit.
+    rss_limit_mb: u32 = 0,
     created_at: i64,
     updated_at: i64,
     last_deploy_at: i64,
@@ -158,6 +162,7 @@ pub const Manager = struct {
                 created_at: i64 = 0,
                 updated_at: i64 = 0,
                 last_deploy_at: i64 = 0,
+                rss_limit_mb: u32 = 0,
                 deleted: bool = false,
             };
             const parsed = std.json.parseFromSlice(Wire, self.allocator, line, .{
@@ -183,6 +188,7 @@ pub const Manager = struct {
                 .webhook_secret = try arena.dupe(u8, w.webhook_secret),
                 .port = w.port,
                 .status = st,
+                .rss_limit_mb = w.rss_limit_mb,
                 .created_at = w.created_at,
                 .updated_at = w.updated_at,
                 .last_deploy_at = w.last_deploy_at,
@@ -230,6 +236,7 @@ pub const Manager = struct {
         build_cmd: []const u8 = "",
         start_cmd: []const u8 = "",
         publish_dir: []const u8 = "",
+        rss_limit_mb: u32 = 0,
     };
 
     pub fn create(self: *Manager, input: CreateInput) !Project {
@@ -281,6 +288,7 @@ pub const Manager = struct {
             .webhook_secret = try arena.dupe(u8, &secret_hex),
             .port = port,
             .status = .created,
+            .rss_limit_mb = input.rss_limit_mb,
             .created_at = now,
             .updated_at = now,
             .last_deploy_at = 0,
@@ -309,6 +317,7 @@ pub const Manager = struct {
         publish_dir: ?[]const u8 = null,
         status: ?Status = null,
         last_deploy_at: ?i64 = null,
+        rss_limit_mb: ?u32 = null,
     };
 
     pub fn update(self: *Manager, id: []const u8, input: UpdateInput) !Project {
@@ -329,6 +338,7 @@ pub const Manager = struct {
                 if (input.publish_dir) |v| p.publish_dir = try arena.dupe(u8, v);
                 if (input.status) |v| p.status = v;
                 if (input.last_deploy_at) |v| p.last_deploy_at = v;
+                if (input.rss_limit_mb) |v| p.rss_limit_mb = v;
                 p.updated_at = std.time.timestamp();
                 try self.rewriteToDisk();
                 return p.*;
@@ -412,8 +422,8 @@ fn writeProject(w: anytype, p: Project) !void {
     try w.writeAll(",\"webhook_secret\":\"");
     try writeJsonStr(w, p.webhook_secret);
     try w.print(
-        ",\"port\":{d},\"status\":\"{s}\",\"created_at\":{d},\"updated_at\":{d},\"last_deploy_at\":{d}}}",
-        .{ p.port, p.status.toString(), p.created_at, p.updated_at, p.last_deploy_at },
+        ",\"port\":{d},\"status\":\"{s}\",\"created_at\":{d},\"updated_at\":{d},\"last_deploy_at\":{d},\"rss_limit_mb\":{d}}}",
+        .{ p.port, p.status.toString(), p.created_at, p.updated_at, p.last_deploy_at, p.rss_limit_mb },
     );
 }
 

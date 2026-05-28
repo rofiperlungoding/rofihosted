@@ -1,0 +1,88 @@
+feat: rh CLI + admin scope + per-project RSS quota + GH Actions auto-deploy
+
+Three-feature drop that finalizes the "no SSH from anywhere" goal.
+
+1. rh CLI (cli/rh.mjs)
+
+A small Node 18+ CLI that talks to hp-server over HTTPS using an
+admin-scoped API key. Replaces SSH for the day-to-day operator
+workflows.
+
+Commands implemented and tested end-to-end:
+  rh login                save API key to ~/.rofihosted/config.json (0600)
+  rh whoami               verify the saved key
+  rh status               battery, memory, disk, uptime, version in one view
+  rh power                charger status
+  rh update               pull latest from GitHub and rebuild on the phone
+  rh backup [--r2]        snapshot to local + R2 offsite
+  rh ls                   list all projects
+  rh deploy <dir> <sub>   zip a directory, claim/find subdomain, upload
+  rh logs <sub>           dump build + runtime logs
+
+Tested deploying a small static site from a Windows laptop (no SSH or
+Tailscale): rh deploy ./test-deploy-dir rh-cli-test produced a live
+site at https://rh-cli-test.rofihosted.space in <5s.
+
+Zip backend tries `zip` then `7z` then PowerShell's Compress-Archive,
+so it works on Linux, macOS, and Windows out of the box.
+
+2. admin scope on API keys
+
+apikey.zig: new Scope.admin enum value alongside .sql and .read.
+
+handleV1 in main.zig: new endpoints scoped to admin
+  /v1/system/version       SHA + subject for local and origin/main
+  /v1/system/update        triggers self-update.sh, returns JSON summary
+  /v1/system/info          battery, mem, disk, uptime
+  /v1/system/power         charger status
+  /v1/system/backup        triggers backup-quick or backup-r2
+  /v1/projects             list (mirrors /api/projects)
+  /v1/projects/create      create a new project
+  /v1/projects/upload      upload a ZIP for static deploy
+  /v1/projects/deploy      trigger a build of an existing project
+  /v1/projects/logs        build log
+  /v1/projects/runtime-logs runtime log
+  /v1/projects/status      supervisor state (now includes rss_kb +
+                            rss_limit_mb + last_kill_reason)
+
+Scope mismatch returns 403 with explicit
+  {"ok":false,"err":"scope_required","scope":"admin"}
+
+3. per-project RSS quota
+
+projects.zig: new field rss_limit_mb (u32, 0 means no limit) plumbed
+through CreateInput, UpdateInput, JSON serializer, loadFromDisk.
+
+supervisor.zig:
+- new KillReason enum (none, operator, crash, rss_quota)
+- Entry gains over_quota_count + last_kill_reason
+- readRssKb(pid) parses /proc/<pid>/status for VmRSS
+- autoRestartLoop now samples RSS every 5s for projects with a quota.
+  Two consecutive samples over the limit -> SIGTERM the child.
+  autoRestart respawns it (or keeps killing if the leak is real).
+- Status struct now reports rss_kb and last_kill_reason, exposed via
+  /api/projects/status and /v1/projects/status.
+
+main.zig apiProjectsCreate / apiProjectsUpdate parse the new
+rss_limit_mb form field. Pass 0 to disable the cap.
+
+4. GitHub Actions auto-deploy
+
+.github/workflows/auto-deploy.yml: on push to main, calls
+/v1/system/update with HP_ADMIN_API_KEY secret. Tolerates the connection
+drop that happens when hp-server is killed for restart, then verifies
+the new version reports the pushed SHA within 2 minutes. Concurrency
+group cancels in-progress runs when a newer commit arrives.
+
+Flow now: git push -> CI (10s) -> hp-server pulls + rebuilds + respawns
+(30-90s) -> verified live. Zero manual intervention.
+
+Tested with admin-scoped key:
+- rh status from Windows laptop: returns version, battery, mem, disk,
+  uptime in <500ms
+- rh ls: shows 1 project (rh-cli-test) live
+- rh deploy: zip + upload + live URL in <5s
+- /v1/system/version with sql-only key: 403 scope_required
+- /v1/projects with admin key: 200 with project list
+
+verify-everything.sh: all PASS.

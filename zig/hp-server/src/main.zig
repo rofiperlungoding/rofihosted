@@ -3525,6 +3525,110 @@ fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const 
         }
         return v1Execute(app, req, res, rec);
     }
+
+    // System admin endpoints (CI auto-deploy, monitoring, etc).
+    // Require admin scope. These are mirrors of /api/system/* but with API
+    // key auth instead of session cookie, so they're usable from CI pipelines.
+    if (std.mem.eql(u8, path, "/v1/system/version")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiSystemVersion(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/system/update")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiSystemUpdate(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/system/info")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiSystemInfo(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/system/power")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiSystemPower(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/system/backup")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiSystemBackup(app, req, res);
+    }
+
+    // Project management endpoints (admin scope). These mirror /api/projects/*
+    // so the rh CLI / GitHub Actions can deploy without session cookies.
+    if (std.mem.eql(u8, path, "/v1/projects")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsList(app, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/projects/deploy")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsDeploy(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/projects/upload")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsUpload(app, req, res);
+    }
+    if (std.mem.startsWith(u8, path, "/v1/projects/logs")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsLogs(app, req, res);
+    }
+    if (std.mem.startsWith(u8, path, "/v1/projects/runtime-logs")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsRuntimeLogs(app, req, res);
+    }
+    if (std.mem.startsWith(u8, path, "/v1/projects/status")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsStatus(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/projects/create")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiProjectsCreate(app, req, res);
+    }
+
     res.status = 404;
     try res.json(.{ .ok = false, .err = "unknown_endpoint" }, .{});
 }
@@ -4137,6 +4241,10 @@ fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .build_cmd = form.get("build_cmd") orelse "",
         .start_cmd = form.get("start_cmd") orelse "",
         .publish_dir = form.get("publish_dir") orelse "",
+        .rss_limit_mb = blk: {
+            const v = form.get("rss_limit_mb") orelse break :blk 0;
+            break :blk std.fmt.parseInt(u32, v, 10) catch 0;
+        },
     }) catch |err| {
         const code: []const u8 = switch (err) {
             error.SubdomainTaken => "subdomain_taken",
@@ -4178,6 +4286,11 @@ fn apiProjectsUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
     if (form.get("build_cmd")) |v| input.build_cmd = v;
     if (form.get("start_cmd")) |v| input.start_cmd = v;
     if (form.get("publish_dir")) |v| input.publish_dir = v;
+    if (form.get("rss_limit_mb")) |v| {
+        if (std.fmt.parseInt(u32, v, 10)) |n| {
+            input.rss_limit_mb = n;
+        } else |_| {}
+    }
 
     const updated = app.projects.update(id, input) catch |err| {
         const code: []const u8 = switch (err) {
@@ -4759,6 +4872,8 @@ fn apiProjectsStatus(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         return;
     }
     const s = app.supervisor.statusOf(id);
+    const project = app.projects.getById(id);
+    const rss_limit_mb: u32 = if (project) |p| p.rss_limit_mb else 0;
     try res.json(.{
         .ok = true,
         .state = @tagName(s.state),
@@ -4766,6 +4881,10 @@ fn apiProjectsStatus(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .started_at = s.started_at,
         .crash_count = s.crash_count,
         .last_exit = s.last_exit,
+        .rss_kb = s.rss_kb,
+        .rss_mb = s.rss_kb / 1024,
+        .rss_limit_mb = rss_limit_mb,
+        .last_kill_reason = @tagName(s.last_kill_reason),
     }, .{});
 }
 

@@ -1,0 +1,95 @@
+name: Auto-deploy to phone
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Don't queue duplicate deploys; if a new push comes in while we're deploying,
+# cancel the old run and start fresh with the latest commit.
+concurrency:
+  group: auto-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wait for the phone to fetch the new commit
+        # GitHub takes a moment to make the new HEAD available on origin/main
+        # via git fetch. 10s is plenty.
+        run: sleep 10
+
+      - name: Trigger /v1/system/update on hp-server
+        env:
+          API_KEY: ${{ secrets.HP_ADMIN_API_KEY }}
+        run: |
+          if [ -z "$API_KEY" ]; then
+            echo "::error::HP_ADMIN_API_KEY secret is not set. Skipping deploy."
+            echo "Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          response=$(curl -sS -X POST \
+            -H "X-API-Key: $API_KEY" \
+            --max-time 240 \
+            -w '\nHTTP_STATUS:%{http_code}' \
+            https://app.rofihosted.space/v1/system/update)
+
+          status=$(echo "$response" | tail -1 | cut -d: -f2)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP $status"
+          echo "$body"
+
+          # Some clients see the connection close mid-response when hp-server
+          # is killed for restart. That's actually a success signal. We treat
+          # 200, 502, and curl exit 28 (timeout) as 'probably succeeded' and
+          # verify by hitting /v1/system/version a few seconds later.
+          case "$status" in
+            200)
+              echo "Deploy returned 200. Parsing body..."
+              if echo "$body" | grep -q '"ok":true'; then
+                echo "::notice::Deploy succeeded"
+              else
+                echo "::error::Deploy returned ok:false"
+                exit 1
+              fi
+              ;;
+            "")
+              echo "::warning::No HTTP status (likely connection severed during restart). Verifying..."
+              ;;
+            *)
+              echo "::warning::Unexpected status $status, verifying..."
+              ;;
+          esac
+
+      - name: Verify hp-server bounced back
+        env:
+          API_KEY: ${{ secrets.HP_ADMIN_API_KEY }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          # Wait for watchdog to respawn (5-15s typically)
+          attempts=0
+          max_attempts=24  # 2 minutes total
+          while [ $attempts -lt $max_attempts ]; do
+            sleep 5
+            response=$(curl -sS \
+              -H "X-API-Key: $API_KEY" \
+              --max-time 10 \
+              https://app.rofihosted.space/v1/system/version 2>/dev/null || echo '')
+            if [ -n "$response" ]; then
+              local_sha=$(echo "$response" | grep -oE '"local_sha":"[^"]+"' | cut -d'"' -f4)
+              echo "Attempt $((attempts+1)): local_sha=$local_sha (expected starts with ${EXPECTED_SHA:0:7})"
+              # Match by prefix because /v1/system/version returns short sha
+              expected_prefix="${EXPECTED_SHA:0:7}"
+              if [ "$local_sha" = "$expected_prefix" ]; then
+                echo "::notice::hp-server is now on $local_sha (matches push HEAD)"
+                exit 0
+              fi
+            fi
+            attempts=$((attempts + 1))
+          done
+          echo "::error::hp-server did not advance to $EXPECTED_SHA within 2 minutes"
+          exit 1

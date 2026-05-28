@@ -1,0 +1,339 @@
+#!/usr/bin/env node
+// rh - rofihosted command line interface.
+//
+// Talks to https://app.rofihosted.space using an API key (admin scope).
+// Configure once with `rh login` (interactive) or by setting env vars:
+//   ROFIHOSTED_API_KEY    your X-API-Key value
+//   ROFIHOSTED_BASE       optional override (default https://app.rofihosted.space)
+//
+// Commands:
+//   rh login              prompt for and save API key to ~/.rofihosted/config.json
+//   rh whoami             show key name and id
+//   rh status             show hp-server vitals (battery, mem, uptime, version)
+//   rh update             pull latest commit and rebuild on the phone
+//   rh power              show charger status
+//   rh backup [--r2]      trigger a backup (local or local+R2)
+//   rh deploy <dir> <sub> upload a directory as a static project
+//                         creates the project if subdomain not yet claimed
+//   rh logs <subdomain>   tail recent build + runtime logs
+//   rh ls                 list all projects with status
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
+import { createReadStream } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileP = promisify(execFile);
+
+const CONFIG_DIR = path.join(os.homedir(), '.rofihosted');
+const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+const DEFAULT_BASE = 'https://app.rofihosted.space';
+
+async function loadConfig() {
+  try {
+    const raw = await fs.readFile(CONFIG_PATH, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveConfig(cfg) {
+  await fs.mkdir(CONFIG_DIR, { recursive: true });
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+}
+
+function getCreds(cfg) {
+  const apiKey = process.env.ROFIHOSTED_API_KEY || cfg.api_key;
+  const base = process.env.ROFIHOSTED_BASE || cfg.base || DEFAULT_BASE;
+  return { apiKey, base };
+}
+
+function fail(msg, code = 1) {
+  console.error(`rh: ${msg}`);
+  process.exit(code);
+}
+
+function ok(msg) {
+  console.log(`OK ${msg}`);
+}
+
+async function api(base, apiKey, path, opts = {}) {
+  const headers = { 'X-API-Key': apiKey, ...(opts.headers || {}) };
+  const res = await fetch(`${base}${path}`, { ...opts, headers });
+  const text = await res.text();
+  let body;
+  try { body = JSON.parse(text); } catch { body = { raw: text }; }
+  if (!res.ok && res.status !== 200) {
+    const err = body.err || `HTTP ${res.status}`;
+    throw new Error(`${path}: ${err}`);
+  }
+  return body;
+}
+
+// ---- commands ----
+
+async function cmdLogin() {
+  const rl = readline.createInterface({ input, output });
+  console.log(`Configure rofihosted CLI.`);
+  console.log(`Get an admin-scoped API key from https://app.rofihosted.space/security`);
+  console.log(`(Click "New API key", check the admin scope, copy the value.)`);
+  console.log();
+  const apiKey = (await rl.question('API key: ')).trim();
+  const baseRaw = (await rl.question(`Base URL [${DEFAULT_BASE}]: `)).trim();
+  const base = baseRaw || DEFAULT_BASE;
+  rl.close();
+  if (!apiKey) fail('empty API key');
+
+  // Verify by calling /v1/whoami
+  try {
+    const me = await api(base, apiKey, '/v1/whoami');
+    if (!me.ok) throw new Error(me.err || 'verify failed');
+    await saveConfig({ api_key: apiKey, base });
+    ok(`saved ${CONFIG_PATH} (key="${me.name}")`);
+  } catch (e) {
+    fail(`could not verify: ${e.message}`);
+  }
+}
+
+async function cmdWhoami({ base, apiKey }) {
+  const j = await api(base, apiKey, '/v1/whoami');
+  console.log(JSON.stringify(j, null, 2));
+}
+
+async function cmdStatus({ base, apiKey }) {
+  const [info, power, version] = await Promise.all([
+    api(base, apiKey, '/v1/system/info'),
+    api(base, apiKey, '/v1/system/power'),
+    api(base, apiKey, '/v1/system/version'),
+  ]);
+  const memUsedMb = Math.round((info.mem_total_kb - info.mem_avail_kb) / 1024);
+  const memTotalMb = Math.round(info.mem_total_kb / 1024);
+  const days = Math.floor(info.system_uptime_s / 86400);
+  const hours = Math.floor((info.system_uptime_s % 86400) / 3600);
+  console.log();
+  console.log(`hp-server status`);
+  console.log(`  version    ${version.local_sha} ${version.up_to_date ? '(up to date)' : `(behind ${version.remote_sha})`}`);
+  console.log(`  binary     built ${new Date(version.binary_built_unix * 1000).toLocaleString()}`);
+  console.log(`  battery    ${power.percentage}% ${power.status}${power.is_plugged ? '' : ' [WARN: charger off]'}`);
+  console.log(`  memory     ${memUsedMb} / ${memTotalMb} MB`);
+  console.log(`  disk       ${(info.disk_free_mb / 1024).toFixed(1)} / ${(info.disk_total_mb / 1024).toFixed(1)} GB free`);
+  console.log(`  uptime     ${days}d ${hours}h`);
+  console.log();
+}
+
+async function cmdUpdate({ base, apiKey }) {
+  console.log(`Triggering /v1/system/update on ${base}...`);
+  console.log(`(this can take 30-90s for full rebuilds)`);
+  try {
+    const j = await api(base, apiKey, '/v1/system/update', { method: 'POST', signal: AbortSignal.timeout(240000) });
+    if (j.reason === 'already_up_to_date') {
+      ok(`already at ${j.head}`);
+    } else if (j.status === 'no_restart_needed') {
+      ok(`updated ${j.before} -> ${j.after} (no restart, scripts only)`);
+    } else if (j.ok) {
+      ok(`updated ${j.before} -> ${j.after} (hp-server is restarting)`);
+    } else {
+      fail(j.err || 'update failed');
+    }
+  } catch (e) {
+    if (e.message.includes('terminated') || e.message.includes('aborted')) {
+      console.log(`Connection dropped (likely the restart). Verifying...`);
+      // Poll for new version
+      for (let i = 0; i < 24; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          const v = await api(base, apiKey, '/v1/system/version');
+          if (v.ok) { ok(`hp-server back up at ${v.local_sha}`); return; }
+        } catch {}
+      }
+      fail('hp-server did not come back within 2 minutes');
+    } else {
+      fail(e.message);
+    }
+  }
+}
+
+async function cmdPower({ base, apiKey }) {
+  const j = await api(base, apiKey, '/v1/system/power');
+  console.log(JSON.stringify(j, null, 2));
+}
+
+async function cmdBackup({ base, apiKey }, args) {
+  const r2 = args.includes('--r2');
+  const target = r2 ? 'r2' : 'local';
+  console.log(`Triggering /v1/system/backup?target=${target}...`);
+  const j = await api(base, apiKey, `/v1/system/backup?target=${target}`, { method: 'POST' });
+  console.log(JSON.stringify(j, null, 2));
+}
+
+// ---- deploy: zip a dir, claim subdomain if needed, upload ----
+
+async function makeZip(dir) {
+  // Use system 'zip' or 'tar' to build a zipfile in temp.
+  const tmpZip = path.join(os.tmpdir(), `rh-deploy-${Date.now()}.zip`);
+  // Try `zip -r` first, fall back to `7z`, fall back to PowerShell's
+  // Compress-Archive (built in on Windows).
+  try {
+    await execFileP('zip', ['-rq', tmpZip, '.'], { cwd: dir });
+    return tmpZip;
+  } catch {}
+  try {
+    await execFileP('7z', ['a', '-tzip', tmpZip, `${dir}/*`]);
+    return tmpZip;
+  } catch {}
+  if (process.platform === 'win32') {
+    try {
+      // Compress-Archive resolves cwd via the current shell, so pass an
+      // absolute path.
+      const absDir = path.resolve(dir);
+      await execFileP('powershell', [
+        '-NoProfile',
+        '-Command',
+        `Compress-Archive -Path '${absDir}\\*' -DestinationPath '${tmpZip}' -Force`,
+      ]);
+      return tmpZip;
+    } catch (e) {
+      fail(`PowerShell Compress-Archive failed: ${e.message}`);
+    }
+  }
+  fail(`cannot build zip: install 'zip' (linux/mac) or '7z' (windows)`);
+}
+
+async function cmdDeploy({ base, apiKey }, [dir, sub]) {
+  if (!dir || !sub) fail('usage: rh deploy <directory> <subdomain>');
+  const stat = await fs.stat(dir).catch(() => null);
+  if (!stat || !stat.isDirectory()) fail(`not a directory: ${dir}`);
+
+  // Look up project by subdomain
+  const list = await api(base, apiKey, '/v1/projects');
+  let project = (list.projects || []).find(p => p.subdomain === sub);
+
+  if (!project) {
+    // Create as static, no repo URL (we'll just upload zips for it)
+    console.log(`Creating new static project '${sub}'...`);
+    const fd = new URLSearchParams();
+    fd.set('name', sub);
+    fd.set('subdomain', sub);
+    fd.set('runtime', 'static');
+    const created = await api(base, apiKey, '/v1/projects/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: fd.toString(),
+    });
+    if (!created.ok) fail(`create failed: ${created.err}`);
+    project = { id: created.id, subdomain: sub };
+    ok(`created project ${created.id}`);
+  } else {
+    console.log(`Using existing project ${project.id} (${project.runtime})`);
+  }
+
+  console.log(`Zipping ${dir}...`);
+  const zipPath = await makeZip(dir);
+  const zipBuf = await fs.readFile(zipPath);
+  await fs.unlink(zipPath).catch(() => {});
+
+  console.log(`Uploading ${(zipBuf.length / 1024).toFixed(1)} KB to /v1/projects/upload?id=${project.id}...`);
+  const res = await fetch(`${base}/v1/projects/upload?id=${project.id}`, {
+    method: 'POST',
+    headers: {
+      'X-API-Key': apiKey,
+      'Content-Type': 'application/zip',
+    },
+    body: zipBuf,
+  });
+  const j = await res.json();
+  if (!j.ok) fail(`upload failed: ${j.err || JSON.stringify(j)}`);
+  ok(`deployed: https://${sub}.rofihosted.space`);
+}
+
+async function cmdLs({ base, apiKey }) {
+  const j = await api(base, apiKey, '/v1/projects');
+  if (!j.ok) fail(j.err || 'list failed');
+  const projects = j.projects || [];
+  if (projects.length === 0) {
+    console.log('No projects yet.');
+    return;
+  }
+  console.log();
+  // Pad columns
+  const w = (s, n) => String(s).padEnd(n);
+  console.log(`${w('ID', 18)}${w('SUBDOMAIN', 24)}${w('RUNTIME', 10)}${w('STATUS', 12)}NAME`);
+  console.log('-'.repeat(80));
+  for (const p of projects) {
+    console.log(`${w(p.id.slice(0, 16), 18)}${w(p.subdomain, 24)}${w(p.runtime, 10)}${w(p.status, 12)}${p.name}`);
+  }
+  console.log();
+}
+
+async function cmdLogs({ base, apiKey }, [sub]) {
+  if (!sub) fail('usage: rh logs <subdomain>');
+  const list = await api(base, apiKey, '/v1/projects');
+  const project = (list.projects || []).find(p => p.subdomain === sub);
+  if (!project) fail(`no project with subdomain '${sub}'`);
+
+  console.log(`=== build log ===`);
+  const build = await api(base, apiKey, `/v1/projects/logs?id=${project.id}`);
+  console.log(build.log || '(empty)');
+  console.log();
+  console.log(`=== runtime log ===`);
+  const runtime = await api(base, apiKey, `/v1/projects/runtime-logs?id=${project.id}`);
+  console.log(runtime.log || '(empty)');
+}
+
+// ---- main ----
+
+async function main() {
+  const [cmd, ...args] = process.argv.slice(2);
+
+  if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    console.log(`rh - rofihosted CLI`);
+    console.log();
+    console.log(`commands:`);
+    console.log(`  rh login                   save API key (interactive)`);
+    console.log(`  rh whoami                  show current API key identity`);
+    console.log(`  rh status                  full hp-server vitals`);
+    console.log(`  rh power                   charger and battery status`);
+    console.log(`  rh update                  pull latest commit and rebuild`);
+    console.log(`  rh backup [--r2]           trigger a backup`);
+    console.log(`  rh ls                      list all projects`);
+    console.log(`  rh deploy <dir> <sub>      zip and upload a directory as static project`);
+    console.log(`  rh logs <subdomain>        tail build + runtime logs`);
+    console.log();
+    console.log(`config: ~/.rofihosted/config.json or env ROFIHOSTED_API_KEY`);
+    process.exit(0);
+  }
+
+  if (cmd === 'login') {
+    await cmdLogin();
+    return;
+  }
+
+  const cfg = await loadConfig();
+  const creds = getCreds(cfg);
+  if (!creds.apiKey) {
+    fail('not logged in. run: rh login');
+  }
+
+  const handlers = {
+    whoami: cmdWhoami,
+    status: cmdStatus,
+    update: cmdUpdate,
+    power: cmdPower,
+    backup: cmdBackup,
+    deploy: cmdDeploy,
+    ls: cmdLs,
+    logs: cmdLogs,
+  };
+  const handler = handlers[cmd];
+  if (!handler) fail(`unknown command: ${cmd}`);
+  await handler(creds, args);
+}
+
+main().catch((e) => {
+  fail(e.message || String(e));
+});

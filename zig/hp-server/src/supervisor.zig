@@ -29,6 +29,13 @@ pub const ProcessState = enum {
     stopped,
 };
 
+pub const KillReason = enum {
+    none,
+    operator, // someone hit /api/projects/stop
+    crash, // process exited on its own
+    rss_quota, // exceeded rss_limit_mb for 2 consecutive samples
+};
+
 const Entry = struct {
     project_id: []const u8, // owned
     pid: ?std.posix.pid_t = null,
@@ -40,6 +47,12 @@ const Entry = struct {
     /// Watchdog grace period. While this is non-zero, the auto-restarter skips
     /// this project (so we don't fight a manual stop or a deploy in progress).
     pause_until_ms: i64 = 0,
+    /// Counter for consecutive RSS-quota violations. Reset to zero whenever a
+    /// sample comes in under the limit. Killed at 2.
+    over_quota_count: u8 = 0,
+    /// Reason for the most recent kill. Surfaced via /api/projects so the
+    /// dashboard can show "killed for OOM" vs "you stopped it".
+    last_kill_reason: KillReason = .none,
 };
 
 pub const Supervisor = struct {
@@ -218,6 +231,7 @@ pub const Supervisor = struct {
         // bring it back up.
         entry.pause_until_ms = std.time.milliTimestamp() + 30_000;
         entry.state = .stopped;
+        entry.last_kill_reason = .operator;
         self.mutex.unlock();
 
         const pid = pid_opt orelse return error.NotRunning;
@@ -264,15 +278,19 @@ pub const Supervisor = struct {
         defer self.mutex.unlock();
         if (self.findLocked(project_id)) |e| {
             const alive = if (e.pid) |p| isAlive(p) else false;
+            const live_pid = if (alive) e.pid else null;
+            const rss_kb: u64 = if (live_pid) |p| readRssKb(p) else 0;
             return .{
                 .state = if (alive) .running else e.state,
-                .pid = if (alive) e.pid else null,
+                .pid = live_pid,
                 .started_at = e.started_at,
                 .crash_count = e.crash_count,
                 .last_exit = e.last_exit,
+                .rss_kb = rss_kb,
+                .last_kill_reason = e.last_kill_reason,
             };
         }
-        return .{ .state = .not_started, .pid = null, .started_at = 0, .crash_count = 0, .last_exit = 0 };
+        return .{ .state = .not_started, .pid = null, .started_at = 0, .crash_count = 0, .last_exit = 0, .rss_kb = 0, .last_kill_reason = .none };
     }
 
     pub const Status = struct {
@@ -281,6 +299,8 @@ pub const Supervisor = struct {
         started_at: i64,
         crash_count: u32,
         last_exit: i32,
+        rss_kb: u64 = 0,
+        last_kill_reason: KillReason = .none,
     };
 
     /// Auto-restart loop. Runs in a detached thread. Every 5s, scans all
@@ -326,7 +346,44 @@ pub const Supervisor = struct {
                 const alive = if (entry.pid) |p| isAlive(p) else false;
                 const should_restart = !alive and entry.state == .running;
                 const backoff = entry.backoff_ms;
+                const live_pid_opt = if (alive) entry.pid else null;
                 self.mutex.unlock();
+
+                // RSS quota enforcement: if the project has rss_limit_mb set
+                // and the running child exceeds it for two consecutive samples,
+                // SIGTERM the child. autoRestart will respawn it.
+                if (live_pid_opt) |live_pid| {
+                    const project = self.projects_mgr.getById(id) orelse continue;
+                    if (project.rss_limit_mb > 0) {
+                        const rss_kb = readRssKb(live_pid);
+                        const rss_mb = rss_kb / 1024;
+                        if (rss_mb > project.rss_limit_mb) {
+                            self.mutex.lock();
+                            const e2 = self.findLocked(id);
+                            if (e2) |e| e.over_quota_count += 1;
+                            const over_count = if (e2) |e| e.over_quota_count else 0;
+                            self.mutex.unlock();
+                            if (over_count >= 2) {
+                                std.log.warn(
+                                    "supervisor: project {s} exceeded RSS limit ({d} MB > {d} MB) for 2 samples, killing pid {d}",
+                                    .{ id, rss_mb, project.rss_limit_mb, live_pid },
+                                );
+                                std.posix.kill(live_pid, std.posix.SIG.TERM) catch {};
+                                self.mutex.lock();
+                                if (self.findLocked(id)) |e| {
+                                    e.over_quota_count = 0;
+                                    e.crash_count += 1;
+                                    e.last_kill_reason = .rss_quota;
+                                }
+                                self.mutex.unlock();
+                            }
+                        } else {
+                            self.mutex.lock();
+                            if (self.findLocked(id)) |e| e.over_quota_count = 0;
+                            self.mutex.unlock();
+                        }
+                    }
+                }
 
                 if (should_restart) {
                     std.Thread.sleep(@as(u64, backoff) * std.time.ns_per_ms);
@@ -416,6 +473,35 @@ pub const Supervisor = struct {
 fn isAlive(pid: std.posix.pid_t) bool {
     std.posix.kill(pid, 0) catch return false;
     return true;
+}
+
+/// Read the resident set size of a process (in KiB) from /proc/<pid>/status.
+/// Returns 0 if the file is unreadable or VmRSS is missing.
+fn readRssKb(pid: std.posix.pid_t) u64 {
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/status", .{pid}) catch return 0;
+    const f = std.fs.openFileAbsolute(path, .{}) catch return 0;
+    defer f.close();
+    var buf: [4096]u8 = undefined;
+    const n = f.readAll(&buf) catch return 0;
+    const body = buf[0..n];
+    var idx: usize = 0;
+    while (idx < body.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, body, idx, '\n') orelse body.len;
+        const line = body[idx..line_end];
+        if (std.mem.startsWith(u8, line, "VmRSS:")) {
+            // VmRSS:    12345 kB
+            var it = std.mem.tokenizeScalar(u8, line[6..], ' ');
+            while (it.next()) |tok| {
+                if (std.fmt.parseInt(u64, tok, 10)) |kb| {
+                    return kb;
+                } else |_| continue;
+            }
+            return 0;
+        }
+        idx = line_end + 1;
+    }
+    return 0;
 }
 
 fn pidFilePath(allocator: std.mem.Allocator, project_id: []const u8) ![]u8 {

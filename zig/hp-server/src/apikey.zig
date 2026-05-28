@@ -26,16 +26,23 @@ pub const Scope = enum {
     /// Read-only access to /api/* read endpoints (visits, stats, etc).
     /// Reserved for future, not enforced yet.
     read,
+    /// System administration: trigger updates, restarts, backups via /v1/system/*.
+    /// Treat this scope like the operator's session cookie - it grants the same
+    /// power as logging in. Only generate keys with this scope for trusted CI
+    /// pipelines (GitHub Actions deploys, etc).
+    admin,
 
     pub fn fromString(s: []const u8) ?Scope {
         if (std.mem.eql(u8, s, "sql")) return .sql;
         if (std.mem.eql(u8, s, "read")) return .read;
+        if (std.mem.eql(u8, s, "admin")) return .admin;
         return null;
     }
     pub fn toString(self: Scope) []const u8 {
         return switch (self) {
             .sql => "sql",
             .read => "read",
+            .admin => "admin",
         };
     }
 };
