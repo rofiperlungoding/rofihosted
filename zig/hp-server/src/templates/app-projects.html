@@ -140,6 +140,20 @@
       <div id="d-tab-config" style="display:none">
         <div style="background:var(--surface); border:1px solid var(--border-soft); border-radius:10px; padding:1.2rem 1.4rem">
           <div id="d-config-rows"></div>
+          <hr style="border:0; border-top:1px solid var(--border-soft); margin:1.2rem 0">
+          <h3 style="margin:0 0 .8rem; font-size:.9rem; color:var(--text); font-weight:600">Edit build/start commands</h3>
+          <p class="hint" style="margin:0 0 .8rem">Override these without touching your repo. Useful for skipping strict TS checks (set Build to <code>vite build</code>) or tweaking start args.</p>
+          <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">Install command</label>
+          <input class="input" id="e-install" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
+          <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">Build command</label>
+          <input class="input" id="e-build" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
+          <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">Start command</label>
+          <input class="input" id="e-start" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
+          <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">Publish directory</label>
+          <input class="input" id="e-publish" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
+          <label style="display:block; font-size:.74rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:.3rem">Branch</label>
+          <input class="input" id="e-branch" style="margin-bottom:.6rem; font-family:ui-monospace,monospace; font-size:.8rem">
+          <button class="btn btn-accent btn-sm" id="d-save-config" style="margin-top:.4rem"><span>Save</span></button>
         </div>
       </div>
 
@@ -727,6 +741,13 @@ RH.loadCurrentUser();
     });
     document.getElementById('d-config-rows').innerHTML = configHtml;
 
+    // Pre-fill the edit form with current values
+    document.getElementById('e-install').value = p.install_cmd || '';
+    document.getElementById('e-build').value = p.build_cmd || '';
+    document.getElementById('e-start').value = p.start_cmd || '';
+    document.getElementById('e-publish').value = p.publish_dir || '';
+    document.getElementById('e-branch').value = p.branch || 'main';
+
     // Webhook
     document.getElementById('d-webhook-url').textContent = location.origin + '/v1/github/' + p.id;
     document.getElementById('d-webhook-secret').textContent = 'click reveal';
@@ -816,6 +837,29 @@ RH.loadCurrentUser();
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j.ok) closeDetail();
         else showDetailError('Delete failed: ' + (j.err || 'unknown'));
+      });
+  });
+
+  document.getElementById('d-save-config').addEventListener('click', function () {
+    if (!currentProject) return;
+    var btn = this; btn.disabled = true;
+    var p = new URLSearchParams();
+    p.set('id', currentProject.id);
+    p.set('install_cmd', document.getElementById('e-install').value);
+    p.set('build_cmd', document.getElementById('e-build').value);
+    p.set('start_cmd', document.getElementById('e-start').value);
+    p.set('publish_dir', document.getElementById('e-publish').value);
+    p.set('branch', document.getElementById('e-branch').value);
+    fetch('/api/projects/update', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        btn.disabled = false;
+        if (j.ok) {
+          showDetailSuccess('Config saved. Click Redeploy to rebuild with the new commands.');
+          // Refresh project data
+          openDetail(currentProject.id);
+        } else {
+          showDetailError('Save failed: ' + (j.err || 'unknown'));
+        }
       });
   });
 

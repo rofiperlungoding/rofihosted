@@ -343,6 +343,12 @@ pub const Manager = struct {
 
         const cwd: []const u8 = blk: {
             std.fs.accessAbsolute(current_dir, .{}) catch {
+                std.fs.accessAbsolute(repo_dir, .{}) catch {
+                    // Neither current/ nor repo/ exists yet (e.g. project never deployed).
+                    // Make sure the work_root itself exists and use it as cwd.
+                    std.fs.makeDirAbsolute(work_root) catch {};
+                    break :blk work_root;
+                };
                 break :blk repo_dir;
             };
             break :blk current_dir;

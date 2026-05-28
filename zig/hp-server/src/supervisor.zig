@@ -112,7 +112,12 @@ pub const Supervisor = struct {
             if (std.fs.accessAbsolute(current_dir, .{})) {
                 break :blk current_dir;
             } else |_| {}
-            break :blk repo_dir;
+            if (std.fs.accessAbsolute(repo_dir, .{})) {
+                break :blk repo_dir;
+            } else |_| {}
+            // Neither exists; ensure work_root exists and use it as cwd.
+            std.fs.makeDirAbsolute(work_root) catch {};
+            break :blk work_root;
         };
 
         // Prepare env: hp-server's env + project secrets + injected vars.
