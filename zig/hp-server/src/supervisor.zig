@@ -200,6 +200,9 @@ pub const Supervisor = struct {
 
     /// SIGTERM the child, give it 5s to exit, then SIGKILL.
     pub fn stop(self: *Supervisor, project_id: []const u8) !void {
+        const project = self.projects_mgr.getById(project_id) orelse return error.NotFound;
+        if (project.runtime == .static) return error.StaticProject;
+
         self.mutex.lock();
         const entry = self.findLocked(project_id) orelse {
             self.mutex.unlock();

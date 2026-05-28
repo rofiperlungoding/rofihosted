@@ -602,39 +602,48 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     // Settings POST
     if (std.mem.eql(u8, path, "/settings/change")) return handleChangeCreds(app, req, res);
 
-    // Pages (all share sidebar)
+    // Pages (all share sidebar). Mark HTML as no-store so browsers always
+    // re-fetch on navigation; otherwise stale UI logic (button visibility
+    // rules, etc) hangs around even after a deploy.
     if (std.mem.eql(u8, path, "/")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-overview.html");
         return;
     }
     if (std.mem.eql(u8, path, "/status")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-status.html");
         return;
     }
     if (std.mem.eql(u8, path, "/files")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-files.html");
         return;
     }
     if (std.mem.eql(u8, path, "/api")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-api.html");
         return;
     }
     if (std.mem.eql(u8, path, "/settings")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-settings.html");
         return;
     }
     if (std.mem.eql(u8, path, "/security")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-security.html");
         return;
     }
     if (std.mem.eql(u8, path, "/projects")) {
         res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-projects.html");
         return;
     }
@@ -656,6 +665,7 @@ fn guard(app: *App, req: *httpz.Request, res: *httpz.Response, return_to: []cons
 // =================================================================
 fn handleLoginPage(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
     res.content_type = .HTML;
+    res.header("Cache-Control", "no-store, must-revalidate");
     res.body = @embedFile("templates/login.html");
 }
 
@@ -3594,6 +3604,8 @@ fn apiProjectsStop(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     }
     app.supervisor.stop(id) catch |err| {
         const code: []const u8 = switch (err) {
+            error.NotFound => "not_found",
+            error.StaticProject => "static_project",
             error.NotRunning => "not_running",
             else => "stop_failed",
         };
