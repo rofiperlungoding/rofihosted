@@ -6,35 +6,60 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
-### Added: kingdom of one expansion
+### Added: Projects (the kingdom-of-one PaaS, all in one phone)
 
-- **Static site hosting** at any `<sub>.rofihosted.space`. Layout: `~/hosted/sites/<sub>/releases/<UTC ts>/` with a `current` symlink that gets atomically swapped on deploy. Per-site LRU cache (32 entries x 256 KB cap). MIME guessing for common web types. SPA fallback (touch `spa.flag` in current/). New modules `pathsafe.zig` (strict path/subdomain validators + realpath-based escape check) and `hosted.zig`. Cloudflared ingress simplified to wildcard, Zig server dispatches by host. Reserved subdomain list (`app`, `www`, `dashboard`, `status`, `api`, `files`) so the static layer can never override the real console. New endpoints `/api/hosted/{stats,list,refresh}`. New deploy helper `scripts/hosted-deploy.sh`.
+This is the centerpiece. The phone now behaves as Netlify + Vercel + Supabase + Railway combined: paste a repo link, pick a subdomain, click Deploy, and a fullstack app runs 24/7 with built-in database + auth + secrets + scheduled tasks. Five phases of work:
 
-- **Persistent sqlite3 subprocess pool** (`dbpool.zig`). N (default 3) long-lived `sqlite3 -batch -bail` workers with stdin/stdout pipes, sentinel-based query boundary protocol, per-query timeout (15 s), max response cap (8 MB). Wired into `dbcache.execSqlCapture()` as a fast path with transparent fallback to one-shot subprocess on pool error. Measured drop: ~9 ms/query (one-shot baseline) -> ~1.8 ms/query (pool, 30-call warmup, observed via `/api/dbpool/stats`).
+**Phase A: Foundation** (commit `4ac2c68`)
+- `src/projects.zig`: registry of projects with id (16-hex), name, subdomain (claimed exclusively), repo_url, branch, runtime (static/node/python/bun/generic), install/build/start commands, port allocator [3000-3999], status, timestamps. Persisted to `~/.hp-server-projects.jsonl`.
+- `src/projsecrets.zig`: per-project AES-256-GCM secrets vault. Key derived from per-install pepper plus project id (versioned domain separator). Plaintext only at decrypt time. File magic `RHS1` + 12-byte nonce + 16-byte tag.
+- `tryServeProject()` runs in `hostRouter` BEFORE the legacy `hosted.tryServe`. Static-runtime projects served from `~/data/projects/<id>/current/` with pathsafe traversal protection.
+- New page `/projects` with a sidebar entry. Card-grid project list and 4-step wizard (Source -> Subdomain -> Runtime -> Secrets) plus detail modal with secrets editor.
+- Endpoints: `/api/projects/{list,create,update,delete}` and `/api/projects/secrets/{list,set,delete}`.
 
-- **API key manager** (`apikey.zig`). Scoped tokens for the operator's other apps and scripts. Format `rh_<48 hex chars>`. Stored as SHA-256 hashes (with the same per-install pepper used for session HMAC) at `~/.hp-server-apikeys.jsonl`. Constant-time compare via `std.crypto.utils.timingSafeEql`. Atomic rewrite on revoke. Currently exposes one scope: `sql`. New endpoints: `GET /api/apikeys`, `POST /api/apikeys/create`, `POST /api/apikeys/revoke`. UI form-card on Settings page.
+**Phase B: GitHub auto-deploy + build pipeline** (commit `8d280cc`)
+- `src/builder.zig` orchestrator. `deployAsync(id)` spawns a detached thread that walks: clone (git clone --depth=1, idempotent fetch + reset --hard on re-runs) -> install -> build -> publish (cp -a + atomic ln -sfn).
+- Step output captured to `~/data/projects/<id>/logs/build.log` with header/footer markers.
+- HMAC-SHA256 GitHub webhook receiver at `/v1/github/<project_id>` (constant-time signature compare). Honors X-GitHub-Event (ping pongs, push deploys if branch matches).
+- New endpoints: `/api/projects/deploy`, `/api/projects/logs?id=`. Detail modal gains Deploy button + log tailer + webhook URL/secret reveal.
 
-- **`/v1/execute` SQL-over-HTTP** endpoint. Auth via `X-API-Key` header (NOT cookie). Body `{db, sql}`, returns `{ok, db, result}` with rows formatted via `sqlite3 .mode json`. `db` must be `[a-z0-9_-]` and resolves to `~/data/dbs/<db>.db`. 64 KB SQL cap, 8 MB response cap. All calls audited. Also `/v1/whoami` for key identification. Classifier exemption: `/v1/*` with `X-API-Key` header set is treated as authenticated for auto-ban purposes.
+**Phase C: backend supervisor + reverse proxy** (commit `6c00f61`)
+- `src/supervisor.zig`: per-project process. `start(id)` resolves cwd to current/ (or repo/), decrypts secrets vault and merges with hp-server's env, injects `PORT` / `ROFI_PROJECT_ID` / `ROFI_SUBDOMAIN` / `HOST` / `NODE_ENV=production`, spawns `sh -c <start_cmd>` with stdout+stderr piped to a drain thread that appends to runtime.log.
+- `stop(id)`: SIGTERM -> 5s grace -> SIGKILL with auto-restart pause to respect manual stops. `restart(id)`: stop + start.
+- `autoRestartLoop` runs every 5s. For each entry where state==running but PID is dead, sleeps backoff_ms (1s -> 60s ceiling) and respawns. Backoff resets on success.
+- `restartPersisted()` at boot: walks the registry and starts every backend project whose status was `running` at last shutdown.
+- `src/proxy.zig` HTTP/1.1 reverse proxy. 5s connect timeout, 30s total, 8 MB request body cap, 16 MB response cap. Decodes chunked transfer-encoding from upstream.
+- `tryServeProject` routes backend projects through `proxy.proxy()` when state==running, returns clean 503 'project not running' otherwise.
+- New endpoints: `/api/projects/{start,stop,restart}`, `/api/projects/status?id=`, `/api/projects/runtime-logs?id=`.
 
-- **Outbound webhook dispatcher** (`webhook.zig`). Operator-configured HTTP endpoints get POSTed `{event, ts, payload}` envelopes when internal events fire. 7 event types subscribable per hook, u16 events bitmask, persisted to `~/.hp-server-webhooks.jsonl`. Dispatch via curl subprocess (5 s timeout, no retry queue). Per-hook stats: fires, failures, last_status, last_fired. New endpoints `/api/webhooks{,/create,/delete}` plus a UI form-card on Settings. Wiring: `events.Bus.pub_callback` is set to `webhookFanOut()` in main.zig, decoupling the webhook module from the bus (no import cycle). Replaces the consultant-suggested QuickJS embed: 0 attack surface, 0 OOM concerns, simpler ops.
+**Phase D: built-in auth-as-a-service + per-project DB** (commit `7c31131`)
+- `src/projauth.zig`: signup/login/verify, password hashing via HMAC-SHA256 with 16-byte random salt + per-install pepper, JWT (HS256) signed with key derived from pepper + project_id (so projects can never sign each other's tokens), TTL 7 days.
+- Per-project DB at `~/data/dbs/<project_id>.db` (auto-created, schema: `users(id, email UNIQUE, password_hash, salt, created_at, last_login)`).
+- `tryServeAuth()` intercepts `<sub>/auth/{signup,login,verify}` BEFORE the static / proxy paths so even backend projects never see /auth/* requests. CORS preflight handled.
+- `supervisor.zig` injects `ROFI_DB_PATH=~/data/dbs/<id>.db` into the project env.
 
-### Changed
-- Watchdog v2 (`scripts/watchdog.sh`): explicit `PREFIX` export so cloudflared respawn from a clean env (boot, watchdog) still gets `/etc/resolv.conf` bound. HTTP `/health` probe with consecutive-failure threshold (3) catches deadlocks that `pgrep` misses. Hard 384 MB RSS ceiling triggers SIGTERM-then-restart so the visit write buffer flushes before Android's OOM killer hits.
-- All template asset query strings bumped to `?v=20`.
+**Phase E: polish - the 'kerjain full' phase** (commit `9356ee4`)
+- ZIP upload: `POST /api/projects/upload?id=<pid>` with raw zip bytes as body, validates `PK\x03\x04` magic, builder.deployZip() unpacks and atomic-swaps. 64 MB max body.
+- Releases history + atomic rollback: `GET /api/projects/releases?id=`, `POST /api/projects/rollback {id, release}`. Backend projects auto-restart after rollback.
+- `POST /api/projects/sql {project_id, sql}` returns parsed JSON rows via `sqlite3 .mode json`. 256 KB SQL cap, 8 MB result cap.
+- `src/cron.zig` per-project scheduled tasks at `~/.hp-server-cron.jsonl`. Schedule formats: `every Ns/Nm/Nh/Nd` (floor 30s) and 5-field cron expressions. Loop ticks every 30s. Tasks inherit secrets and ROFI_* env, output captured to cron.log. Endpoints: `/api/projects/cron/{list,create,delete,toggle,run}`.
+- Auth UI snippet generator: 'Copy HTML snippet' button generates a complete drop-in signup/login HTML.
+- Detail modal now shows: ZIP upload, releases list with rollback buttons, SQL textarea + Run + List tables, cron task table + add form.
 
-### Added: AI v3 (mid-cycle, before kingdom of one)
-- **Streaming explain** at `POST /api/ai/explain/stream` (SSE token-by-token from Mistral). Frontend tries streaming first, falls back to structured `/api/ai/explain` if SSE fails.
-- **AI observability**: `~/data/ai-calls.jsonl` logs every Mistral call with feature, model, prompt/completion tokens, latency_ms, status. `/api/ai/usage` returns cumulative stats and estimated cost.
-- **Prompt injection defense**: all attacker-controlled data (UAs, paths, query text) is sanitized via `sanitizeUntrusted()` and wrapped in `<UNTRUSTED>...</UNTRUSTED>` tags. System prompts explicitly tell the model to treat that content as data only.
-- **Semantic prompt cache** for the query bar: embed the question, cache hit if cosine >= 0.95 against any cached question (10 min TTL, 256 max entries). On hit, returns instantly with no Mistral call and no token spend.
-- **Reflection pass** on weekly policy: medium model drafts, small model audits and softens aggressive recommendations.
-- **Anomaly detection**: when a new embedding pattern's nearest neighbor cosine < 0.7, fires `ai.explainAnomaly()` and publishes `anomaly_detected` SSE event.
+### Added: kingdom-of-one expansion (pre-Projects)
+
+- **Static site hosting** at any `<sub>.rofihosted.space`. `~/hosted/sites/<sub>/releases/<UTC ts>/` + `current` symlink. Per-site LRU cache. SPA fallback. New modules `pathsafe.zig` and `hosted.zig`. Cloudflared ingress simplified to wildcard.
+- **Persistent sqlite3 subprocess pool** (`dbpool.zig`). 5x lower per-query latency vs spawning per call.
+- **API key manager** (`apikey.zig`). SHA-256-hashed scoped tokens.
+- **`/v1/execute` SQL-over-HTTP**. Auth via `X-API-Key` header.
+- **Outbound webhook dispatcher** (`webhook.zig`). 7 event types subscribable per hook.
+- Watchdog v2: explicit `PREFIX` export, HTTP `/health` probe, hard 384 MB RSS ceiling.
+
+### Added: AI v3 (mid-cycle)
+- Streaming explain. AI observability. Prompt injection defense. Semantic prompt cache. Reflection pass on weekly policy. Anomaly detection.
 
 ### Added: storage v2
-- **Buffered visit writes** (`writebuf.zig`): 5s flush interval with 256 KB cap, SIGTERM-safe (flush before httpz.stop). Reduces flash wear and syscall overhead. All `store.readVisits` callsites migrated to `readVisitsFresh(app, ...)` so reads see pending buffer data.
-- **Operator rule engine** (`rules.zig`): JSON DSL at `~/.hp-server-rules.jsonl`. 4 triggers (on_visit, on_login_attempt, on_blocklist_change, on_anomaly), AND-ed conditions (eq/neq/contains/not_contains/starts_with/ends_with), 3 action types (block, log, increment). CRUD via `GET/POST /api/rules` and `/api/rules/replace`. Settings page JSON editor.
-- **SQLite read-side cache** (`dbcache.zig`): WAL + synchronous=NORMAL, indexes on common filter columns, FTS5 over (path, ua, ip). 5-minute incremental sync from `visits.jsonl` based on byte offset. Subprocess pattern (sqlite3 CLI) because Termux's CRT files aren't shipped where Zig's linker expects.
-- **AI log scrubbing** (`/api/ai/scrub`): asks Mistral "is anything in last 7 days' scanner traffic actually a zero-day?". Returns structured findings with severity and category, persisted to `~/data/scrub.jsonl`.
+- `writebuf.zig` (5s flush + SIGTERM-safe). `rules.zig` (operator rule engine). `dbcache.zig` (SQLite read-side cache). `/api/ai/scrub` log scrubbing.
 
 ### Added: AI v2
 

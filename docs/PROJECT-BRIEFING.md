@@ -151,6 +151,100 @@ A tiny JSON DSL stored at `~/.hp-server-rules.jsonl` (one rule per line). Rules 
 - UI: textarea editor on the Settings page, live counters surfaced via `GET /api/rules`
 - Each rule is dispatched synchronously inside the request hot path, so conditions should stay small. Block actions feed straight into the same blocklist used by manual blocks.
 
+## Projects (Netlify-style PaaS)
+
+Each project is a deployable unit owning a subdomain at `<sub>.rofihosted.space`, with its own working tree, encrypted secrets vault, lifecycle, scheduled tasks, per-tenant SQLite database, and built-in auth-as-a-service.
+
+### Disk layout
+```
+~/.hp-server-projects.jsonl       # registry, atomic rewrite on update
+~/.hp-server-cron.jsonl           # scheduled tasks
+~/data/projects/<id>/
+  repo/                           # git clone
+  releases/<UTC-ts>/              # deploy snapshots, last 5 kept
+  current -> releases/<ts>/       # atomic ln -sfn swap
+  secrets.bin                     # AES-256-GCM, mode 600
+  logs/{build,runtime,cron}.log
+~/data/dbs/<id>.db                # per-project SQLite (auth users, app data)
+```
+
+### Modules
+- `src/projects.zig` registry of projects
+- `src/projsecrets.zig` AES-256-GCM secrets vault, key derived from pepper + project_id
+- `src/builder.zig` deploy orchestrator: clone/pull, install, build, publish, ZIP unpack, rollback
+- `src/supervisor.zig` per-project process supervisor with auto-restart + boot-time restartPersisted
+- `src/proxy.zig` HTTP/1.1 reverse proxy from subdomain to `127.0.0.1:<port>`
+- `src/projauth.zig` HS256 JWT auth-as-a-service per project
+- `src/cron.zig` scheduled tasks with `every Ns/Nm/Nh/Nd` and 5-field cron parsers
+
+### Dispatch order in `tryServeProject`
+1. `/auth/{signup,login,verify}` -> projauth (intercepted before project sees it)
+2. Static project -> serve from `current/`
+3. Backend project -> reverse proxy to `127.0.0.1:<port>`
+4. Falls through to legacy hosted.zig if no project owns the subdomain
+
+### Auto-injected environment variables (for backend projects + cron tasks)
+| Variable | Purpose |
+|----------|---------|
+| `PORT` | Allocated port [3000-3999], passed to bind() |
+| `ROFI_PROJECT_ID` | 16-hex project id |
+| `ROFI_SUBDOMAIN` | Subdomain claimed by this project |
+| `ROFI_DB_PATH` | Path to `~/data/dbs/<id>.db` |
+| `HOST` | `127.0.0.1` |
+| `NODE_ENV` | `production` (unless overridden by secrets) |
+| `<all secrets vault entries>` | Decrypted at spawn time |
+
+### Wizard-driven onboarding (`/projects` page)
+1. Source: name + git repo URL + branch
+2. Subdomain: live preview, validates `[a-z0-9-]`
+3. Runtime + commands: install/build/start (start hidden for static, publish_dir shown for static)
+4. Secrets: list of KEY/value pairs, encrypted at create time
+
+### Detail modal (per project)
+- Config (id, URL, runtime, status, port, repo, branch, install/build/start, timestamps)
+- GitHub auto-deploy (if repo_url): webhook URL + secret with reveal/copy
+- Built-in auth: endpoint reference + 'Copy HTML snippet' generator
+- Database: SQL textarea + Run + 'List tables' button + JSON output
+- Scheduled tasks: table + add form (name, schedule, command)
+- Secrets: live editor, click any key to delete
+- Deploy section: Deploy now, Build logs toggle, Upload ZIP (static), Start/Stop/Restart + Runtime logs (backend)
+- Releases section: list of timestamp dirs with Rollback per non-current entry
+
+### Endpoints (operator-facing, cookie auth)
+- `GET /api/projects` list all projects
+- `POST /api/projects/{create,update,delete}`
+- `GET/POST /api/projects/secrets/{list,set,delete}`
+- `POST /api/projects/deploy` manual deploy
+- `GET /api/projects/logs?id=` last 64 KB of build.log
+- `POST /api/projects/upload?id=` ZIP upload (raw zip body, application/zip)
+- `GET /api/projects/releases?id=` list releases + current
+- `POST /api/projects/rollback {id, release}` atomic symlink swap to a prior release
+- `POST /api/projects/{start,stop,restart}` supervisor control
+- `GET /api/projects/status?id=` supervisor state, pid, crashes
+- `GET /api/projects/runtime-logs?id=` last 64 KB of runtime.log
+- `POST /api/projects/sql {project_id, sql}` SQL runner against per-project DB
+- `GET /api/projects/cron/list?project_id=`
+- `POST /api/projects/cron/{create,delete,toggle,run}`
+
+### Endpoints (project-facing, no operator auth)
+- `POST /v1/github/<project_id>` GitHub push webhook (HMAC-SHA256 verified, per-project secret)
+- `POST <sub>/auth/signup {email, password}` -> `{user_id, token}`
+- `POST <sub>/auth/login {email, password}` -> `{user_id, token}`
+- `GET <sub>/auth/verify` with `Authorization: Bearer <token>` -> `{user_id}`
+
+### Lifecycle states
+- `created` -> `cloning` (or skipped if no repo) -> `building` -> `running` (static = published, backend = supervisor.restart succeeded)
+- Backend crashes flip to `crashed` then `running` again after auto-restart
+- Manual stop -> `stopped` with 30s pause to keep auto-restarter from undoing it
+
+### Security guarantees
+- Path traversal blocked at every filesystem touch via `pathsafe.zig`
+- Secrets vault: AES-256-GCM, key = SHA-256("rh.secrets.v1:" || pepper || ":" || project_id), plaintext only at decrypt time
+- JWT signing key per project: HKDF-style derivation from same pepper, so project A can never sign tokens accepted by project B
+- HMAC-SHA256 GitHub webhook verification with `std.crypto.utils.timingSafeEql`
+- Reserved subdomains (`app/www/dashboard/status/api/files`) cannot be claimed
+- All operator mutations audited (`audit.append`)
+
 ## Static site hosting (`*.rofihosted.space`)
 
 Operator's other projects (blogs, dashboards, tools) can be served as static sites at any `<sub>.rofihosted.space` without recompiling the binary.
@@ -341,6 +435,7 @@ All pages behind auth except the public landing. SaaS-style design with:
 | `/files` | Directory browser for ~/data and home |
 | `/api` | API explorer (documentation of all endpoints) |
 | `/security` | Daily digest, weekly policy, summary stats, top IPs with Explain/Block buttons, blocklist, login attempts, top UAs/paths/countries, tunnel health, behavioural clusters, anomaly alerts, log scrub findings, audit log |
+| `/projects` | Project list (card grid), 4-step wizard for new projects, detail modal per project (config, GitHub auto-deploy, built-in auth, database SQL runner, scheduled tasks, secrets, deploy controls, releases history with rollback, build/runtime logs) |
 | `/settings` | Change credentials, geo-block toggle, honeypot toggle, database cache stats with manual sync, API keys (create/list/revoke), webhooks (create/list/delete), operator rules JSON editor |
 
 ### Real-time (SSE)
@@ -488,8 +583,14 @@ All `.zig`, `.html`, `.css`, `.js` files are pure 7-bit ASCII. JS uses `\u00B0` 
 - v0.1.0: Initial deployment (Zig binary, Cloudflare Tunnel, auth, classifier, auto-ban, SSE, security headers)
 - v0.2.0: AI features (annotation, explain, digest), reliability (watchdog, tunnel health, backup, graceful shutdown), security (pepper, geoblock, audit log), quality (bundled font, CI)
 - Post-v0.2.0: AI v2 (structured outputs, embeddings, honeypot, weekly policy, query bar), AI v3 (streaming, observability, injection defense, semantic cache, reflection, anomaly detection), full frontend wiring
-- Storage v2: buffered visit writes (`writebuf.zig`, 5s flush + SIGTERM-safe), operator rule engine (`rules.zig`, JSON DSL with 4 triggers and 3 action types), SQLite read-side cache (`dbcache.zig`, subprocess pattern, 5min sync, query-bar fast path), AI log scrubbing (`/api/ai/scrub`)
-- Current HEAD: kingdom of one expansion. `pathsafe.zig` (request path + subdomain validators + realpath escape check), `hosted.zig` static site hosting at `*.rofihosted.space` with atomic symlink deploys + per-site LRU cache + SPA fallback, `dbpool.zig` persistent sqlite3 subprocess pool (5x latency improvement), `apikey.zig` scoped tokens for `/v1/execute` SQL-over-HTTP, `webhook.zig` outbound HTTP fan-out wired into the event bus, watchdog v2 (HTTP /health probe + 384MB RSS ceiling + PREFIX export fix for cloudflared respawn)
+- Storage v2: buffered visit writes (`writebuf.zig`), operator rule engine (`rules.zig`), SQLite read-side cache (`dbcache.zig`), AI log scrubbing
+- Kingdom of one: `pathsafe.zig` + `hosted.zig` (legacy static sites at *.rofihosted.space), `dbpool.zig` (5x faster cache queries), `apikey.zig` + `/v1/execute` SQL-over-HTTP, `webhook.zig` outbound dispatcher, watchdog v2
+- **Projects** (current HEAD): full Netlify-style PaaS shipped in 5 phases:
+  - Phase A: registry + secrets vault + wizard UI (`projects.zig`, `projsecrets.zig`)
+  - Phase B: GitHub auto-deploy + build pipeline + log viewer (`builder.zig`, `/v1/github/<id>` webhook)
+  - Phase C: backend supervisor + reverse proxy (`supervisor.zig`, `proxy.zig`)
+  - Phase D: built-in auth-as-a-service + per-project DB (`projauth.zig`, `~/data/dbs/<id>.db`)
+  - Phase E: ZIP upload, releases history + atomic rollback, SQL runner UI, cron tasks (`cron.zig`), auth UI snippet generator
 
 ## Extending this project
 
