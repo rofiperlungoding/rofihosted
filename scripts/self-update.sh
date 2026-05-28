@@ -107,12 +107,14 @@ fi
 
 # Trigger watchdog respawn. The current request is being served by hp-server
 # itself, so this kills our parent. We dispatch the kill in a subshell with a
-# delay so this process can finish writing JSON output before dying.
+# longer delay (3s) so this process can finish writing JSON output AND the
+# HTTP client can read the response before the connection is severed.
 (
-    sleep 1
+    sleep 3
     pkill -TERM -f 'zig-out/bin/hp-server' >> "$LOG" 2>&1 || true
 ) &
+disown 2>/dev/null || true
 
 emit "{\"ok\":true,\"reason\":\"updated\",\"before\":\"$SHORT_BEFORE\",\"after\":\"$SHORT_AFTER\",\"binary_age_s\":$BIN_AGE_S,\"status\":\"restarting\",\"note\":\"hp-server will be down for ~5s while watchdog respawns the new binary\"}"
-log "emitted success, scheduling kill in 1s"
+log "emitted success, scheduling kill in 3s"
 exit 0
