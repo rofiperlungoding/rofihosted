@@ -53,3 +53,7 @@ yarn-error.log
 
 # Zig package fetch cache (committed by mistake earlier)
 zig/hp-server/zig-pkg/
+
+# Local commit message scratch file (created by my workflow, not source)
+msg.txt
+.commit-msg.tmp
