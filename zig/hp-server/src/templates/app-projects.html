@@ -489,18 +489,22 @@ RH.loadCurrentUser();
       // Create project + push secrets + deploy
       nextBtn.disabled = true;
       nextBtn.textContent = 'Deploying...';
-      var fd = new FormData();
-      fd.append('name', document.getElementById('wiz-name').value.trim());
-      fd.append('subdomain', document.getElementById('wiz-sub').value.trim().toLowerCase());
-      fd.append('repo_url', document.getElementById('wiz-repo').value.trim());
-      fd.append('branch', document.getElementById('wiz-branch').value.trim() || 'main');
-      fd.append('runtime', document.getElementById('wiz-runtime').value);
-      fd.append('install_cmd', document.getElementById('wiz-install').value);
-      fd.append('build_cmd', document.getElementById('wiz-build').value);
-      fd.append('start_cmd', document.getElementById('wiz-start').value);
-      fd.append('publish_dir', document.getElementById('wiz-publish').value);
+      var fd = new URLSearchParams();
+      fd.set('name', document.getElementById('wiz-name').value.trim());
+      fd.set('subdomain', document.getElementById('wiz-sub').value.trim().toLowerCase());
+      fd.set('repo_url', document.getElementById('wiz-repo').value.trim());
+      fd.set('branch', document.getElementById('wiz-branch').value.trim() || 'main');
+      fd.set('runtime', document.getElementById('wiz-runtime').value);
+      fd.set('install_cmd', document.getElementById('wiz-install').value);
+      fd.set('build_cmd', document.getElementById('wiz-build').value);
+      fd.set('start_cmd', document.getElementById('wiz-start').value);
+      fd.set('publish_dir', document.getElementById('wiz-publish').value);
 
-      fetch('/api/projects/create', { method: 'POST', body: fd })
+      fetch('/api/projects/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: fd.toString(),
+      })
         .then(function (r) { return r.json(); })
         .then(function (j) {
           if (!j.ok) { nextBtn.disabled = false; nextBtn.textContent = 'Deploy'; showAlert('Create failed: ' + (j.err || 'unknown')); return; }
@@ -510,11 +514,17 @@ RH.loadCurrentUser();
           var pushSecrets = function (i) {
             if (i >= wiz.envs.length) { triggerDeploy(projectId); return; }
             var e = wiz.envs[i];
-            var sf = new FormData();
-            sf.append('project_id', projectId);
-            sf.append('key', e.key);
-            sf.append('value', e.value);
-            fetch('/api/projects/secrets/set', { method: 'POST', body: sf })
+            // Skip empty/incomplete envs
+            if (!e.key || !e.value) { pushSecrets(i + 1); return; }
+            var sf = new URLSearchParams();
+            sf.set('project_id', projectId);
+            sf.set('key', e.key);
+            sf.set('value', e.value);
+            fetch('/api/projects/secrets/set', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: sf.toString(),
+            })
               .then(function () { pushSecrets(i + 1); })
               .catch(function () { pushSecrets(i + 1); });
           };
@@ -527,9 +537,13 @@ RH.loadCurrentUser();
   function triggerDeploy(projectId) {
     var repo = document.getElementById('wiz-repo').value.trim();
     if (repo) {
-      var df = new FormData();
-      df.append('id', projectId);
-      fetch('/api/projects/deploy', { method: 'POST', body: df }).then(function () {
+      var df = new URLSearchParams();
+      df.set('id', projectId);
+      fetch('/api/projects/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: df.toString(),
+      }).then(function () {
         finishWizard();
       });
     } else {
