@@ -282,6 +282,18 @@
   </main>
 </div>
 
+<!-- Confirm dialog (replaces browser confirm()) -->
+<div id="confirm-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; align-items:center; justify-content:center; padding:1rem">
+  <div style="background:var(--surface); border:1px solid var(--border-soft); border-radius:12px; padding:1.4rem 1.6rem; width:100%; max-width:440px; box-shadow:0 20px 60px rgba(0,0,0,.4)">
+    <h2 id="confirm-title" style="margin:0 0 .8rem; font-size:1rem; font-weight:600; color:var(--text); letter-spacing:-.01em">Confirm</h2>
+    <p id="confirm-msg" style="margin:0 0 1.2rem; color:var(--text-2); font-size:.9rem; line-height:1.55"></p>
+    <div style="display:flex; justify-content:flex-end; gap:.5rem">
+      <button class="btn" id="confirm-cancel">Cancel</button>
+      <button class="btn btn-accent" id="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://rofihosted.space/theme.js?v=26"></script>
 <script src="https://rofihosted.space/app.js?v=26"></script>
 <script>
@@ -655,6 +667,37 @@ RH.loadCurrentUser();
     alertEl.style.display = '';
   }
 
+  // ---------- Custom confirm dialog (replaces browser confirm()) ----------
+  function uiConfirm(title, msg, okLabel) {
+    return new Promise(function (resolve) {
+      var overlay = document.getElementById('confirm-overlay');
+      document.getElementById('confirm-title').textContent = title;
+      document.getElementById('confirm-msg').textContent = msg;
+      var okBtn = document.getElementById('confirm-ok');
+      var cancelBtn = document.getElementById('confirm-cancel');
+      okBtn.textContent = okLabel || 'Confirm';
+      overlay.style.display = 'flex';
+
+      var cleanup = function (result) {
+        overlay.style.display = 'none';
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        overlay.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(result);
+      };
+      var onOk = function () { cleanup(true); };
+      var onCancel = function () { cleanup(false); };
+      var onBackdrop = function (e) { if (e.target === overlay) cleanup(false); };
+      var onKey = function (e) { if (e.key === 'Escape') cleanup(false); else if (e.key === 'Enter') cleanup(true); };
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onKey);
+      okBtn.focus();
+    });
+  }
+
   // ---------- Detail panel ----------
   var detailPanel = document.getElementById('detail-panel');
   var currentProject = null;
@@ -831,13 +874,19 @@ RH.loadCurrentUser();
 
   document.getElementById('d-delete').addEventListener('click', function () {
     if (!currentProject) return;
-    if (!confirm('Delete project ' + currentProject.name + '? This removes the registry entry. Working tree at ~/data/projects/<id>/ stays on disk.')) return;
-    var p = new URLSearchParams(); p.set('id', currentProject.id);
-    fetch('/api/projects/delete', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
-      .then(function (r) { return r.json(); }).then(function (j) {
-        if (j.ok) closeDetail();
-        else showDetailError('Delete failed: ' + (j.err || 'unknown'));
-      });
+    uiConfirm(
+      'Delete project',
+      'Delete "' + currentProject.name + '"? This removes the registry entry and stops any supervised process. The working tree at ~/data/projects/<id>/ stays on disk in case you want to restore.',
+      'Delete'
+    ).then(function (ok) {
+      if (!ok) return;
+      var p = new URLSearchParams(); p.set('id', currentProject.id);
+      fetch('/api/projects/delete', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
+        .then(function (r) { return r.json(); }).then(function (j) {
+          if (j.ok) closeDetail();
+          else showDetailError('Delete failed: ' + (j.err || 'unknown'));
+        });
+    });
   });
 
   document.getElementById('d-save-config').addEventListener('click', function () {
@@ -878,12 +927,15 @@ RH.loadCurrentUser();
         }).join('');
         wrap.querySelectorAll('[data-k]').forEach(function (el) {
           el.addEventListener('click', function () {
-            if (!confirm('Delete ' + el.dataset.k + '?')) return;
-            var p = new URLSearchParams();
-            p.set('project_id', currentProject.id);
-            p.set('key', el.dataset.k);
-            fetch('/api/projects/secrets/delete', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
-              .then(function () { loadSecretsList(); });
+            uiConfirm('Delete env var', 'Delete "' + el.dataset.k + '"? This removes it from the encrypted vault immediately.', 'Delete')
+              .then(function (ok) {
+                if (!ok) return;
+                var p = new URLSearchParams();
+                p.set('project_id', currentProject.id);
+                p.set('key', el.dataset.k);
+                fetch('/api/projects/secrets/delete', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: p.toString() })
+                  .then(function () { loadSecretsList(); });
+              });
           });
         });
       });
