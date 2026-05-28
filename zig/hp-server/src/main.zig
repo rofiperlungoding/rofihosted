@@ -33,6 +33,7 @@ const builder = @import("builder.zig");
 const supervisor = @import("supervisor.zig");
 const proxy = @import("proxy.zig");
 const projauth = @import("projauth.zig");
+const cron = @import("cron.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -67,6 +68,7 @@ const App = struct {
     projects: *projects.Manager,
     builder: *builder.Orchestrator,
     supervisor: *supervisor.Supervisor,
+    cron: *cron.Manager,
     pepper: []const u8,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
@@ -141,6 +143,7 @@ pub fn main() !void {
     const builder_orch = try builder.Orchestrator.init(allocator, pepper_slice, projects_mgr);
     const supervisor_mgr = try supervisor.Supervisor.init(allocator, pepper_slice, projects_mgr);
     builder_orch.supervisor = @ptrCast(supervisor_mgr);
+    const cron_mgr = try cron.Manager.init(allocator, pepper_slice, projects_mgr);
     // Wire bus -> webhook fan-out so any event published also fires matching
     // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
     bus.pub_callback = webhookFanOut;
@@ -174,6 +177,7 @@ pub fn main() !void {
         .projects = projects_mgr,
         .builder = builder_orch,
         .supervisor = supervisor_mgr,
+        .cron = cron_mgr,
         .pepper = pepper_slice,
     };
     g_app = &app;
@@ -205,8 +209,8 @@ pub fn main() !void {
         .address = "127.0.0.1",
         .port = 8080,
         .request = .{
-            .max_body_size = 1024 * 1024,
-            .max_form_count = 8,
+            .max_body_size = 64 * 1024 * 1024, // 64 MB so ZIP uploads fit
+            .max_form_count = 16,
         },
     }, &app);
     defer server.deinit();
@@ -252,6 +256,10 @@ pub fn main() !void {
     // Background loop that respawns crashed children with exponential backoff.
     const supervisor_thread = try std.Thread.spawn(.{}, supervisor.Supervisor.autoRestartLoop, .{supervisor_mgr});
     supervisor_thread.detach();
+
+    // Cron loop: tick every 30s, fire matching tasks.
+    const cron_thread = try std.Thread.spawn(.{}, cron.Manager.loop, .{cron_mgr});
+    cron_thread.detach();
 
     try server.listen();
     std.log.info("hp-server: server.listen returned, exiting cleanly", .{});
@@ -560,6 +568,15 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/projects/restart")) return apiProjectsRestart(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/projects/runtime-logs")) return apiProjectsRuntimeLogs(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/projects/status")) return apiProjectsStatus(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/upload")) return apiProjectsUpload(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/releases")) return apiProjectsReleases(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/rollback")) return apiProjectsRollback(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/sql")) return apiProjectsSql(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/cron/list")) return apiCronList(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/cron/create")) return apiCronCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/cron/delete")) return apiCronDelete(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/cron/toggle")) return apiCronToggle(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/cron/run")) return apiCronRun(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -3709,4 +3726,440 @@ fn tryServeAuth(app: *App, req: *httpz.Request, project: projects.Project, req_p
     res.status = 404;
     try res.json(.{ .ok = false, .err = "unknown_auth_endpoint" }, .{});
     return true;
+}
+
+// =================================================================
+// PROJECT ZIP UPLOAD + RELEASES + ROLLBACK
+// =================================================================
+fn apiProjectsUpload(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+
+    // Expect: multipart with field 'id' = project_id, and the rest of the body
+    // is the raw zip bytes posted as a single 'file' field. httpz form parser
+    // doesn't expose multipart files cleanly, so we use a simpler protocol:
+    // the operator uploads via PUT-like POST where the URL has ?id=<pid> and
+    // the body IS the raw zip content (Content-Type: application/zip).
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const project_id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const project = app.projects.getById(project_id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+    if (project.runtime != .static) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "not_static" }, .{});
+        return;
+    }
+
+    const body = req.body() orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_body" }, .{});
+        return;
+    };
+    // Sanity-check: zip starts with PK\x03\x04 (or PK\x05\x06 for empty).
+    if (body.len < 4 or body[0] != 'P' or body[1] != 'K') {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "not_a_zip" }, .{});
+        return;
+    }
+
+    // Write to ~/data/projects/<id>/.upload.zip
+    const work = try projects.Manager.workingDir(res.arena, project_id);
+    std.fs.makeDirAbsolute(work) catch {};
+    const tmp_path = try std.fmt.allocPrint(res.arena, "{s}/.upload.zip", .{work});
+    var f = try std.fs.createFileAbsolute(tmp_path, .{ .truncate = true, .mode = 0o600 });
+    f.writeAll(body) catch |err| {
+        f.close();
+        std.fs.deleteFileAbsolute(tmp_path) catch {};
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = @errorName(err) }, .{});
+        return;
+    };
+    f.close();
+
+    builder.deployZip(app.builder, project_id, tmp_path) catch |err| {
+        std.fs.deleteFileAbsolute(tmp_path) catch {};
+        const code: []const u8 = switch (err) {
+            error.NotStaticProject => "not_static",
+            error.UnzipFailed => "unzip_failed",
+            error.PublishDirMissing => "publish_dir_missing",
+            error.SwapFailed => "swap_failed",
+            else => "deploy_failed",
+        };
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    std.fs.deleteFileAbsolute(tmp_path) catch {};
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_zip_deploy",
+        .target = project_id,
+    });
+    try res.json(.{ .ok = true, .bytes = body.len }, .{});
+}
+
+fn apiProjectsReleases(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+
+    const list = builder.listReleases(res.arena, id) catch &[_][]u8{};
+    const current = builder.readCurrentRelease(res.arena, id) catch try res.arena.dupe(u8, "");
+
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    try w.writeAll("{\"ok\":true,\"current\":\"");
+    try w.writeAll(current);
+    try w.writeAll("\",\"releases\":[");
+    for (list, 0..) |name, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.writeByte('"');
+        try w.writeAll(name);
+        try w.writeByte('"');
+    }
+    try w.writeAll("]}");
+    res.content_type = .JSON;
+    res.body = try out.toOwnedSlice();
+}
+
+fn apiProjectsRollback(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const release = form.get("release") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_release" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+    builder.rollbackTo(app.allocator, id, release) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.InvalidRelease => "invalid_release",
+            error.NotFound => "release_not_found",
+            else => "rollback_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    // For backend projects, restart so they pick up the rolled-back code.
+    const project = app.projects.getById(id).?;
+    if (project.runtime != .static) {
+        app.supervisor.restart(id) catch {};
+    }
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_rollback",
+        .target = id,
+        .detail = release,
+    });
+    try res.json(.{ .ok = true, .release = release }, .{});
+}
+
+// =================================================================
+// PER-PROJECT SQL RUNNER (Supabase-style query UI)
+// =================================================================
+fn apiProjectsSql(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const body = req.body() orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_body" }, .{});
+        return;
+    };
+    const Payload = struct {
+        project_id: []const u8,
+        sql: []const u8,
+    };
+    const parsed = std.json.parseFromSlice(Payload, res.arena, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_json" }, .{});
+        return;
+    };
+    defer parsed.deinit();
+    const p = parsed.value;
+    if (!isValidProjectId(p.project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    if (app.projects.getById(p.project_id) == null) {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    }
+    if (p.sql.len == 0 or p.sql.len > 256 * 1024) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_sql_size" }, .{});
+        return;
+    }
+
+    // Run via one-shot sqlite3 against ~/data/dbs/<project_id>.db with
+    // .mode json so the result comes back as JSON rows.
+    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{p.project_id});
+    std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data/dbs") catch {};
+
+    var script = std.ArrayList(u8).init(res.arena);
+    try script.appendSlice(".mode json\n");
+    try script.appendSlice(p.sql);
+    if (script.items.len == 0 or script.items[script.items.len - 1] != '\n') try script.appendSlice("\n");
+
+    var argv = [_][]const u8{ "sqlite3", "-batch", "-bail", db_path };
+    var child = std.process.Child.init(&argv, app.allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+    if (child.stdin) |stdin| {
+        stdin.writeAll(script.items) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+    var stdout_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |stdout| {
+        var rb: [8192]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&rb) catch 0;
+            if (n == 0) break;
+            stdout_buf.appendSlice(rb[0..n]) catch break;
+            if (stdout_buf.items.len > 8 * 1024 * 1024) break;
+        }
+    }
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr_n: usize = 0;
+    if (child.stderr) |stderr| stderr_n = stderr.read(&stderr_buf) catch 0;
+    const term = child.wait() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "wait_failed" }, .{});
+        return;
+    };
+    const exit_code = switch (term) {
+        .Exited => |c| c,
+        else => 1,
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_sql",
+        .target = p.project_id,
+        .ok = exit_code == 0,
+    });
+    if (exit_code != 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "sql_error", .stderr = stderr_buf[0..@min(stderr_n, 1024)] }, .{});
+        return;
+    }
+    var envelope = std.ArrayList(u8).init(res.arena);
+    try envelope.appendSlice("{\"ok\":true,\"result\":");
+    const trimmed = std.mem.trim(u8, stdout_buf.items, " \t\r\n");
+    if (trimmed.len == 0) {
+        try envelope.appendSlice("[]");
+    } else {
+        try envelope.appendSlice(trimmed);
+    }
+    try envelope.appendSlice("}");
+    res.content_type = .JSON;
+    res.body = try res.arena.dupe(u8, envelope.items);
+}
+
+// =================================================================
+// CRON / SCHEDULED TASKS
+// =================================================================
+fn apiCronList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const project_id = q.get("project_id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_project_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const json_body = app.cron.listForProject(res.arena, project_id) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+        return;
+    };
+    res.content_type = .JSON;
+    res.body = json_body;
+}
+
+fn apiCronCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const project_id = form.get("project_id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_project_id" }, .{});
+        return;
+    };
+    const name = form.get("name") orelse "task";
+    const schedule = form.get("schedule") orelse "";
+    const command = form.get("command") orelse "";
+    if (!isValidProjectId(project_id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const t = app.cron.create(name, project_id, schedule, command) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.InvalidName => "invalid_name",
+            error.InvalidCommand => "invalid_command",
+            error.InvalidSchedule => "invalid_schedule",
+            error.ProjectNotFound => "project_not_found",
+            else => "create_failed",
+        };
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "cron_create",
+        .target = project_id,
+        .detail = name,
+    });
+    try res.json(.{ .ok = true, .id = t.id }, .{});
+}
+
+fn apiCronDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    app.cron.delete(id) catch {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "cron_delete",
+        .target = id,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiCronToggle(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const enabled_str = form.get("enabled") orelse "true";
+    const enabled = std.mem.eql(u8, enabled_str, "true") or std.mem.eql(u8, enabled_str, "on") or std.mem.eql(u8, enabled_str, "1");
+    app.cron.toggle(id, enabled) catch {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "cron_toggle",
+        .target = id,
+        .detail = if (enabled) "on" else "off",
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiCronRun(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    app.cron.runOnce(id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.NotFound => "not_found",
+            error.ProjectNotFound => "project_not_found",
+            else => "run_failed",
+        };
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = code }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "cron_run",
+        .target = id,
+    });
+    try res.json(.{ .ok = true }, .{});
 }

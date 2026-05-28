@@ -462,3 +462,208 @@ test "verifyGithubSignature accepts valid hmac" {
     // Wrong secret
     try std.testing.expect(!verifyGithubSignature("wrong", &header, body));
 }
+
+/// List release timestamp directories under <work>/releases/, newest first.
+/// Caller frees the slice and each string.
+pub fn listReleases(allocator: std.mem.Allocator, project_id: []const u8) ![][]u8 {
+    const releases_dir = try std.fmt.allocPrint(
+        allocator,
+        "{s}/data/projects/{s}/releases",
+        .{ HOME, project_id },
+    );
+    defer allocator.free(releases_dir);
+
+    var dir = std.fs.openDirAbsolute(releases_dir, .{ .iterate = true }) catch {
+        return try allocator.alloc([]u8, 0);
+    };
+    defer dir.close();
+
+    var names = std.ArrayList([]u8).init(allocator);
+    var it = dir.iterate();
+    while (it.next() catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (entry.name.len == 0 or entry.name[0] == '.') continue;
+        const owned = try allocator.dupe(u8, entry.name);
+        try names.append(owned);
+    }
+
+    // Sort lexicographically descending (UTC timestamps sort lexicographically
+    // == chronologically, so newest first means descending).
+    const Sorter = struct {
+        fn lessThan(_: void, a: []u8, b: []u8) bool {
+            return std.mem.order(u8, a, b) == .gt;
+        }
+    };
+    std.mem.sort([]u8, names.items, {}, Sorter.lessThan);
+    return names.toOwnedSlice();
+}
+
+/// Read which release the `current` symlink points at. Returns the basename
+/// of the target (the timestamp dir name) or an empty slice. Caller frees.
+pub fn readCurrentRelease(allocator: std.mem.Allocator, project_id: []const u8) ![]u8 {
+    const current = try std.fmt.allocPrint(
+        allocator,
+        "{s}/data/projects/{s}/current",
+        .{ HOME, project_id },
+    );
+    defer allocator.free(current);
+    var rbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = std.fs.realpath(current, &rbuf) catch return try allocator.dupe(u8, "");
+    const slash = std.mem.lastIndexOfScalar(u8, target, '/') orelse return try allocator.dupe(u8, target);
+    return try allocator.dupe(u8, target[slash + 1 ..]);
+}
+
+/// Atomic-swap the `current` symlink to point at an existing release dir.
+/// Validates that the target is a sibling of releases/.
+pub fn rollbackTo(allocator: std.mem.Allocator, project_id: []const u8, release_name: []const u8) !void {
+    // Validate release_name has the shape we expect: digits only (UTC unix
+    // seconds) or the longer ISO format (digits, T, Z). Reject any path-
+    // looking input.
+    if (release_name.len == 0 or release_name.len > 32) return error.InvalidRelease;
+    for (release_name) |c| {
+        const ok = (c >= '0' and c <= '9') or c == 'T' or c == 'Z';
+        if (!ok) return error.InvalidRelease;
+    }
+
+    const target = try std.fmt.allocPrint(
+        allocator,
+        "{s}/data/projects/{s}/releases/{s}",
+        .{ HOME, project_id, release_name },
+    );
+    defer allocator.free(target);
+
+    // Confirm release dir exists.
+    var d = std.fs.openDirAbsolute(target, .{}) catch return error.NotFound;
+    d.close();
+
+    const current = try std.fmt.allocPrint(
+        allocator,
+        "{s}/data/projects/{s}/current",
+        .{ HOME, project_id },
+    );
+    defer allocator.free(current);
+
+    const cmd = try std.fmt.allocPrint(allocator, "ln -sfn {s} {s}", .{ target, current });
+    defer allocator.free(cmd);
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
+    const term = try child.wait();
+    switch (term) {
+        .Exited => |c| if (c != 0) return error.SwapFailed,
+        else => return error.SwapFailed,
+    }
+}
+
+/// Unpack a ZIP archive into a fresh release dir and atomic-swap current.
+/// Used by the operator-upload flow (no git clone). The ZIP must contain the
+/// project's files at its root (or in <publish_dir> if set).
+///
+/// `archive_path` is the absolute path to the temp zip on disk.
+pub fn deployZip(orch: *Orchestrator, project_id: []const u8, archive_path: []const u8) !void {
+    const project = orch.projects_mgr.getById(project_id) orelse return error.NotFound;
+    if (project.runtime != .static) return error.NotStaticProject;
+
+    const work_dir = try std.fmt.allocPrint(orch.allocator, "{s}/data/projects/{s}", .{ HOME, project_id });
+    defer orch.allocator.free(work_dir);
+    std.fs.makeDirAbsolute(work_dir) catch {};
+
+    const releases_dir = try std.fmt.allocPrint(orch.allocator, "{s}/releases", .{work_dir});
+    defer orch.allocator.free(releases_dir);
+    std.fs.makeDirAbsolute(releases_dir) catch {};
+
+    const logs_dir = try std.fmt.allocPrint(orch.allocator, "{s}/logs", .{work_dir});
+    defer orch.allocator.free(logs_dir);
+    std.fs.makeDirAbsolute(logs_dir) catch {};
+
+    const log_path = try std.fmt.allocPrint(orch.allocator, "{s}/build.log", .{logs_dir});
+    defer orch.allocator.free(log_path);
+    var log_file = try std.fs.createFileAbsolute(log_path, .{ .truncate = true, .mode = 0o600 });
+    defer log_file.close();
+
+    var ts_buf: [32]u8 = undefined;
+    const ts_slice = try std.fmt.bufPrint(&ts_buf, "{d}", .{std.time.timestamp()});
+    const new_release_dir = try std.fmt.allocPrint(orch.allocator, "{s}/{s}", .{ releases_dir, ts_slice });
+    defer orch.allocator.free(new_release_dir);
+
+    var hdr: [256]u8 = undefined;
+    const hdr_msg = std.fmt.bufPrint(&hdr, "rofihosted zip-deploy: project={s} archive={s}\n", .{ project.id, archive_path }) catch "rofihosted zip-deploy\n";
+    log_file.writeAll(hdr_msg) catch {};
+    log_file.writeAll("=== unpack ===\n") catch {};
+
+    std.fs.makeDirAbsolute(new_release_dir) catch {};
+
+    // unzip <archive> -d <new_release_dir>
+    var unzip_argv = [_][]const u8{ "unzip", "-q", "-o", archive_path, "-d", new_release_dir };
+    var child = std.process.Child.init(&unzip_argv, orch.allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
+    if (child.stdout) |so| drainTo(so, log_file) catch {};
+    if (child.stderr) |se| drainTo(se, log_file) catch {};
+    const term = try child.wait();
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        else => -1,
+    };
+    if (exit_code != 0) {
+        log_file.writeAll("=== unpack FAILED ===\n") catch {};
+        return error.UnzipFailed;
+    }
+
+    // If publish_dir set, take that subpath of the unpacked tree as the actual root.
+    if (project.publish_dir.len > 0) {
+        const sub = try std.fmt.allocPrint(orch.allocator, "{s}/{s}", .{ new_release_dir, project.publish_dir });
+        defer orch.allocator.free(sub);
+        var sd = std.fs.openDirAbsolute(sub, .{}) catch {
+            log_file.writeAll("publish_dir not found inside zip\n") catch {};
+            return error.PublishDirMissing;
+        };
+        sd.close();
+        // Move sub contents up one level by re-pointing the symlink at sub.
+        const swap_cmd = try std.fmt.allocPrint(
+            orch.allocator,
+            "ln -sfn {s} {s}/current",
+            .{ sub, work_dir },
+        );
+        defer orch.allocator.free(swap_cmd);
+        var swap_argv = [_][]const u8{ "sh", "-c", swap_cmd };
+        var s2 = std.process.Child.init(&swap_argv, orch.allocator);
+        s2.spawn() catch return error.SwapFailed;
+        _ = s2.wait() catch {};
+    } else {
+        const swap_cmd = try std.fmt.allocPrint(
+            orch.allocator,
+            "ln -sfn {s} {s}/current",
+            .{ new_release_dir, work_dir },
+        );
+        defer orch.allocator.free(swap_cmd);
+        var swap_argv = [_][]const u8{ "sh", "-c", swap_cmd };
+        var s2 = std.process.Child.init(&swap_argv, orch.allocator);
+        s2.spawn() catch return error.SwapFailed;
+        _ = s2.wait() catch {};
+    }
+
+    log_file.writeAll("=== unpack OK ===\n") catch {};
+
+    // Prune old releases (keep last 5)
+    const prune_cmd = try std.fmt.allocPrint(
+        orch.allocator,
+        "ls -1t {s} | tail -n +6 | xargs -I {{}} rm -rf {s}/{{}}",
+        .{ releases_dir, releases_dir },
+    );
+    defer orch.allocator.free(prune_cmd);
+    var prune_argv = [_][]const u8{ "sh", "-c", prune_cmd };
+    var p3 = std.process.Child.init(&prune_argv, orch.allocator);
+    p3.spawn() catch {};
+    _ = p3.wait() catch {};
+
+    _ = try orch.projects_mgr.update(project_id, .{
+        .status = .running,
+        .last_deploy_at = std.time.timestamp(),
+    });
+}

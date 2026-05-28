@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=24">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=24">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=24">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=25">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=25">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=25">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -240,8 +240,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=24"></script>
-<script src="https://rofihosted.space/app.js?v=24"></script>
+<script src="https://rofihosted.space/theme.js?v=25"></script>
+<script src="https://rofihosted.space/app.js?v=25"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -340,6 +340,7 @@ RH.loadCurrentUser();
       + '<div class="submit-row" style="margin-top:.5rem; gap:.5rem; flex-wrap:wrap">'
       +   '<button type="button" class="btn btn-accent" id="detail-deploy-btn"><i class="icon-cloud-upload"></i><span>Deploy now</span></button>'
       +   '<button type="button" class="btn" id="detail-logs-btn"><i class="icon-list"></i><span>Build logs</span></button>'
+      +   (p.runtime === 'static' ? '<button type="button" class="btn" id="detail-zip-btn"><i class="icon-cloud-upload"></i><span>Upload ZIP</span></button>' : '')
       +   (p.runtime !== 'static' ? ''
         +   '<button type="button" class="btn" id="detail-start-btn"><i class="icon-control-play"></i><span>Start</span></button>'
         +   '<button type="button" class="btn" id="detail-stop-btn"><i class="icon-control-pause"></i><span>Stop</span></button>'
@@ -347,9 +348,12 @@ RH.loadCurrentUser();
         +   '<button type="button" class="btn" id="detail-rt-logs-btn"><i class="icon-list"></i><span>Runtime logs</span></button>'
         : '')
       + '</div>'
+      + '<input type="file" id="detail-zip-input" accept=".zip" style="display:none">'
       + '<div id="detail-deploy-alert" class="alert" style="display:none; margin-top:.6rem"></div>'
       + (p.runtime !== 'static' ? '<div id="detail-supervisor-status" class="hint" style="margin-top:.5rem; font-family: ui-monospace, \'SF Mono\', Menlo, monospace"></div>' : '')
-      + '<pre id="detail-logs" style="display:none; margin-top:.8rem; max-height:280px; overflow:auto; padding:.7rem .9rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; color:var(--text);"></pre>';
+      + '<pre id="detail-logs" style="display:none; margin-top:.8rem; max-height:280px; overflow:auto; padding:.7rem .9rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; color:var(--text);"></pre>'
+      + '<h3 style="margin-top:1.2rem; font-size:.78rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Releases</h3>'
+      + '<div id="detail-releases" class="hint" style="margin-top:.4rem">Loading...</div>';
 
     if (p.repo_url) {
       const hookUrl = location.origin + '/v1/github/' + p.id;
@@ -370,7 +374,33 @@ RH.loadCurrentUser();
       + row('Signup', '<span class="value">POST ' + escapeHtml(authBase) + '/signup  {email, password}</span>')
       + row('Login', '<span class="value">POST ' + escapeHtml(authBase) + '/login   {email, password}</span>')
       + row('Verify', '<span class="value">GET ' + escapeHtml(authBase) + '/verify  Authorization: Bearer &lt;token&gt;</span>')
-      + row('User DB', '<span class="value">~/data/dbs/' + escapeHtml(p.id) + '.db (also exposed as ROFI_DB_PATH)</span>');
+      + row('User DB', '<span class="value">~/data/dbs/' + escapeHtml(p.id) + '.db (also exposed as ROFI_DB_PATH)</span>')
+      + '<div class="submit-row" style="margin-top:.6rem; gap:.4rem">'
+      +   '<button type="button" class="btn btn-sm" id="detail-auth-snippet-btn"><i class="icon-doc"></i><span>Copy HTML snippet</span></button>'
+      + '</div>'
+      + '<pre id="detail-auth-snippet" style="display:none; margin-top:.5rem; max-height:240px; overflow:auto; padding:.6rem .8rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.7rem; line-height:1.4; white-space:pre; color:var(--text);"></pre>';
+
+    // Database (SQL runner) section
+    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Database</h3>'
+      + '<p class="hint" style="margin-top:.4rem">Run SQL against this project\'s SQLite database. Same file the auth service writes to and what your code sees as <code>$ROFI_DB_PATH</code>.</p>'
+      + '<textarea id="detail-sql-input" class="input" placeholder="SELECT * FROM users LIMIT 5;" style="margin-top:.4rem; height:90px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.78rem; resize:vertical"></textarea>'
+      + '<div class="submit-row" style="margin-top:.5rem; gap:.4rem">'
+      +   '<button type="button" class="btn btn-sm btn-accent" id="detail-sql-run-btn"><i class="icon-control-play"></i><span>Run</span></button>'
+      +   '<button type="button" class="btn btn-sm" id="detail-sql-tables-btn">List tables</button>'
+      + '</div>'
+      + '<div id="detail-sql-output" style="display:none; margin-top:.6rem; max-height:280px; overflow:auto; padding:.6rem .8rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; color:var(--text);"></div>';
+
+    // Cron section
+    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Scheduled tasks</h3>'
+      + '<p class="hint" style="margin-top:.4rem">Run a command on a recurring schedule. Schedule formats: <code>every 30s</code>, <code>every 5m</code>, <code>every 1h</code>, <code>every 1d</code>, or 5-field cron <code>0 6 * * *</code>. Tasks inherit the project secrets and ROFI_* env vars.</p>'
+      + '<div id="detail-cron-list" class="hint" style="margin-top:.4rem">Loading...</div>'
+      + '<div style="display:grid; grid-template-columns:auto 1fr; gap:.4rem; margin-top:.6rem">'
+      +   '<input class="input" id="detail-cron-name" placeholder="Name (e.g. daily-digest)" style="grid-column:1/3">'
+      +   '<input class="input" id="detail-cron-sched" placeholder="every 30m">'
+      +   '<input class="input" id="detail-cron-cmd" placeholder="node scripts/digest.js">'
+      + '</div>'
+      + '<div class="submit-row" style="margin-top:.5rem"><button type="button" class="btn btn-sm btn-accent" id="detail-cron-add-btn"><i class="icon-plus"></i><span>Add task</span></button></div>'
+      + '<div id="detail-cron-alert" class="alert" style="display:none; margin-top:.6rem"></div>';
 
     html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Secrets</h3>'
       + '<div id="detail-secrets" class="wiz-secret-existing">Loading...</div>'
@@ -384,9 +414,47 @@ RH.loadCurrentUser();
     document.getElementById('detail-overlay').classList.add('show');
 
     loadSecrets(id);
+    loadReleases(id);
+    loadCronTasks(id);
     document.getElementById('detail-sk-add').addEventListener('click', function () { addSecret(id); });
     document.getElementById('detail-deploy-btn').addEventListener('click', function () { triggerDeploy(id); });
     document.getElementById('detail-logs-btn').addEventListener('click', function () { toggleLogs(id, '/api/projects/logs'); });
+
+    // ZIP upload (static only)
+    if (p.runtime === 'static') {
+      const zipBtn = document.getElementById('detail-zip-btn');
+      const zipInput = document.getElementById('detail-zip-input');
+      zipBtn.addEventListener('click', function () { zipInput.click(); });
+      zipInput.addEventListener('change', function () {
+        if (!zipInput.files || zipInput.files.length === 0) return;
+        uploadZip(id, zipInput.files[0]);
+        zipInput.value = '';
+      });
+    }
+
+    // SQL runner
+    document.getElementById('detail-sql-run-btn').addEventListener('click', function () { runSql(id); });
+    document.getElementById('detail-sql-tables-btn').addEventListener('click', function () {
+      document.getElementById('detail-sql-input').value = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;";
+      runSql(id);
+    });
+
+    // Cron task add
+    document.getElementById('detail-cron-add-btn').addEventListener('click', function () { addCronTask(id); });
+
+    // Auth snippet copy
+    document.getElementById('detail-auth-snippet-btn').addEventListener('click', function () {
+      const snippet = buildAuthSnippet(p.subdomain);
+      const out = document.getElementById('detail-auth-snippet');
+      out.style.display = '';
+      out.textContent = snippet;
+      navigator.clipboard.writeText(snippet).then(function () {
+        const btn = document.getElementById('detail-auth-snippet-btn');
+        btn.querySelector('span').textContent = 'Copied to clipboard';
+        setTimeout(function () { btn.querySelector('span').textContent = 'Copy HTML snippet'; }, 1500);
+      });
+    });
+
     if (p.runtime !== 'static') {
       document.getElementById('detail-start-btn').addEventListener('click', function () { supervisorAction(id, 'start'); });
       document.getElementById('detail-stop-btn').addEventListener('click', function () { supervisorAction(id, 'stop'); });
@@ -509,6 +577,254 @@ RH.loadCurrentUser();
         if (j.started_at) parts.push('started=' + fmtTs(j.started_at));
         el.textContent = parts.join('  |  ');
       });
+  }
+
+  // ---------- ZIP upload ----------
+  function uploadZip(id, file) {
+    const alertEl = document.getElementById('detail-deploy-alert');
+    alertEl.className = 'alert';
+    alertEl.innerHTML = 'Uploading ' + escapeHtml(file.name) + ' (' + (file.size / 1024).toFixed(1) + ' KB)...';
+    alertEl.style.display = '';
+    fetch('/api/projects/upload?id=' + encodeURIComponent(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body: file,
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) {
+        alertEl.className = 'alert error';
+        alertEl.innerHTML = '<i class="icon-exclamation"></i> Upload failed: ' + escapeHtml(j.err || 'unknown');
+        return;
+      }
+      alertEl.className = 'alert success';
+      alertEl.innerHTML = '<i class="icon-check"></i> Deployed ' + j.bytes + ' bytes.';
+      loadReleases(id);
+      setTimeout(loadProjects, 1000);
+    }).catch(function (e) {
+      alertEl.className = 'alert error';
+      alertEl.innerHTML = '<i class="icon-exclamation"></i> Upload error: ' + escapeHtml(String(e));
+    });
+  }
+
+  // ---------- Releases + rollback ----------
+  function loadReleases(id) {
+    fetch('/api/projects/releases?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const wrap = document.getElementById('detail-releases');
+        if (!wrap) return;
+        if (!j.ok || !j.releases || j.releases.length === 0) {
+          wrap.innerHTML = '<em>No releases yet. Deploy or upload to create one.</em>';
+          return;
+        }
+        let inner = '<div style="display:flex; flex-direction:column; gap:.3rem; margin-top:.4rem">';
+        j.releases.forEach(function (rel) {
+          const isCurrent = rel === j.current;
+          const ts = parseInt(rel, 10);
+          const display = isNaN(ts) ? rel : fmtTs(ts);
+          inner += '<div style="display:flex; align-items:center; gap:.5rem; padding:.3rem 0">'
+            + '<span class="scope-pill" style="font-family:ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.7rem">' + escapeHtml(rel) + '</span>'
+            + '<span class="hint" style="flex:1; font-size:.74rem">' + escapeHtml(display) + (isCurrent ? '  <strong style="color:#16a34a">current</strong>' : '') + '</span>'
+            + (isCurrent ? '' : '<button type="button" class="btn btn-sm" data-rollback="' + escapeHtml(rel) + '">Rollback</button>')
+            + '</div>';
+        });
+        inner += '</div>';
+        wrap.innerHTML = inner;
+        wrap.querySelectorAll('[data-rollback]').forEach(function (btn) {
+          btn.addEventListener('click', function () { rollback(id, btn.dataset.rollback); });
+        });
+      });
+  }
+
+  function rollback(id, release) {
+    if (!confirm('Rollback to release ' + release + '?')) return;
+    const fd = new FormData();
+    fd.append('id', id);
+    fd.append('release', release);
+    fetch('/api/projects/rollback', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const a = document.getElementById('detail-deploy-alert');
+        if (j.ok) {
+          a.className = 'alert success';
+          a.innerHTML = '<i class="icon-check"></i> Rolled back to ' + escapeHtml(release);
+        } else {
+          a.className = 'alert error';
+          a.innerHTML = '<i class="icon-exclamation"></i> Rollback failed: ' + escapeHtml(j.err || 'unknown');
+        }
+        a.style.display = '';
+        loadReleases(id);
+      });
+  }
+
+  // ---------- SQL runner ----------
+  function runSql(id) {
+    const sqlText = document.getElementById('detail-sql-input').value.trim();
+    if (!sqlText) return;
+    const out = document.getElementById('detail-sql-output');
+    out.style.display = '';
+    out.textContent = 'Running...';
+    fetch('/api/projects/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: id, sql: sqlText }),
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) {
+        out.textContent = '[error] ' + (j.err || 'unknown') + (j.stderr ? '\n' + j.stderr : '');
+        out.style.color = '#ef4444';
+        return;
+      }
+      out.style.color = '';
+      const rows = Array.isArray(j.result) ? j.result : [];
+      if (rows.length === 0) {
+        out.textContent = '(0 rows)';
+        return;
+      }
+      out.textContent = JSON.stringify(rows, null, 2);
+    }).catch(function (e) {
+      out.textContent = '[network error] ' + String(e);
+      out.style.color = '#ef4444';
+    });
+  }
+
+  // ---------- Cron tasks ----------
+  function loadCronTasks(id) {
+    fetch('/api/projects/cron/list?project_id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const wrap = document.getElementById('detail-cron-list');
+        if (!wrap) return;
+        if (!j.ok || !j.tasks || j.tasks.length === 0) {
+          wrap.innerHTML = '<em>No tasks yet.</em>';
+          return;
+        }
+        let inner = '<table class="apikey-table" style="width:100%; margin:.4rem 0"><thead><tr><th>Name</th><th>Schedule</th><th>Command</th><th>Runs</th><th>Last</th><th></th></tr></thead><tbody>';
+        j.tasks.forEach(function (t) {
+          const lastTxt = t.last_run_at ? fmtTs(t.last_run_at) : '\u2014';
+          inner += '<tr>'
+            + '<td>' + escapeHtml(t.name) + '</td>'
+            + '<td>' + escapeHtml(t.schedule) + '</td>'
+            + '<td style="word-break:break-all; max-width:240px">' + escapeHtml(t.command) + '</td>'
+            + '<td>' + t.runs + (t.failures ? ' / ' + t.failures + ' err' : '') + '</td>'
+            + '<td>' + lastTxt + '<br><span class="hint" style="font-size:.7rem">exit=' + t.last_exit + '</span></td>'
+            + '<td style="display:flex; gap:.3rem; flex-wrap:wrap">'
+            +   '<button type="button" class="btn btn-sm" data-run-task="' + escapeHtml(t.id) + '">Run</button>'
+            +   '<button type="button" class="btn btn-sm" data-toggle-task="' + escapeHtml(t.id) + '" data-state="' + (t.enabled ? 'on' : 'off') + '">' + (t.enabled ? 'Disable' : 'Enable') + '</button>'
+            +   '<button type="button" class="btn btn-sm" data-del-task="' + escapeHtml(t.id) + '">Delete</button>'
+            + '</td>'
+            + '</tr>';
+        });
+        inner += '</tbody></table>';
+        wrap.innerHTML = inner;
+        wrap.querySelectorAll('[data-run-task]').forEach(function (b) {
+          b.addEventListener('click', function () { cronRun(id, b.dataset.runTask); });
+        });
+        wrap.querySelectorAll('[data-toggle-task]').forEach(function (b) {
+          b.addEventListener('click', function () { cronToggle(id, b.dataset.toggleTask, b.dataset.state); });
+        });
+        wrap.querySelectorAll('[data-del-task]').forEach(function (b) {
+          b.addEventListener('click', function () { cronDelete(id, b.dataset.delTask); });
+        });
+      });
+  }
+
+  function addCronTask(id) {
+    const name = document.getElementById('detail-cron-name').value.trim();
+    const sched = document.getElementById('detail-cron-sched').value.trim();
+    const cmd = document.getElementById('detail-cron-cmd').value;
+    const a = document.getElementById('detail-cron-alert');
+    if (!name || !sched || !cmd) {
+      a.className = 'alert error';
+      a.innerHTML = '<i class="icon-exclamation"></i> Name, schedule, and command are required.';
+      a.style.display = '';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('project_id', id);
+    fd.append('name', name);
+    fd.append('schedule', sched);
+    fd.append('command', cmd);
+    fetch('/api/projects/cron/create', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok) {
+          a.className = 'alert error';
+          a.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(j.err || 'unknown');
+          a.style.display = '';
+          return;
+        }
+        a.className = 'alert success';
+        a.innerHTML = '<i class="icon-check"></i> Task created.';
+        a.style.display = '';
+        document.getElementById('detail-cron-name').value = '';
+        document.getElementById('detail-cron-sched').value = '';
+        document.getElementById('detail-cron-cmd').value = '';
+        loadCronTasks(id);
+      });
+  }
+
+  function cronRun(project_id, task_id) {
+    const fd = new FormData();
+    fd.append('id', task_id);
+    fetch('/api/projects/cron/run', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function () { loadCronTasks(project_id); });
+  }
+
+  function cronToggle(project_id, task_id, current_state) {
+    const fd = new FormData();
+    fd.append('id', task_id);
+    fd.append('enabled', current_state === 'on' ? 'false' : 'true');
+    fetch('/api/projects/cron/toggle', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function () { loadCronTasks(project_id); });
+  }
+
+  function cronDelete(project_id, task_id) {
+    if (!confirm('Delete this scheduled task?')) return;
+    const fd = new FormData();
+    fd.append('id', task_id);
+    fetch('/api/projects/cron/delete', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function () { loadCronTasks(project_id); });
+  }
+
+  // ---------- Auth UI snippet generator ----------
+  function buildAuthSnippet(subdomain) {
+    const base = 'https://' + subdomain + '.rofihosted.space/auth';
+    return [
+      '<!doctype html>',
+      '<html><head><meta charset="utf-8"><title>' + subdomain + ' login</title>',
+      '<style>',
+      '  body{font-family:system-ui;max-width:380px;margin:4rem auto;padding:0 1rem;color:#222}',
+      '  h1{margin-bottom:1.5rem}',
+      '  label{display:block;margin-top:.7rem;font-size:.85rem}',
+      '  input{width:100%;padding:.5rem;border:1px solid #ccc;border-radius:6px;font:inherit;box-sizing:border-box}',
+      '  button{margin-top:1rem;padding:.55rem 1.1rem;background:#7c3aed;color:#fff;border:0;border-radius:6px;cursor:pointer;font:inherit}',
+      '  .out{margin-top:1rem;padding:.5rem;background:#f5f5f5;border-radius:6px;font-family:ui-monospace,monospace;font-size:.78rem;word-break:break-all}',
+      '</style></head><body>',
+      '<h1>' + subdomain + ' login</h1>',
+      '<label>Email <input id="email" type="email"></label>',
+      '<label>Password <input id="password" type="password"></label>',
+      '<button onclick="signup()">Sign up</button>',
+      '<button onclick="login()">Log in</button>',
+      '<div id="out" class="out" style="display:none"></div>',
+      '<script>',
+      'const BASE = "' + base + '";',
+      'async function call(path) {',
+      '  const r = await fetch(BASE + path, {',
+      '    method: "POST", headers: {"content-type":"application/json"},',
+      '    body: JSON.stringify({email:document.getElementById("email").value,password:document.getElementById("password").value})',
+      '  });',
+      '  const j = await r.json();',
+      '  const out = document.getElementById("out");',
+      '  out.style.display = ""; out.textContent = JSON.stringify(j, null, 2);',
+      '  if (j.ok && j.token) localStorage.setItem("token", j.token);',
+      '}',
+      'function signup(){call("/signup")}',
+      'function login(){call("/login")}',
+      '<\/script>',
+      '</body></html>',
+    ].join('\n');
   }
 
   function row(label, valueHtml) {
