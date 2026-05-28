@@ -99,10 +99,26 @@ log "binary age = ${BIN_AGE_S}s, mtime change: $PRE_REBUILD_MTIME -> $POST_REBUI
 # If the binary mtime didn't advance, the build silently failed or was a
 # no-op. We treat this as a failure so the operator knows they're not
 # actually running the new code.
-if [ "$POST_REBUILD_MTIME" = "$PRE_REBUILD_MTIME" ]; then
+# If the binary mtime didn't advance, that may be expected if the commit
+# touched only scripts / docs (Zig caches builds by source hash). Detect
+# whether any .zig file actually changed; if not, the update is a no-op
+# at the binary level and that's fine. If Zig sources DID change but the
+# binary still didn't advance, that's a real rebuild failure.
+ZIG_CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null | grep -E '\.(zig|html|js|css)$|build\.zig\.zon' | wc -l)
+log "files affecting binary changed: $ZIG_CHANGED"
+
+if [ "$POST_REBUILD_MTIME" = "$PRE_REBUILD_MTIME" ] && [ "$ZIG_CHANGED" -gt 0 ]; then
     emit "{\"ok\":false,\"err\":\"rebuild_did_not_produce_new_binary\",\"before\":\"$SHORT_BEFORE\",\"after\":\"$SHORT_AFTER\",\"binary_mtime_unchanged\":true,\"hint\":\"check ~/logs/self-update.log for compile errors\"}"
-    log "binary mtime unchanged; treating as failure"
+    log "binary mtime unchanged but $ZIG_CHANGED build-affecting files changed; treating as failure"
     exit 1
+fi
+
+# If only scripts/docs changed, no need to restart hp-server. Emit success
+# and skip the kill so the operator's session survives.
+if [ "$ZIG_CHANGED" = "0" ]; then
+    emit "{\"ok\":true,\"reason\":\"updated\",\"before\":\"$SHORT_BEFORE\",\"after\":\"$SHORT_AFTER\",\"binary_age_s\":$BIN_AGE_S,\"status\":\"no_restart_needed\",\"note\":\"only non-build files changed (scripts/docs); hp-server kept running\"}"
+    log "only non-build files changed; skipping restart"
+    exit 0
 fi
 
 # Trigger watchdog respawn. The current request is being served by hp-server
