@@ -83,7 +83,7 @@ const App = struct {
 var g_app: ?*App = null;
 
 fn shutdownHandler(_: c_int) callconv(.c) void {
-    std.log.info("hp-server: SIGTERM received, shutting down gracefully", .{});
+    std.log.info("hp-server: SIGTERM received, shutting down gracefully (build: self-update flow)", .{});
     if (g_app) |app| {
         // Flush buffered writes BEFORE httpz.stop() so we don't lose data
         app.visit_buf.flush() catch |e| {
