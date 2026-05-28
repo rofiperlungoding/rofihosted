@@ -13,156 +13,42 @@
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem; margin-top: 1rem;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem; margin-top: 1.2rem;
   }
   .project-card {
-    background: var(--surface-2);
+    background: var(--surface);
     border: 1px solid var(--border-soft);
     border-radius: 10px;
-    padding: 1rem 1.1rem;
-    display: flex; flex-direction: column; gap: .55rem;
-    transition: border-color .15s;
-  }
-  .project-card:hover { border-color: var(--accent); }
-  .project-card .project-head {
-    display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem;
-  }
-  .project-card .project-name {
-    font-size: 1rem; font-weight: 600; color: var(--text);
-  }
-  .project-card .project-sub {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: .76rem; color: var(--text-3);
-  }
-  .project-card .project-sub a { color: var(--accent); text-decoration: none !important; }
-  .project-card .project-meta {
-    display: flex; gap: .35rem; flex-wrap: wrap; font-size: .7rem;
-  }
-  .project-card .badge {
-    padding: .15rem .5rem; border-radius: 4px;
-    background: var(--surface);
-    border: 1px solid var(--border-soft);
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: .68rem;
-    color: var(--text-2);
-  }
-  .project-card .badge.runtime-static { color: #16a34a; border-color: rgba(22,163,74,.4); }
-  .project-card .badge.runtime-node { color: #84cc16; border-color: rgba(132,204,22,.4); }
-  .project-card .badge.runtime-python { color: #3b82f6; border-color: rgba(59,130,246,.4); }
-  .project-card .badge.runtime-bun { color: #eab308; border-color: rgba(234,179,8,.4); }
-  .project-card .badge.status-running { color: #16a34a; }
-  .project-card .badge.status-failed { color: #ef4444; }
-  .project-card .badge.status-stopped { color: var(--text-3); }
-  .project-card .actions {
-    display: flex; gap: .4rem; margin-top: .3rem;
-  }
-
-  /* Wizard modal */
-  .wiz-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,.55);
-    display: none; align-items: center; justify-content: center;
-    z-index: 100; padding: 1rem;
-  }
-  .wiz-overlay.show { display: flex; }
-  .wiz-card {
-    background: var(--surface);
-    border: 1px solid var(--border-soft);
-    border-radius: 12px;
-    padding: 1.5rem 1.6rem;
-    width: 100%; max-width: 560px;
-    max-height: 90vh;
-    overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0,0,0,.4);
-  }
-  .wiz-head {
-    display: flex; align-items: baseline; justify-content: space-between;
-    margin-bottom: .9rem;
-  }
-  .wiz-title {
-    font-size: 1.1rem; font-weight: 600; color: var(--text);
-  }
-  .wiz-step {
-    color: var(--text-3); font-size: .78rem;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  }
-  .wiz-stepper {
-    display: flex; gap: .35rem; margin-bottom: 1rem;
-  }
-  .wiz-stepper .dot {
-    flex: 1; height: 4px; border-radius: 2px;
-    background: var(--border-soft);
-    transition: background .15s;
-  }
-  .wiz-stepper .dot.done { background: var(--accent); }
-  .wiz-body label { display: block; font-size: .78rem; color: var(--text-2); margin: .8rem 0 .35rem; font-weight: 500; }
-  .wiz-body label .hint-inline { color: var(--text-3); font-weight: 400; font-size: .72rem; }
-  .wiz-body .input { width: 100%; }
-  .wiz-runtime-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: .5rem; margin-top: .35rem;
-  }
-  .wiz-runtime-grid .opt {
-    padding: .7rem .5rem; border: 1px solid var(--border-soft);
-    border-radius: 8px; text-align: center; cursor: pointer;
-    font-size: .82rem; color: var(--text-2);
-    transition: border-color .15s, background .15s;
-  }
-  .wiz-runtime-grid .opt:hover { border-color: var(--accent); }
-  .wiz-runtime-grid .opt.selected {
-    border-color: var(--accent); color: var(--text);
-    background: rgba(167,139,250,.1);
-  }
-  .wiz-secret-row {
-    display: grid; grid-template-columns: 1fr 1fr auto;
-    gap: .35rem; margin-top: .35rem; align-items: center;
-  }
-  .wiz-secret-row input { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; }
-  .wiz-secret-existing { font-size: .76rem; color: var(--text-3); margin-top: .35rem; }
-  .wiz-secret-existing .key {
-    display: inline-block; padding: .1rem .45rem; margin: .15rem .25rem 0 0;
-    background: var(--surface-2); border-radius: 4px;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .72rem;
+    padding: 1.1rem 1.2rem;
+    display: flex; flex-direction: column; gap: .6rem;
+    box-shadow: var(--shadow);
+    transition: border-color .15s, box-shadow .15s;
     cursor: pointer;
   }
-  .wiz-secret-existing .key:hover { color: #ef4444; }
-  .wiz-foot {
-    display: flex; justify-content: space-between; gap: .5rem; margin-top: 1.4rem;
+  .project-card:hover { border-color: var(--accent); box-shadow: 0 4px 20px rgba(167,139,250,.08); }
+  .project-card .pname { font-size: .95rem; font-weight: 600; color: var(--text); letter-spacing: -.01em; }
+  .project-card .psub { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .74rem; color: var(--accent); }
+  .project-card .pmeta { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+  .project-card .pill {
+    display: inline-flex; align-items: center; gap: .2rem;
+    padding: .15rem .5rem; border-radius: 999px;
+    font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    border: 1px solid var(--border-soft); background: var(--surface-2); color: var(--text-3);
   }
-  .wiz-foot .btn { min-width: 100px; }
+  .project-card .pill.rt-static { color: #16a34a; border-color: rgba(22,163,74,.35); }
+  .project-card .pill.rt-node { color: #84cc16; border-color: rgba(132,204,22,.35); }
+  .project-card .pill.rt-python { color: #3b82f6; border-color: rgba(59,130,246,.35); }
+  .project-card .pill.rt-bun { color: #eab308; border-color: rgba(234,179,8,.35); }
+  .project-card .pill.st-running { color: #16a34a; border-color: rgba(22,163,74,.35); }
+  .project-card .pill.st-failed { color: #ef4444; border-color: rgba(239,68,68,.35); }
+  .project-card .pill.st-stopped { color: var(--text-3); }
+  .project-card .pill.st-created { color: var(--text-3); }
+  .project-card .ptime { font-size: .7rem; color: var(--text-3); margin-top: auto; }
 
-  /* Detail panel */
-  .detail-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,.55);
-    display: none; align-items: center; justify-content: center;
-    z-index: 99; padding: 1rem;
-  }
-  .detail-overlay.show { display: flex; }
-  .detail-card {
-    background: var(--surface);
-    border: 1px solid var(--border-soft);
-    border-radius: 12px;
-    padding: 1.5rem 1.6rem;
-    width: 100%; max-width: 720px;
-    max-height: 90vh; overflow-y: auto;
-  }
-  .detail-row {
-    display: grid; grid-template-columns: 130px 1fr;
-    gap: .5rem; padding: .45rem 0;
-    border-bottom: 1px solid var(--border-soft);
-    align-items: center;
-  }
-  .detail-row:last-child { border-bottom: 0; }
-  .detail-row .label { font-size: .76rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
-  .detail-row .value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; color: var(--text); }
-  .detail-row .value.hilite { color: var(--accent); }
-
-  .empty-state {
-    text-align: center; padding: 3rem 1rem;
-    color: var(--text-3);
-  }
-  .empty-state h3 { color: var(--text-2); font-weight: 500; margin: 0 0 .5rem; }
-  .empty-state p { margin: 0 0 1rem; font-size: .9rem; }
+  .empty-state { text-align: center; padding: 4rem 1.5rem; color: var(--text-3); }
+  .empty-state h3 { color: var(--text-2); font-weight: 500; margin: 0 0 .5rem; font-size: 1.05rem; }
+  .empty-state p { margin: 0 0 1.2rem; font-size: .88rem; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -173,977 +59,127 @@
     <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
     <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
     <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
-    <a class="nav-link" href="/api"><i class="icon-paper-clip"></i>API</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
     <a class="nav-link active" href="/projects"><i class="icon-rocket"></i>Projects</a>
-    <div class="nav-section">Operations</div>
     <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
     <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
-    <div class="nav-foot">
-      <a class="logout" href="/logout"><i class="icon-logout"></i>Sign out</a>
-    </div>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
   </aside>
 
+  <div class="backdrop" data-drawer-backdrop></div>
+
   <main class="main">
-    <header class="topbar">
-      <button class="drawer-toggle" data-drawer-toggle aria-label="Open menu"><i class="icon-menu"></i></button>
-      <div class="topbar-title">Projects</div>
-      <div class="topbar-right">
-        <button id="new-project-btn" class="btn btn-accent btn-sm"><i class="icon-plus"></i><span>New project</span></button>
-        <button class="theme-toggle" data-theme-toggle aria-label="Toggle theme"></button>
-        <span class="ws-status" id="ws-status">connecting</span>
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Projects</h1>
+          <p class="page-subtitle">Deploy fullstack apps at <code>&lt;name&gt;.rofihosted.space</code></p>
+        </div>
       </div>
-    </header>
+      <div class="topbar-actions">
+        <button class="btn btn-accent btn-sm" id="new-project-btn"><i class="icon-plus"></i><span>New project</span></button>
+        <span id="ws-status" class="ws-badge poll"><span class="dot"></span> connecting</span>
+        <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+          <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
 
-    <div class="form-card">
-      <h2>Your projects</h2>
-      <p class="lead">Each project owns a subdomain at <code>&lt;name&gt;.rofihosted.space</code> with its own working tree, encrypted secrets vault, and lifecycle. Static deploys serve from the latest release symlink. Backend runtimes (Node/Python/Bun) reverse-proxy to a project-allocated port (Phase C, coming).</p>
-
-      <div id="projects-list">
-        <div class="empty-state">Loading...</div>
+    <div id="projects-list">
+      <div class="empty-state">
+        <h3>No projects yet</h3>
+        <p>Click <strong>New project</strong> to deploy your first app.</p>
       </div>
     </div>
   </main>
-</div>
-
-<!-- Wizard modal -->
-<div class="wiz-overlay" id="wiz-overlay" role="dialog" aria-modal="true">
-  <div class="wiz-card">
-    <div class="wiz-head">
-      <div class="wiz-title" id="wiz-title">New project</div>
-      <div class="wiz-step" id="wiz-step">step 1 of 4</div>
-    </div>
-    <div class="wiz-stepper">
-      <div class="dot done"></div>
-      <div class="dot"></div>
-      <div class="dot"></div>
-      <div class="dot"></div>
-    </div>
-    <div class="wiz-body" id="wiz-body"></div>
-    <div id="wiz-alert" class="alert" style="display:none; margin-top: 1rem"></div>
-    <div class="wiz-foot">
-      <button type="button" class="btn" id="wiz-cancel-btn"><span>Cancel</span></button>
-      <div style="flex:1"></div>
-      <button type="button" class="btn" id="wiz-back-btn" style="display:none"><span>Back</span></button>
-      <button type="button" class="btn btn-accent" id="wiz-next-btn"><span>Next</span><i class="icon-arrow-right"></i></button>
-    </div>
-  </div>
-</div>
-
-<!-- Detail modal -->
-<div class="detail-overlay" id="detail-overlay" role="dialog" aria-modal="true">
-  <div class="detail-card">
-    <div class="wiz-head">
-      <div class="wiz-title" id="detail-title">Project detail</div>
-      <button type="button" class="btn btn-sm" id="detail-close-btn">Close</button>
-    </div>
-    <div id="detail-body"></div>
-  </div>
 </div>
 
 <script src="https://rofihosted.space/theme.js?v=25"></script>
 <script src="https://rofihosted.space/app.js?v=25"></script>
 <script>
 RH.loadCurrentUser();
+RH.connectStream();
+RH.on('ready', function () { document.getElementById('ws-status').className = 'ws-badge live'; document.getElementById('ws-status').innerHTML = '<span class="dot"></span> live'; });
+RH.on('disconnected', function () { document.getElementById('ws-status').className = 'ws-badge offline'; document.getElementById('ws-status').innerHTML = '<span class="dot"></span> offline'; });
 
 (function () {
-  const escapeHtml = function (s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  };
-  const fmtTs = function (t) {
-    if (!t) return '\u2014';
-    return new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
-  };
-
-  // ---------- Project list rendering ----------
-  let allProjects = [];
+  var escapeHtml = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+  var fmtTs = function (t) { if (!t) return '\u2014'; return new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' '); };
+  var allProjects = [];
 
   function renderProjects() {
-    const wrap = document.getElementById('projects-list');
+    var wrap = document.getElementById('projects-list');
     if (!allProjects.length) {
-      wrap.innerHTML = '<div class="empty-state">'
-        + '<h3>No projects yet</h3>'
-        + '<p>Click <strong>New project</strong> above to deploy your first one.</p>'
-        + '</div>';
+      wrap.innerHTML = '<div class="empty-state"><h3>No projects yet</h3><p>Click <strong>New project</strong> to deploy your first app.</p></div>';
       return;
     }
-    let html = '<div class="projects-grid">';
+    var html = '<div class="projects-grid">';
     allProjects.forEach(function (p) {
-      const url = 'https://' + p.subdomain + '.rofihosted.space';
+      var url = 'https://' + p.subdomain + '.rofihosted.space';
+      var deployed = p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never deployed';
       html += '<div class="project-card" data-id="' + escapeHtml(p.id) + '">'
-        + '<div class="project-head">'
-        +   '<div>'
-        +     '<div class="project-name">' + escapeHtml(p.name) + '</div>'
-        +     '<div class="project-sub"><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(p.subdomain) + '.rofihosted.space</a></div>'
-        +   '</div>'
+        + '<div class="pname">' + escapeHtml(p.name) + '</div>'
+        + '<div class="psub">' + escapeHtml(p.subdomain) + '.rofihosted.space</div>'
+        + '<div class="pmeta">'
+        +   '<span class="pill rt-' + escapeHtml(p.runtime) + '">' + escapeHtml(p.runtime) + '</span>'
+        +   '<span class="pill st-' + escapeHtml(p.status) + '">' + escapeHtml(p.status) + '</span>'
+        +   (p.port ? '<span class="pill">:' + p.port + '</span>' : '')
         + '</div>'
-        + '<div class="project-meta">'
-        +   '<span class="badge runtime-' + escapeHtml(p.runtime) + '">' + escapeHtml(p.runtime) + '</span>'
-        +   '<span class="badge status-' + escapeHtml(p.status) + '">' + escapeHtml(p.status) + '</span>'
-        +   (p.port ? '<span class="badge">:' + p.port + '</span>' : '')
-        + '</div>'
-        + '<div class="actions">'
-        +   '<button type="button" class="btn btn-sm" data-action="detail">Details</button>'
-        +   '<button type="button" class="btn btn-sm" data-action="delete">Delete</button>'
-        + '</div>'
+        + '<div class="ptime">' + escapeHtml(deployed) + '</div>'
         + '</div>';
     });
     html += '</div>';
     wrap.innerHTML = html;
     wrap.querySelectorAll('.project-card').forEach(function (card) {
-      const id = card.dataset.id;
-      card.querySelector('[data-action="detail"]').addEventListener('click', function () { showDetail(id); });
-      card.querySelector('[data-action="delete"]').addEventListener('click', function () { deleteProject(id); });
+      card.addEventListener('click', function () { window.location.href = '/projects?id=' + card.dataset.id; });
     });
   }
 
   function loadProjects() {
     fetch('/api/projects').then(function (r) { return r.json(); }).then(function (j) {
-      if (j.ok) {
-        allProjects = j.projects || [];
-        renderProjects();
-      }
+      if (j.ok) { allProjects = j.projects || []; renderProjects(); }
     });
   }
 
-  function deleteProject(id) {
-    if (!confirm('Delete this project? The working tree under ~/data/projects/<id>/ stays on disk; only the registry entry and subdomain claim are removed.')) return;
-    const fd = new FormData();
-    fd.append('id', id);
-    fetch('/api/projects/delete', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function () { loadProjects(); });
-  }
+  document.getElementById('new-project-btn').addEventListener('click', function () {
+    // For now, redirect to a simple prompt-based flow. The full Netlify-style
+    // wizard will be a separate page (/projects/new) in a future iteration.
+    var repo = prompt('Git repo URL (leave empty for upload-only):');
+    if (repo === null) return;
+    var name = prompt('Project name:', '');
+    if (!name) return;
+    var sub = prompt('Subdomain (lowercase, a-z0-9 and dashes):', name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''));
+    if (!sub) return;
+    var runtime = prompt('Runtime (static / node / python / bun / generic):', 'static');
+    if (!runtime) return;
 
-  // ---------- Detail modal ----------
-  function showDetail(id) {
-    const p = allProjects.find(function (x) { return x.id === id; });
-    if (!p) return;
-    document.getElementById('detail-title').textContent = p.name;
-    const url = 'https://' + p.subdomain + '.rofihosted.space';
-    let html = ''
-      + row('ID', '<span class="value">' + escapeHtml(p.id) + '</span>')
-      + row('URL', '<a class="value hilite" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(url) + '</a>')
-      + row('Runtime', '<span class="value">' + escapeHtml(p.runtime) + '</span>')
-      + row('Status', '<span class="value">' + escapeHtml(p.status) + '</span>')
-      + (p.port ? row('Port', '<span class="value">' + p.port + '</span>') : '')
-      + (p.repo_url ? row('Repo', '<a class="value hilite" href="' + escapeHtml(p.repo_url) + '" target="_blank" rel="noopener">' + escapeHtml(p.repo_url) + '</a>') : '')
-      + (p.branch ? row('Branch', '<span class="value">' + escapeHtml(p.branch) + '</span>') : '')
-      + (p.install_cmd ? row('Install', '<span class="value">' + escapeHtml(p.install_cmd) + '</span>') : '')
-      + (p.build_cmd ? row('Build', '<span class="value">' + escapeHtml(p.build_cmd) + '</span>') : '')
-      + (p.start_cmd ? row('Start', '<span class="value">' + escapeHtml(p.start_cmd) + '</span>') : '')
-      + row('Created', '<span class="value">' + fmtTs(p.created_at) + '</span>')
-      + row('Last deploy', '<span class="value">' + (p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never') + '</span>');
-
-    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Deploy</h3>'
-      + '<div class="submit-row" style="margin-top:.5rem; gap:.5rem; flex-wrap:wrap">'
-      +   '<button type="button" class="btn btn-accent" id="detail-deploy-btn"><i class="icon-cloud-upload"></i><span>Deploy now</span></button>'
-      +   '<button type="button" class="btn" id="detail-logs-btn"><i class="icon-list"></i><span>Build logs</span></button>'
-      +   (p.runtime === 'static' ? '<button type="button" class="btn" id="detail-zip-btn"><i class="icon-cloud-upload"></i><span>Upload ZIP</span></button>' : '')
-      +   (p.runtime !== 'static' ? ''
-        +   '<button type="button" class="btn" id="detail-start-btn"><i class="icon-control-play"></i><span>Start</span></button>'
-        +   '<button type="button" class="btn" id="detail-stop-btn"><i class="icon-control-pause"></i><span>Stop</span></button>'
-        +   '<button type="button" class="btn" id="detail-restart-btn"><i class="icon-refresh"></i><span>Restart</span></button>'
-        +   '<button type="button" class="btn" id="detail-rt-logs-btn"><i class="icon-list"></i><span>Runtime logs</span></button>'
-        : '')
-      + '</div>'
-      + '<input type="file" id="detail-zip-input" accept=".zip" style="display:none">'
-      + '<div id="detail-deploy-alert" class="alert" style="display:none; margin-top:.6rem"></div>'
-      + (p.runtime !== 'static' ? '<div id="detail-supervisor-status" class="hint" style="margin-top:.5rem; font-family: ui-monospace, \'SF Mono\', Menlo, monospace"></div>' : '')
-      + '<pre id="detail-logs" style="display:none; margin-top:.8rem; max-height:280px; overflow:auto; padding:.7rem .9rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; color:var(--text);"></pre>'
-      + '<h3 style="margin-top:1.2rem; font-size:.78rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Releases</h3>'
-      + '<div id="detail-releases" class="hint" style="margin-top:.4rem">Loading...</div>';
-
-    if (p.repo_url) {
-      const hookUrl = location.origin + '/v1/github/' + p.id;
-      html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">GitHub auto-deploy</h3>'
-        + '<p class="hint" style="margin-top:.4rem">Add a webhook to your repo: settings > webhooks > add webhook. Use the URL and secret below. Choose <em>application/json</em> as the content type and the <em>Just the push event</em> trigger.</p>'
-        + row('Webhook URL', '<span class="value">' + escapeHtml(hookUrl) + '</span>')
-        + row('Webhook secret', '<span class="value" id="detail-secret-cell">click reveal</span>')
-        + '<div class="submit-row" style="gap:.4rem; margin-top:.4rem">'
-        +   '<button type="button" class="btn btn-sm" id="detail-secret-btn">Reveal</button>'
-        +   '<button type="button" class="btn btn-sm" id="detail-secret-copy">Copy</button>'
-        + '</div>';
-    }
-
-    // Auth-as-a-service hint, always shown (works for static and backend alike)
-    const authBase = 'https://' + p.subdomain + '.rofihosted.space/auth';
-    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Built-in auth</h3>'
-      + '<p class="hint" style="margin-top:.4rem">Three ready-to-call HTTPS endpoints, with an automatic per-project SQLite users table. JWT uses HS256, signed with a key derived from your install pepper plus this project id. JWT TTL is 7 days.</p>'
-      + row('Signup', '<span class="value">POST ' + escapeHtml(authBase) + '/signup  {email, password}</span>')
-      + row('Login', '<span class="value">POST ' + escapeHtml(authBase) + '/login   {email, password}</span>')
-      + row('Verify', '<span class="value">GET ' + escapeHtml(authBase) + '/verify  Authorization: Bearer &lt;token&gt;</span>')
-      + row('User DB', '<span class="value">~/data/dbs/' + escapeHtml(p.id) + '.db (also exposed as ROFI_DB_PATH)</span>')
-      + '<div class="submit-row" style="margin-top:.6rem; gap:.4rem">'
-      +   '<button type="button" class="btn btn-sm" id="detail-auth-snippet-btn"><i class="icon-doc"></i><span>Copy HTML snippet</span></button>'
-      + '</div>'
-      + '<pre id="detail-auth-snippet" style="display:none; margin-top:.5rem; max-height:240px; overflow:auto; padding:.6rem .8rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.7rem; line-height:1.4; white-space:pre; color:var(--text);"></pre>';
-
-    // Database (SQL runner) section
-    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Database</h3>'
-      + '<p class="hint" style="margin-top:.4rem">Run SQL against this project\'s SQLite database. Same file the auth service writes to and what your code sees as <code>$ROFI_DB_PATH</code>.</p>'
-      + '<textarea id="detail-sql-input" class="input" placeholder="SELECT * FROM users LIMIT 5;" style="margin-top:.4rem; height:90px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.78rem; resize:vertical"></textarea>'
-      + '<div class="submit-row" style="margin-top:.5rem; gap:.4rem">'
-      +   '<button type="button" class="btn btn-sm btn-accent" id="detail-sql-run-btn"><i class="icon-control-play"></i><span>Run</span></button>'
-      +   '<button type="button" class="btn btn-sm" id="detail-sql-tables-btn">List tables</button>'
-      + '</div>'
-      + '<div id="detail-sql-output" style="display:none; margin-top:.6rem; max-height:280px; overflow:auto; padding:.6rem .8rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family: ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.74rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; color:var(--text);"></div>';
-
-    // Cron section
-    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Scheduled tasks</h3>'
-      + '<p class="hint" style="margin-top:.4rem">Run a command on a recurring schedule. Schedule formats: <code>every 30s</code>, <code>every 5m</code>, <code>every 1h</code>, <code>every 1d</code>, or 5-field cron <code>0 6 * * *</code>. Tasks inherit the project secrets and ROFI_* env vars.</p>'
-      + '<div id="detail-cron-list" class="hint" style="margin-top:.4rem">Loading...</div>'
-      + '<div style="display:grid; grid-template-columns:auto 1fr; gap:.4rem; margin-top:.6rem">'
-      +   '<input class="input" id="detail-cron-name" placeholder="Name (e.g. daily-digest)" style="grid-column:1/3">'
-      +   '<input class="input" id="detail-cron-sched" placeholder="every 30m">'
-      +   '<input class="input" id="detail-cron-cmd" placeholder="node scripts/digest.js">'
-      + '</div>'
-      + '<div class="submit-row" style="margin-top:.5rem"><button type="button" class="btn btn-sm btn-accent" id="detail-cron-add-btn"><i class="icon-plus"></i><span>Add task</span></button></div>'
-      + '<div id="detail-cron-alert" class="alert" style="display:none; margin-top:.6rem"></div>';
-
-    html += '<h3 style="margin-top:1.5rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3);">Secrets</h3>'
-      + '<div id="detail-secrets" class="wiz-secret-existing">Loading...</div>'
-      + '<div class="wiz-secret-row" style="margin-top:.6rem">'
-      +   '<input class="input" id="detail-sk-key" placeholder="KEY">'
-      +   '<input class="input" id="detail-sk-val" type="password" placeholder="value">'
-      +   '<button type="button" class="btn btn-sm" id="detail-sk-add">Add</button>'
-      + '</div>';
-
-    document.getElementById('detail-body').innerHTML = html;
-    document.getElementById('detail-overlay').classList.add('show');
-
-    loadSecrets(id);
-    loadReleases(id);
-    loadCronTasks(id);
-    document.getElementById('detail-sk-add').addEventListener('click', function () { addSecret(id); });
-    document.getElementById('detail-deploy-btn').addEventListener('click', function () { triggerDeploy(id); });
-    document.getElementById('detail-logs-btn').addEventListener('click', function () { toggleLogs(id, '/api/projects/logs'); });
-
-    // ZIP upload (static only)
-    if (p.runtime === 'static') {
-      const zipBtn = document.getElementById('detail-zip-btn');
-      const zipInput = document.getElementById('detail-zip-input');
-      zipBtn.addEventListener('click', function () { zipInput.click(); });
-      zipInput.addEventListener('change', function () {
-        if (!zipInput.files || zipInput.files.length === 0) return;
-        uploadZip(id, zipInput.files[0]);
-        zipInput.value = '';
-      });
-    }
-
-    // SQL runner
-    document.getElementById('detail-sql-run-btn').addEventListener('click', function () { runSql(id); });
-    document.getElementById('detail-sql-tables-btn').addEventListener('click', function () {
-      document.getElementById('detail-sql-input').value = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;";
-      runSql(id);
-    });
-
-    // Cron task add
-    document.getElementById('detail-cron-add-btn').addEventListener('click', function () { addCronTask(id); });
-
-    // Auth snippet copy
-    document.getElementById('detail-auth-snippet-btn').addEventListener('click', function () {
-      const snippet = buildAuthSnippet(p.subdomain);
-      const out = document.getElementById('detail-auth-snippet');
-      out.style.display = '';
-      out.textContent = snippet;
-      navigator.clipboard.writeText(snippet).then(function () {
-        const btn = document.getElementById('detail-auth-snippet-btn');
-        btn.querySelector('span').textContent = 'Copied to clipboard';
-        setTimeout(function () { btn.querySelector('span').textContent = 'Copy HTML snippet'; }, 1500);
-      });
-    });
-
-    if (p.runtime !== 'static') {
-      document.getElementById('detail-start-btn').addEventListener('click', function () { supervisorAction(id, 'start'); });
-      document.getElementById('detail-stop-btn').addEventListener('click', function () { supervisorAction(id, 'stop'); });
-      document.getElementById('detail-restart-btn').addEventListener('click', function () { supervisorAction(id, 'restart'); });
-      document.getElementById('detail-rt-logs-btn').addEventListener('click', function () { toggleLogs(id, '/api/projects/runtime-logs'); });
-      refreshSupervisorStatus(id);
-    }
-
-    if (p.repo_url) {
-      // Reveal secret on demand: hit /api/projects (already returns it - the
-      // operator owns the device anyway, hash-reveal is fine).
-      const cell = document.getElementById('detail-secret-cell');
-      const fullSecret = p.webhook_secret || '';
-      let revealed = false;
-      document.getElementById('detail-secret-btn').addEventListener('click', function () {
-        revealed = !revealed;
-        cell.textContent = revealed
-          ? fullSecret
-          : (fullSecret ? fullSecret.slice(0, 8) + '...' + fullSecret.slice(-4) : 'click reveal');
-        document.getElementById('detail-secret-btn').textContent = revealed ? 'Hide' : 'Reveal';
-      });
-      cell.textContent = fullSecret ? fullSecret.slice(0, 8) + '...' + fullSecret.slice(-4) : 'click reveal';
-      document.getElementById('detail-secret-copy').addEventListener('click', function () {
-        navigator.clipboard.writeText(fullSecret).then(function () {
-          document.getElementById('detail-secret-copy').textContent = 'Copied';
-          setTimeout(function () { document.getElementById('detail-secret-copy').textContent = 'Copy'; }, 1500);
-        });
-      });
-    }
-  }
-
-  function triggerDeploy(id) {
-    const btn = document.getElementById('detail-deploy-btn');
-    const alertEl = document.getElementById('detail-deploy-alert');
-    btn.disabled = true;
-    alertEl.style.display = 'none';
-    const fd = new FormData();
-    fd.append('id', id);
-    fetch('/api/projects/deploy', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        btn.disabled = false;
-        if (!j.ok) {
-          alertEl.className = 'alert error';
-          alertEl.innerHTML = '<i class="icon-exclamation"></i> Deploy failed: ' + escapeHtml(j.err || 'unknown');
-          alertEl.style.display = '';
-          return;
-        }
-        alertEl.className = 'alert success';
-        alertEl.innerHTML = '<i class="icon-check"></i> Deploy queued. Tail the logs to follow.';
-        alertEl.style.display = '';
-        // Auto-refresh logs view
-        const logsEl = document.getElementById('detail-logs');
-        logsEl.style.display = '';
-        logsCurrentEndpoint = '/api/projects/logs';
-        pollLogs(id, 60);
-        // Refresh project list to update status
-        setTimeout(loadProjects, 1500);
-      });
-  }
-
-  let logsPollAbort = null;
-  let logsCurrentEndpoint = '/api/projects/logs';
-  function toggleLogs(id, endpoint) {
-    if (endpoint) logsCurrentEndpoint = endpoint;
-    const el = document.getElementById('detail-logs');
-    if (el.style.display === 'none' || !el.style.display) {
-      el.style.display = '';
-      pollLogs(id, 30);
-    } else {
-      el.style.display = 'none';
-      if (logsPollAbort) { clearTimeout(logsPollAbort); logsPollAbort = null; }
-    }
-  }
-
-  function pollLogs(id, ticks) {
-    fetch(logsCurrentEndpoint + '?id=' + encodeURIComponent(id))
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const el = document.getElementById('detail-logs');
-        if (!el) return;
-        el.textContent = j.log || '(no log yet)';
-        el.scrollTop = el.scrollHeight;
-        if (ticks > 0) {
-          logsPollAbort = setTimeout(function () { pollLogs(id, ticks - 1); }, 2000);
-        }
-      });
-  }
-
-  function supervisorAction(id, action) {
-    const fd = new FormData();
-    fd.append('id', id);
-    fetch('/api/projects/' + action, { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const alertEl = document.getElementById('detail-deploy-alert');
-        if (!j.ok) {
-          alertEl.className = 'alert error';
-          alertEl.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(action) + ' failed: ' + escapeHtml(j.err || 'unknown');
-          alertEl.style.display = '';
-        } else {
-          alertEl.className = 'alert success';
-          alertEl.innerHTML = '<i class="icon-check"></i> ' + escapeHtml(action) + ' triggered.';
-          alertEl.style.display = '';
-        }
-        refreshSupervisorStatus(id);
-        setTimeout(loadProjects, 1500);
-      });
-  }
-
-  function refreshSupervisorStatus(id) {
-    fetch('/api/projects/status?id=' + encodeURIComponent(id))
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const el = document.getElementById('detail-supervisor-status');
-        if (!el || !j.ok) return;
-        const parts = ['state=' + j.state];
-        if (j.pid) parts.push('pid=' + j.pid);
-        if (j.crash_count) parts.push('crashes=' + j.crash_count);
-        if (j.started_at) parts.push('started=' + fmtTs(j.started_at));
-        el.textContent = parts.join('  |  ');
-      });
-  }
-
-  // ---------- ZIP upload ----------
-  function uploadZip(id, file) {
-    const alertEl = document.getElementById('detail-deploy-alert');
-    alertEl.className = 'alert';
-    alertEl.innerHTML = 'Uploading ' + escapeHtml(file.name) + ' (' + (file.size / 1024).toFixed(1) + ' KB)...';
-    alertEl.style.display = '';
-    fetch('/api/projects/upload?id=' + encodeURIComponent(id), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/zip' },
-      body: file,
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) {
-        alertEl.className = 'alert error';
-        alertEl.innerHTML = '<i class="icon-exclamation"></i> Upload failed: ' + escapeHtml(j.err || 'unknown');
-        return;
-      }
-      alertEl.className = 'alert success';
-      alertEl.innerHTML = '<i class="icon-check"></i> Deployed ' + j.bytes + ' bytes.';
-      loadReleases(id);
-      setTimeout(loadProjects, 1000);
-    }).catch(function (e) {
-      alertEl.className = 'alert error';
-      alertEl.innerHTML = '<i class="icon-exclamation"></i> Upload error: ' + escapeHtml(String(e));
-    });
-  }
-
-  // ---------- Releases + rollback ----------
-  function loadReleases(id) {
-    fetch('/api/projects/releases?id=' + encodeURIComponent(id))
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const wrap = document.getElementById('detail-releases');
-        if (!wrap) return;
-        if (!j.ok || !j.releases || j.releases.length === 0) {
-          wrap.innerHTML = '<em>No releases yet. Deploy or upload to create one.</em>';
-          return;
-        }
-        let inner = '<div style="display:flex; flex-direction:column; gap:.3rem; margin-top:.4rem">';
-        j.releases.forEach(function (rel) {
-          const isCurrent = rel === j.current;
-          const ts = parseInt(rel, 10);
-          const display = isNaN(ts) ? rel : fmtTs(ts);
-          inner += '<div style="display:flex; align-items:center; gap:.5rem; padding:.3rem 0">'
-            + '<span class="scope-pill" style="font-family:ui-monospace, \'SF Mono\', Menlo, monospace; font-size:.7rem">' + escapeHtml(rel) + '</span>'
-            + '<span class="hint" style="flex:1; font-size:.74rem">' + escapeHtml(display) + (isCurrent ? '  <strong style="color:#16a34a">current</strong>' : '') + '</span>'
-            + (isCurrent ? '' : '<button type="button" class="btn btn-sm" data-rollback="' + escapeHtml(rel) + '">Rollback</button>')
-            + '</div>';
-        });
-        inner += '</div>';
-        wrap.innerHTML = inner;
-        wrap.querySelectorAll('[data-rollback]').forEach(function (btn) {
-          btn.addEventListener('click', function () { rollback(id, btn.dataset.rollback); });
-        });
-      });
-  }
-
-  function rollback(id, release) {
-    if (!confirm('Rollback to release ' + release + '?')) return;
-    const fd = new FormData();
-    fd.append('id', id);
-    fd.append('release', release);
-    fetch('/api/projects/rollback', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const a = document.getElementById('detail-deploy-alert');
-        if (j.ok) {
-          a.className = 'alert success';
-          a.innerHTML = '<i class="icon-check"></i> Rolled back to ' + escapeHtml(release);
-        } else {
-          a.className = 'alert error';
-          a.innerHTML = '<i class="icon-exclamation"></i> Rollback failed: ' + escapeHtml(j.err || 'unknown');
-        }
-        a.style.display = '';
-        loadReleases(id);
-      });
-  }
-
-  // ---------- SQL runner ----------
-  function runSql(id) {
-    const sqlText = document.getElementById('detail-sql-input').value.trim();
-    if (!sqlText) return;
-    const out = document.getElementById('detail-sql-output');
-    out.style.display = '';
-    out.textContent = 'Running...';
-    fetch('/api/projects/sql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: id, sql: sqlText }),
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) {
-        out.textContent = '[error] ' + (j.err || 'unknown') + (j.stderr ? '\n' + j.stderr : '');
-        out.style.color = '#ef4444';
-        return;
-      }
-      out.style.color = '';
-      const rows = Array.isArray(j.result) ? j.result : [];
-      if (rows.length === 0) {
-        out.textContent = '(0 rows)';
-        return;
-      }
-      out.textContent = JSON.stringify(rows, null, 2);
-    }).catch(function (e) {
-      out.textContent = '[network error] ' + String(e);
-      out.style.color = '#ef4444';
-    });
-  }
-
-  // ---------- Cron tasks ----------
-  function loadCronTasks(id) {
-    fetch('/api/projects/cron/list?project_id=' + encodeURIComponent(id))
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const wrap = document.getElementById('detail-cron-list');
-        if (!wrap) return;
-        if (!j.ok || !j.tasks || j.tasks.length === 0) {
-          wrap.innerHTML = '<em>No tasks yet.</em>';
-          return;
-        }
-        let inner = '<table class="apikey-table" style="width:100%; margin:.4rem 0"><thead><tr><th>Name</th><th>Schedule</th><th>Command</th><th>Runs</th><th>Last</th><th></th></tr></thead><tbody>';
-        j.tasks.forEach(function (t) {
-          const lastTxt = t.last_run_at ? fmtTs(t.last_run_at) : '\u2014';
-          inner += '<tr>'
-            + '<td>' + escapeHtml(t.name) + '</td>'
-            + '<td>' + escapeHtml(t.schedule) + '</td>'
-            + '<td style="word-break:break-all; max-width:240px">' + escapeHtml(t.command) + '</td>'
-            + '<td>' + t.runs + (t.failures ? ' / ' + t.failures + ' err' : '') + '</td>'
-            + '<td>' + lastTxt + '<br><span class="hint" style="font-size:.7rem">exit=' + t.last_exit + '</span></td>'
-            + '<td style="display:flex; gap:.3rem; flex-wrap:wrap">'
-            +   '<button type="button" class="btn btn-sm" data-run-task="' + escapeHtml(t.id) + '">Run</button>'
-            +   '<button type="button" class="btn btn-sm" data-toggle-task="' + escapeHtml(t.id) + '" data-state="' + (t.enabled ? 'on' : 'off') + '">' + (t.enabled ? 'Disable' : 'Enable') + '</button>'
-            +   '<button type="button" class="btn btn-sm" data-del-task="' + escapeHtml(t.id) + '">Delete</button>'
-            + '</td>'
-            + '</tr>';
-        });
-        inner += '</tbody></table>';
-        wrap.innerHTML = inner;
-        wrap.querySelectorAll('[data-run-task]').forEach(function (b) {
-          b.addEventListener('click', function () { cronRun(id, b.dataset.runTask); });
-        });
-        wrap.querySelectorAll('[data-toggle-task]').forEach(function (b) {
-          b.addEventListener('click', function () { cronToggle(id, b.dataset.toggleTask, b.dataset.state); });
-        });
-        wrap.querySelectorAll('[data-del-task]').forEach(function (b) {
-          b.addEventListener('click', function () { cronDelete(id, b.dataset.delTask); });
-        });
-      });
-  }
-
-  function addCronTask(id) {
-    const name = document.getElementById('detail-cron-name').value.trim();
-    const sched = document.getElementById('detail-cron-sched').value.trim();
-    const cmd = document.getElementById('detail-cron-cmd').value;
-    const a = document.getElementById('detail-cron-alert');
-    if (!name || !sched || !cmd) {
-      a.className = 'alert error';
-      a.innerHTML = '<i class="icon-exclamation"></i> Name, schedule, and command are required.';
-      a.style.display = '';
-      return;
-    }
-    const fd = new FormData();
-    fd.append('project_id', id);
+    var fd = new FormData();
     fd.append('name', name);
-    fd.append('schedule', sched);
-    fd.append('command', cmd);
-    fetch('/api/projects/cron/create', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (!j.ok) {
-          a.className = 'alert error';
-          a.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(j.err || 'unknown');
-          a.style.display = '';
-          return;
-        }
-        a.className = 'alert success';
-        a.innerHTML = '<i class="icon-check"></i> Task created.';
-        a.style.display = '';
-        document.getElementById('detail-cron-name').value = '';
-        document.getElementById('detail-cron-sched').value = '';
-        document.getElementById('detail-cron-cmd').value = '';
-        loadCronTasks(id);
-      });
-  }
-
-  function cronRun(project_id, task_id) {
-    const fd = new FormData();
-    fd.append('id', task_id);
-    fetch('/api/projects/cron/run', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function () { loadCronTasks(project_id); });
-  }
-
-  function cronToggle(project_id, task_id, current_state) {
-    const fd = new FormData();
-    fd.append('id', task_id);
-    fd.append('enabled', current_state === 'on' ? 'false' : 'true');
-    fetch('/api/projects/cron/toggle', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function () { loadCronTasks(project_id); });
-  }
-
-  function cronDelete(project_id, task_id) {
-    if (!confirm('Delete this scheduled task?')) return;
-    const fd = new FormData();
-    fd.append('id', task_id);
-    fetch('/api/projects/cron/delete', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function () { loadCronTasks(project_id); });
-  }
-
-  // ---------- Auth UI snippet generator ----------
-  function buildAuthSnippet(subdomain) {
-    const base = 'https://' + subdomain + '.rofihosted.space/auth';
-    return [
-      '<!doctype html>',
-      '<html><head><meta charset="utf-8"><title>' + subdomain + ' login</title>',
-      '<style>',
-      '  body{font-family:system-ui;max-width:380px;margin:4rem auto;padding:0 1rem;color:#222}',
-      '  h1{margin-bottom:1.5rem}',
-      '  label{display:block;margin-top:.7rem;font-size:.85rem}',
-      '  input{width:100%;padding:.5rem;border:1px solid #ccc;border-radius:6px;font:inherit;box-sizing:border-box}',
-      '  button{margin-top:1rem;padding:.55rem 1.1rem;background:#7c3aed;color:#fff;border:0;border-radius:6px;cursor:pointer;font:inherit}',
-      '  .out{margin-top:1rem;padding:.5rem;background:#f5f5f5;border-radius:6px;font-family:ui-monospace,monospace;font-size:.78rem;word-break:break-all}',
-      '</style></head><body>',
-      '<h1>' + subdomain + ' login</h1>',
-      '<label>Email <input id="email" type="email"></label>',
-      '<label>Password <input id="password" type="password"></label>',
-      '<button onclick="signup()">Sign up</button>',
-      '<button onclick="login()">Log in</button>',
-      '<div id="out" class="out" style="display:none"></div>',
-      '<script>',
-      'const BASE = "' + base + '";',
-      'async function call(path) {',
-      '  const r = await fetch(BASE + path, {',
-      '    method: "POST", headers: {"content-type":"application/json"},',
-      '    body: JSON.stringify({email:document.getElementById("email").value,password:document.getElementById("password").value})',
-      '  });',
-      '  const j = await r.json();',
-      '  const out = document.getElementById("out");',
-      '  out.style.display = ""; out.textContent = JSON.stringify(j, null, 2);',
-      '  if (j.ok && j.token) localStorage.setItem("token", j.token);',
-      '}',
-      'function signup(){call("/signup")}',
-      'function login(){call("/login")}',
-      '<\/script>',
-      '</body></html>',
-    ].join('\n');
-  }
-
-  function row(label, valueHtml) {
-    return '<div class="detail-row"><span class="label">' + escapeHtml(label) + '</span>' + valueHtml + '</div>';
-  }
-
-  function loadSecrets(id) {
-    fetch('/api/projects/secrets/list?id=' + encodeURIComponent(id))
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        const wrap = document.getElementById('detail-secrets');
-        if (!wrap) return;
-        if (!j.ok) { wrap.textContent = 'Failed to load secrets.'; return; }
-        if (!j.keys || j.keys.length === 0) { wrap.innerHTML = '<em>No secrets yet. Values are AES-256-GCM encrypted at rest.</em>'; return; }
-        wrap.innerHTML = j.keys.map(function (k) {
-          return '<span class="key" data-k="' + escapeHtml(k) + '" title="Click to delete">' + escapeHtml(k) + '</span>';
-        }).join('');
-        wrap.querySelectorAll('.key').forEach(function (el) {
-          el.addEventListener('click', function () {
-            if (!confirm('Delete secret ' + el.dataset.k + '?')) return;
-            const fd = new FormData();
-            fd.append('project_id', id);
-            fd.append('key', el.dataset.k);
-            fetch('/api/projects/secrets/delete', { method: 'POST', body: fd })
-              .then(function (r) { return r.json(); })
-              .then(function () { loadSecrets(id); });
-          });
-        });
-      });
-  }
-
-  function addSecret(id) {
-    const k = document.getElementById('detail-sk-key').value.trim();
-    const v = document.getElementById('detail-sk-val').value;
-    if (!k) return;
-    const fd = new FormData();
-    fd.append('project_id', id);
-    fd.append('key', k);
-    fd.append('value', v);
-    fetch('/api/projects/secrets/set', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (j.ok) {
-          document.getElementById('detail-sk-key').value = '';
-          document.getElementById('detail-sk-val').value = '';
-          loadSecrets(id);
-        } else {
-          alert('Failed: ' + (j.err || 'unknown'));
-        }
-      });
-  }
-
-  document.getElementById('detail-close-btn').addEventListener('click', function () {
-    document.getElementById('detail-overlay').classList.remove('show');
-  });
-
-  // ---------- Wizard ----------
-  const wizState = {
-    step: 1,
-    name: '',
-    subdomain: '',
-    repo_url: '',
-    branch: 'main',
-    runtime: 'static',
-    install_cmd: '',
-    build_cmd: '',
-    start_cmd: '',
-    publish_dir: '',
-    secrets: [], // [{key, value}, ...] applied after project create
-    createdId: null,
-  };
-
-  function openWizard() {
-    Object.assign(wizState, {
-      step: 1, name: '', subdomain: '', repo_url: '', branch: 'main',
-      runtime: 'static', install_cmd: '', build_cmd: '', start_cmd: '',
-      publish_dir: '',
-      secrets: [], createdId: null,
-    });
-    renderWizard();
-    document.getElementById('wiz-overlay').classList.add('show');
-    document.getElementById('wiz-alert').style.display = 'none';
-  }
-  function closeWizard() {
-    document.getElementById('wiz-overlay').classList.remove('show');
-  }
-
-  function renderWizard() {
-    const stepNames = ['Source', 'Subdomain', 'Runtime', 'Secrets'];
-    document.getElementById('wiz-title').textContent = 'New project: ' + stepNames[wizState.step - 1];
-    document.getElementById('wiz-step').textContent = 'step ' + wizState.step + ' of 4';
-    const dots = document.querySelectorAll('.wiz-stepper .dot');
-    dots.forEach(function (d, i) {
-      if (i < wizState.step) d.classList.add('done');
-      else d.classList.remove('done');
-    });
-
-    const body = document.getElementById('wiz-body');
-    if (wizState.step === 1) {
-      body.innerHTML = ''
-        + '<label>Project name <span class="hint-inline">- shown in the dashboard</span></label>'
-        + '<input class="input" id="wiz-name" maxlength="64" value="' + escapeHtml(wizState.name) + '" placeholder="My blog">'
-        + '<label>Git repo URL <span class="hint-inline">- optional, leave blank for upload-only</span></label>'
-        + '<input class="input" id="wiz-repo" value="' + escapeHtml(wizState.repo_url) + '" placeholder="https://github.com/you/repo.git">'
-        + '<label>Branch <span class="hint-inline">- default main</span></label>'
-        + '<input class="input" id="wiz-branch" value="' + escapeHtml(wizState.branch) + '" placeholder="main">';
-    } else if (wizState.step === 2) {
-      body.innerHTML = ''
-        + '<label>Subdomain <span class="hint-inline">- [a-z0-9-], 1-63 chars, will be served at &lt;sub&gt;.rofihosted.space</span></label>'
-        + '<input class="input" id="wiz-sub" maxlength="63" value="' + escapeHtml(wizState.subdomain) + '" placeholder="my-blog">'
-        + '<p class="hint" id="wiz-sub-preview" style="margin-top:.6rem"></p>';
-      const sub = document.getElementById('wiz-sub');
-      const preview = document.getElementById('wiz-sub-preview');
-      const updatePreview = function () {
-        const v = sub.value.trim();
-        preview.innerHTML = v ? 'will be reachable at <strong>https://' + escapeHtml(v) + '.rofihosted.space</strong>' : '';
-      };
-      sub.addEventListener('input', updatePreview);
-      updatePreview();
-    } else if (wizState.step === 3) {
-      const opts = ['static', 'node', 'python', 'bun', 'generic'];
-      const optsHtml = opts.map(function (r) {
-        const sel = wizState.runtime === r ? 'selected' : '';
-        return '<div class="opt ' + sel + '" data-r="' + r + '">' + r + '</div>';
-      }).join('');
-      body.innerHTML = ''
-        + '<label>Runtime</label>'
-        + '<div class="wiz-runtime-grid">' + optsHtml + '</div>'
-        + '<label>Install command <span class="hint-inline">- runs once after clone (optional)</span></label>'
-        + '<input class="input" id="wiz-install" value="' + escapeHtml(wizState.install_cmd) + '" placeholder="npm ci">'
-        + '<label>Build command <span class="hint-inline">- runs after install (optional)</span></label>'
-        + '<input class="input" id="wiz-build" value="' + escapeHtml(wizState.build_cmd) + '" placeholder="npm run build">'
-        + (wizState.runtime === 'static'
-            ? '<label>Publish directory <span class="hint-inline">- relative path under the repo where built static output lives, default = repo root</span></label>'
-              + '<input class="input" id="wiz-pubdir" value="' + escapeHtml(wizState.publish_dir || '') + '" placeholder="dist">'
-            : '<label>Start command <span class="hint-inline">- long-running, will be supervised</span></label>'
-              + '<input class="input" id="wiz-start" value="' + escapeHtml(wizState.start_cmd) + '" placeholder="node server.js">');
-      body.querySelectorAll('.opt').forEach(function (el) {
-        el.addEventListener('click', function () {
-          wizState.runtime = el.dataset.r;
-          // Persist current inputs before re-rendering
-          if (document.getElementById('wiz-install')) wizState.install_cmd = document.getElementById('wiz-install').value;
-          if (document.getElementById('wiz-build')) wizState.build_cmd = document.getElementById('wiz-build').value;
-          if (document.getElementById('wiz-start')) wizState.start_cmd = document.getElementById('wiz-start').value;
-          if (document.getElementById('wiz-pubdir')) wizState.publish_dir = document.getElementById('wiz-pubdir').value;
-          renderWizard();
-        });
-      });
-    } else if (wizState.step === 4) {
-      let secretsHtml = '';
-      wizState.secrets.forEach(function (s, i) {
-        secretsHtml += '<div class="wiz-secret-row" data-i="' + i + '">'
-          + '<input class="input wiz-sk" value="' + escapeHtml(s.key) + '" placeholder="KEY">'
-          + '<input class="input wiz-sv" type="password" value="' + escapeHtml(s.value) + '" placeholder="value">'
-          + '<button type="button" class="btn btn-sm" data-rm>&minus;</button>'
-          + '</div>';
-      });
-      body.innerHTML = ''
-        + '<p class="hint">Optional. Anything you put here gets AES-256-GCM encrypted at rest and surfaces as env vars to your project at start time. Add as many as you need.</p>'
-        + '<div id="wiz-secrets-list">' + secretsHtml + '</div>'
-        + '<button type="button" class="btn btn-sm" id="wiz-add-secret" style="margin-top:.5rem"><i class="icon-plus"></i><span>Add secret</span></button>';
-      document.getElementById('wiz-add-secret').addEventListener('click', function () {
-        // Persist current values into state before re-rendering
-        captureSecrets();
-        wizState.secrets.push({ key: '', value: '' });
-        renderWizard();
-      });
-      document.querySelectorAll('[data-rm]').forEach(function (el) {
-        el.addEventListener('click', function () {
-          captureSecrets();
-          const i = parseInt(el.parentElement.dataset.i, 10);
-          wizState.secrets.splice(i, 1);
-          renderWizard();
-        });
-      });
-    }
-
-    // Footer state
-    document.getElementById('wiz-back-btn').style.display = wizState.step > 1 ? '' : 'none';
-    document.getElementById('wiz-next-btn').innerHTML = wizState.step === 4
-      ? '<span>Create project</span><i class="icon-check"></i>'
-      : '<span>Next</span><i class="icon-arrow-right"></i>';
-  }
-
-  function captureSecrets() {
-    const list = document.getElementById('wiz-secrets-list');
-    if (!list) return;
-    wizState.secrets = [];
-    list.querySelectorAll('.wiz-secret-row').forEach(function (row) {
-      const k = row.querySelector('.wiz-sk').value.trim();
-      const v = row.querySelector('.wiz-sv').value;
-      wizState.secrets.push({ key: k, value: v });
-    });
-  }
-
-  function captureCurrent() {
-    if (wizState.step === 1) {
-      wizState.name = (document.getElementById('wiz-name').value || '').trim();
-      wizState.repo_url = (document.getElementById('wiz-repo').value || '').trim();
-      wizState.branch = (document.getElementById('wiz-branch').value || 'main').trim();
-    } else if (wizState.step === 2) {
-      wizState.subdomain = (document.getElementById('wiz-sub').value || '').trim().toLowerCase();
-    } else if (wizState.step === 3) {
-      const inst = document.getElementById('wiz-install');
-      const bld = document.getElementById('wiz-build');
-      const st = document.getElementById('wiz-start');
-      const pd = document.getElementById('wiz-pubdir');
-      if (inst) wizState.install_cmd = inst.value;
-      if (bld) wizState.build_cmd = bld.value;
-      if (st) wizState.start_cmd = st.value;
-      if (pd) wizState.publish_dir = pd.value;
-    } else if (wizState.step === 4) {
-      captureSecrets();
-    }
-  }
-
-  function validate(step) {
-    if (step === 1) {
-      if (!wizState.name) return 'Name is required.';
-      if (wizState.name.length > 64) return 'Name too long (max 64 chars).';
-    } else if (step === 2) {
-      if (!wizState.subdomain) return 'Subdomain is required.';
-      if (!/^[a-z0-9](-?[a-z0-9])*$/.test(wizState.subdomain) || wizState.subdomain.length > 63) {
-        return 'Subdomain must be [a-z0-9-], no leading/trailing dash, max 63 chars.';
-      }
-      if (allProjects.find(function (p) { return p.subdomain === wizState.subdomain; })) {
-        return 'Subdomain already claimed by another project.';
-      }
-    }
-    return null;
-  }
-
-  document.getElementById('new-project-btn').addEventListener('click', openWizard);
-  document.getElementById('wiz-cancel-btn').addEventListener('click', closeWizard);
-  document.getElementById('wiz-back-btn').addEventListener('click', function () {
-    captureCurrent();
-    if (wizState.step > 1) {
-      wizState.step--;
-      renderWizard();
-    }
-  });
-  document.getElementById('wiz-next-btn').addEventListener('click', function () {
-    captureCurrent();
-    const err = validate(wizState.step);
-    if (err) {
-      const a = document.getElementById('wiz-alert');
-      a.className = 'alert error';
-      a.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(err);
-      a.style.display = '';
-      return;
-    }
-    document.getElementById('wiz-alert').style.display = 'none';
-    if (wizState.step < 4) {
-      wizState.step++;
-      renderWizard();
-      return;
-    }
-    // Final step: create the project, then push secrets one at a time.
-    submitWizard();
-  });
-
-  function submitWizard() {
-    const fd = new FormData();
-    fd.append('name', wizState.name);
-    fd.append('subdomain', wizState.subdomain);
-    fd.append('repo_url', wizState.repo_url);
-    fd.append('branch', wizState.branch);
-    fd.append('runtime', wizState.runtime);
-    fd.append('install_cmd', wizState.install_cmd);
-    fd.append('build_cmd', wizState.build_cmd);
-    fd.append('start_cmd', wizState.start_cmd);
-    fd.append('publish_dir', wizState.publish_dir || '');
-    document.getElementById('wiz-next-btn').disabled = true;
+    fd.append('subdomain', sub);
+    fd.append('repo_url', repo || '');
+    fd.append('runtime', runtime);
+    fd.append('branch', 'main');
     fetch('/api/projects/create', { method: 'POST', body: fd })
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        document.getElementById('wiz-next-btn').disabled = false;
-        if (!j.ok) {
-          const a = document.getElementById('wiz-alert');
-          a.className = 'alert error';
-          a.innerHTML = '<i class="icon-exclamation"></i> Create failed: ' + escapeHtml(j.err || 'unknown');
-          a.style.display = '';
-          return;
+        if (!j.ok) { alert('Create failed: ' + (j.err || 'unknown')); return; }
+        loadProjects();
+        if (repo) {
+          // Auto-deploy
+          var fd2 = new FormData();
+          fd2.append('id', j.id);
+          fetch('/api/projects/deploy', { method: 'POST', body: fd2 });
         }
-        wizState.createdId = j.id;
-        // Push secrets in sequence
-        const valid = wizState.secrets.filter(function (s) { return s.key && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s.key); });
-        if (valid.length === 0) {
-          finishWizard();
-          return;
-        }
-        let i = 0;
-        const next = function () {
-          if (i >= valid.length) { finishWizard(); return; }
-          const s = valid[i++];
-          const f = new FormData();
-          f.append('project_id', j.id);
-          f.append('key', s.key);
-          f.append('value', s.value);
-          fetch('/api/projects/secrets/set', { method: 'POST', body: f })
-            .then(function (r) { return r.json(); })
-            .then(next).catch(next);
-        };
-        next();
       });
-  }
-
-  function finishWizard() {
-    closeWizard();
-    loadProjects();
-  }
+  });
 
   loadProjects();
 })();
-
-// SSE keep-alive
-RH.on('ready', function () { document.getElementById('ws-status').className = 'ws-status live'; document.getElementById('ws-status').textContent = 'live'; });
-RH.on('disconnected', function () { document.getElementById('ws-status').className = 'ws-status offline'; document.getElementById('ws-status').textContent = 'offline'; });
-RH.connectStream();
 </script>
 </body>
 </html>
