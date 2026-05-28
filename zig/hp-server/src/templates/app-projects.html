@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=28">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=28">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=28">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=29">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=29">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=29">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -323,8 +323,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=28"></script>
-<script src="https://rofihosted.space/app.js?v=28"></script>
+<script src="https://rofihosted.space/theme.js?v=29"></script>
+<script src="https://rofihosted.space/app.js?v=29"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -826,31 +826,41 @@ RH.loadCurrentUser();
     if (p.last_deploy_at) metaHtml += '<span class="pill">deployed ' + escapeHtml(fmtTs(p.last_deploy_at)) + '</span>';
     document.getElementById('d-meta').innerHTML = metaHtml;
 
-    // Show backend supervisor buttons only for non-static projects.
-    // Static projects only have Redeploy + Delete (no process to supervise).
-    var isBackend = p.runtime !== 'static';
+    // Start/Stop/Restart now work for BOTH static and backend projects.
+    // For static, Stop flips the registry status so the subdomain serves a
+    // 'site paused' page instead of the build output. Start/Restart bring
+    // it back to running. Backend behaves like before (kill/spawn process).
     var startBtn = document.getElementById('d-start');
     var stopBtn = document.getElementById('d-stop');
     var restartBtn = document.getElementById('d-restart');
     var deployBtn = document.getElementById('d-deploy');
-    startBtn.style.display = isBackend ? '' : 'none';
-    stopBtn.style.display = isBackend ? '' : 'none';
-    restartBtn.style.display = isBackend ? '' : 'none';
+    startBtn.style.display = '';
+    stopBtn.style.display = '';
+    restartBtn.style.display = '';
+
+    var isBackend = p.runtime !== 'static';
+    var running = (p.status === 'running');
+    var stopped = (p.status === 'stopped');
+    // Restart only makes sense once the project has at least built once.
+    var hasArtifact = (p.last_deploy_at && p.last_deploy_at > 0);
+
+    startBtn.disabled = running;
+    stopBtn.disabled = stopped || (!running && !isBackend) === false ? !running : true;
+    // Simpler: enable Stop only when status is running.
+    stopBtn.disabled = !running;
+    restartBtn.disabled = !hasArtifact;
 
     if (isBackend) {
-      // Status-aware enable/disable so users get visual feedback instead of error toasts.
-      var running = (p.status === 'running');
-      var hasStarted = (p.status === 'running' || p.status === 'stopped' || p.status === 'crashed');
-      startBtn.disabled = running;
-      stopBtn.disabled = !running;
-      restartBtn.disabled = !hasStarted;
       startBtn.title = running ? 'Already running' : 'Start the supervised process';
       stopBtn.title = running ? 'Stop the supervised process' : 'Process is not running';
-      restartBtn.title = hasStarted ? 'Stop and start the supervised process' : 'Deploy first to create a process to restart';
+      restartBtn.title = hasArtifact ? 'Stop and start the supervised process' : 'Deploy first to create a process to restart';
+      deployBtn.title = 'Pull latest, install, build, restart process';
+    } else {
+      startBtn.title = running ? 'Site is already live' : 'Make the site live again';
+      stopBtn.title = running ? 'Pause the site (visitors see a paused page)' : 'Site is already paused';
+      restartBtn.title = hasArtifact ? 'Bring the site back to live' : 'Deploy first';
+      deployBtn.title = 'Pull latest, install, build, swap publish dir';
     }
-    // Redeploy is the same on both kinds: static rebuilds the publish dir,
-    // backend rebuilds + auto-restarts the supervised process.
-    deployBtn.title = isBackend ? 'Pull latest, install, build, restart process' : 'Pull latest, install, build, swap publish dir';
 
     // Config rows
     var configRows = [

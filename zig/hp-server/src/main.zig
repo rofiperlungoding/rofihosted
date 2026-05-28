@@ -2987,6 +2987,14 @@ fn tryServeProject(app: *App, req: *httpz.Request, host: []const u8, req_path: [
         return tryServeAuth(app, req, project, req_path, res);
     }
 
+    // Honor the dashboard 'stopped' status for static projects: serve a
+    // 'site paused' page instead of the build output. Backend projects also
+    // respect .stopped (the supervisor isn't running them, but make sure
+    // visitors see a friendly message instead of a 502).
+    if (project.status == .stopped) {
+        return servePausedPage(project, res);
+    }
+
     if (project.runtime == .static) {
         return tryServeProjectStatic(app, project, req_path, res);
     }
@@ -3011,6 +3019,51 @@ fn tryServeProject(app: *App, req: *httpz.Request, host: []const u8, req_path: [
         res.content_type = .TEXT;
         res.body = "proxy error\n";
     };
+    return true;
+}
+
+/// Render a friendly 'Site paused' page when the operator has stopped the
+/// project. Uses inline HTML so it works without any template files.
+fn servePausedPage(project: projects.Project, res: *httpz.Response) !bool {
+    res.status = 503;
+    res.content_type = .HTML;
+    res.header("Cache-Control", "no-store, must-revalidate");
+    const html = try std.fmt.allocPrint(res.arena,
+        \\<!DOCTYPE html>
+        \\<html lang="en"><head>
+        \\<meta charset="utf-8">
+        \\<meta name="viewport" content="width=device-width, initial-scale=1">
+        \\<title>{s} is paused</title>
+        \\<style>
+        \\:root {{ color-scheme: light dark; }}
+        \\body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:1.5rem;
+        \\  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        \\  background: linear-gradient(135deg, #0f0e17 0%, #1a1825 100%); color: #e7e5e4; }}
+        \\.card {{ max-width: 480px; width:100%; padding: 2.5rem 2.2rem; border-radius: 16px;
+        \\  background: rgba(30,28,42,0.6); border: 1px solid rgba(255,255,255,0.08);
+        \\  backdrop-filter: blur(8px); box-shadow: 0 20px 60px rgba(0,0,0,0.4); text-align: center; }}
+        \\.dot {{ width: 12px; height: 12px; border-radius: 50%; background: #f59e0b; display: inline-block; margin-right: .5rem;
+        \\  box-shadow: 0 0 14px rgba(245, 158, 11, 0.6); animation: pulse 2s ease-in-out infinite; }}
+        \\@keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: .4; }} }}
+        \\h1 {{ margin: 0 0 .8rem; font-size: 1.4rem; font-weight: 600; letter-spacing: -0.02em; }}
+        \\p  {{ margin: 0 0 .4rem; color: #a8a29e; font-size: .9rem; line-height: 1.5; }}
+        \\.sub {{ font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #d4d4d8; font-size: .82rem;
+        \\  margin-top: 1.4rem; padding: .65rem .9rem; background: rgba(0,0,0,0.3); border-radius: 8px;
+        \\  border: 1px solid rgba(255,255,255,0.05); display:inline-block; }}
+        \\.foot {{ margin-top: 1.6rem; font-size: .72rem; color: #71717a; letter-spacing: .04em; text-transform: uppercase; }}
+        \\a {{ color: #a78bfa; text-decoration: none; }}
+        \\</style>
+        \\</head><body>
+        \\<div class="card">
+        \\  <div style="margin-bottom:1.2rem"><span class="dot"></span><span style="color:#f59e0b; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; font-weight:600">Paused</span></div>
+        \\  <h1>{s} is paused</h1>
+        \\  <p>The operator has stopped this site from the dashboard. Once they hit Start again, the site will be live within seconds.</p>
+        \\  <div class="sub">{s}.rofihosted.space</div>
+        \\  <div class="foot">Hosted on <a href="https://rofihosted.space">rofihosted</a></div>
+        \\</div>
+        \\</body></html>
+    , .{ project.name, project.name, project.subdomain });
+    res.body = html;
     return true;
 }
 
@@ -3564,6 +3617,36 @@ fn apiProjectsStart(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
+    const project = app.projects.getById(id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+
+    // Static projects: just flip the registry status. The static serving path
+    // honors .stopped and serves a 'site paused' page instead of the build
+    // output.
+    if (project.runtime == .static) {
+        if (project.status == .running) {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "already_running" }, .{});
+            return;
+        }
+        _ = app.projects.update(id, .{ .status = .running }) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "update_failed" }, .{});
+            return;
+        };
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "project_start",
+            .target = id,
+        });
+        try res.json(.{ .ok = true }, .{});
+        return;
+    }
+
     app.supervisor.start(id) catch |err| {
         const code: []const u8 = switch (err) {
             error.NotFound => "not_found",
@@ -3602,6 +3685,35 @@ fn apiProjectsStop(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
+    const project = app.projects.getById(id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+
+    // Static projects: flip status to stopped. The static serving path will
+    // return a 'site paused' page instead of the build output.
+    if (project.runtime == .static) {
+        if (project.status == .stopped) {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "not_running" }, .{});
+            return;
+        }
+        _ = app.projects.update(id, .{ .status = .stopped }) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "update_failed" }, .{});
+            return;
+        };
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "project_stop",
+            .target = id,
+        });
+        try res.json(.{ .ok = true }, .{});
+        return;
+    }
+
     app.supervisor.stop(id) catch |err| {
         const code: []const u8 = switch (err) {
             error.NotFound => "not_found",
@@ -3639,6 +3751,30 @@ fn apiProjectsRestart(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
+    const project = app.projects.getById(id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+
+    // Static projects: restart is just a status flip to running. No process
+    // to recycle.
+    if (project.runtime == .static) {
+        _ = app.projects.update(id, .{ .status = .running }) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "update_failed" }, .{});
+            return;
+        };
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = actor,
+            .action = "project_restart",
+            .target = id,
+        });
+        try res.json(.{ .ok = true }, .{});
+        return;
+    }
+
     app.supervisor.restart(id) catch |err| {
         const code: []const u8 = switch (err) {
             error.NotFound => "not_found",

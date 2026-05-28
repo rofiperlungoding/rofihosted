@@ -176,6 +176,11 @@ pub const Supervisor = struct {
         e.pause_until_ms = 0;
         self.mutex.unlock();
 
+        // Persist the pid so we can adopt or kill it across hp-server restarts.
+        writePidFile(self.allocator, project_id, pid) catch |err| {
+            std.log.warn("supervisor: pidfile write failed for {s}: {}", .{ project_id, err });
+        };
+
         _ = self.projects_mgr.update(project_id, .{ .status = .running }) catch {};
 
         // Start a small drain thread that reads stdout+stderr and appends to
@@ -238,6 +243,7 @@ pub const Supervisor = struct {
         self.mutex.unlock();
 
         _ = self.projects_mgr.update(project_id, .{ .status = .stopped }) catch {};
+        clearPidFile(self.allocator, project_id) catch {};
     }
 
     pub fn restart(self: *Supervisor, project_id: []const u8) !void {
@@ -246,6 +252,10 @@ pub const Supervisor = struct {
         self.mutex.lock();
         if (self.findLocked(project_id)) |e| e.pause_until_ms = 0;
         self.mutex.unlock();
+        // Brief delay to let the OS release the listener socket. Without
+        // this the new child often hits 'Address already in use' on bind()
+        // while the old socket is still in TIME_WAIT.
+        std.Thread.sleep(1500 * std.time.ns_per_ms);
         try self.start(project_id);
     }
 
@@ -344,29 +354,59 @@ pub const Supervisor = struct {
     }
 
     /// Boot-time: scan registry, start any project whose status was 'running'
-    /// at last shutdown.
+    /// at last shutdown. Before spawning, kill any orphaned children left
+    /// over from the previous hp-server (their pid files persist on disk).
     pub fn restartPersisted(self: *Supervisor) void {
-        // List from registry. Walk the in-memory list directly via the manager
-        // mutex.
         self.projects_mgr.mutex.lock();
         var ids = std.ArrayList([]const u8).init(self.allocator);
         defer ids.deinit();
         for (self.projects_mgr.projects.items) |p| {
-            if (p.runtime == .static) continue;
-            if (p.start_cmd.len == 0) continue;
-            if (p.status == .running) {
-                const owned = self.allocator.dupe(u8, p.id) catch continue;
-                ids.append(owned) catch {
-                    self.allocator.free(owned);
-                    continue;
-                };
-            }
+            const owned = self.allocator.dupe(u8, p.id) catch continue;
+            ids.append(owned) catch {
+                self.allocator.free(owned);
+                continue;
+            };
+        }
+        var should_start = std.ArrayList(bool).init(self.allocator);
+        defer should_start.deinit();
+        for (self.projects_mgr.projects.items) |p| {
+            const start_it = (p.runtime != .static) and (p.start_cmd.len > 0) and (p.status == .running);
+            should_start.append(start_it) catch {};
         }
         self.projects_mgr.mutex.unlock();
+
+        // Step 1: reap any orphaned children left from a previous run by
+        // SIGKILL'ing them. Their parent (old hp-server) is gone, so init has
+        // them now, and we have no way to drain their stdout. Better to
+        // kill and respawn than leave a port-bound zombie around.
         for (ids.items) |id| {
-            self.start(id) catch |err| {
-                std.log.warn("supervisor: boot restart failed for {s}: {}", .{ id, err });
-            };
+            if (readPidFile(self.allocator, id)) |stale_pid_opt| {
+                if (stale_pid_opt) |stale_pid| {
+                    if (isAlive(stale_pid)) {
+                        std.log.info("supervisor: reaping orphan pid {d} for {s}", .{ stale_pid, id });
+                        std.posix.kill(stale_pid, std.posix.SIG.TERM) catch {};
+                        // Give it a moment, then SIGKILL.
+                        var w: u8 = 0;
+                        while (w < 30) : (w += 1) {
+                            if (!isAlive(stale_pid)) break;
+                            std.Thread.sleep(100 * std.time.ns_per_ms);
+                        }
+                        if (isAlive(stale_pid)) {
+                            std.posix.kill(stale_pid, std.posix.SIG.KILL) catch {};
+                        }
+                    }
+                }
+            } else |_| {}
+            clearPidFile(self.allocator, id) catch {};
+        }
+
+        // Step 2: respawn the ones that were marked running.
+        for (ids.items, 0..) |id, i| {
+            if (i < should_start.items.len and should_start.items[i]) {
+                self.start(id) catch |err| {
+                    std.log.warn("supervisor: boot restart failed for {s}: {}", .{ id, err });
+                };
+            }
             self.allocator.free(id);
         }
     }
@@ -376,6 +416,47 @@ pub const Supervisor = struct {
 fn isAlive(pid: std.posix.pid_t) bool {
     std.posix.kill(pid, 0) catch return false;
     return true;
+}
+
+fn pidFilePath(allocator: std.mem.Allocator, project_id: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/data/projects/{s}/runtime.pid", .{ HOME, project_id });
+}
+
+fn writePidFile(allocator: std.mem.Allocator, project_id: []const u8, pid: std.posix.pid_t) !void {
+    const path = try pidFilePath(allocator, project_id);
+    defer allocator.free(path);
+    var f = try std.fs.createFileAbsolute(path, .{ .truncate = true, .mode = 0o600 });
+    defer f.close();
+    var buf: [16]u8 = undefined;
+    const s = try std.fmt.bufPrint(&buf, "{d}\n", .{pid});
+    try f.writeAll(s);
+}
+
+/// Returns the recorded pid, or null if the pidfile is missing or empty.
+fn readPidFile(allocator: std.mem.Allocator, project_id: []const u8) !?std.posix.pid_t {
+    const path = try pidFilePath(allocator, project_id);
+    defer allocator.free(path);
+    const f = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer f.close();
+    var buf: [32]u8 = undefined;
+    const n = try f.readAll(&buf);
+    if (n == 0) return null;
+    const trimmed = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    const pid = std.fmt.parseInt(std.posix.pid_t, trimmed, 10) catch return null;
+    return pid;
+}
+
+fn clearPidFile(allocator: std.mem.Allocator, project_id: []const u8) !void {
+    const path = try pidFilePath(allocator, project_id);
+    defer allocator.free(path);
+    std.fs.deleteFileAbsolute(path) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
 }
 
 const DrainCtx = struct {
