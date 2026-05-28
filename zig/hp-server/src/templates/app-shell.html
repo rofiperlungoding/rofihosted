@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Shell / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=29">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=29">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=29">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  .shell-card { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+  .shell-header { display: flex; align-items: center; justify-content: space-between; padding: .8rem 1.1rem; border-bottom: 1px solid var(--border-soft); background: var(--surface-2); flex-wrap: wrap; gap: .6rem; }
+  .shell-header .left { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+  .shell-header .dot-row { display: inline-flex; gap: .35rem; }
+  .shell-header .dot-row .d { width: 11px; height: 11px; border-radius: 50%; }
+  .shell-header .dot-row .d.r { background: #ef4444; }
+  .shell-header .dot-row .d.y { background: #f59e0b; }
+  .shell-header .dot-row .d.g { background: #10b981; }
+  .shell-cwd { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .78rem; color: var(--text-3); padding: .2rem .55rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: 6px; }
+  .shell-actions { display: flex; gap: .4rem; }
+  .shell-out {
+    background: #0a0a10;
+    color: #d4d4d8;
+    font-family: ui-monospace, "SF Mono", Menlo, "Cascadia Code", monospace;
+    font-size: .82rem;
+    line-height: 1.5;
+    padding: 1rem 1.1rem;
+    height: calc(100vh - 320px);
+    min-height: 380px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  [data-theme="light"] .shell-out { background: #18181b; color: #e4e4e7; }
+  .shell-out .prompt { color: #a78bfa; user-select: none; }
+  .shell-out .cmd { color: #fafafa; }
+  .shell-out .out-stdout { color: #d4d4d8; }
+  .shell-out .out-stderr { color: #fca5a5; }
+  .shell-out .meta { color: #71717a; font-size: .72rem; margin-top: .2rem; }
+  .shell-out .meta.ok { color: #6ee7b7; }
+  .shell-out .meta.bad { color: #fca5a5; }
+  .shell-input-row {
+    display: flex; align-items: center; gap: .5rem;
+    background: #0a0a10; border-top: 1px solid var(--border-soft);
+    padding: .7rem 1rem;
+  }
+  [data-theme="light"] .shell-input-row { background: #18181b; }
+  .shell-input-row .pfx { color: #a78bfa; font-family: ui-monospace, monospace; font-weight: 600; }
+  .shell-input-row input {
+    flex: 1; background: transparent; color: #fafafa;
+    font-family: ui-monospace, monospace; font-size: .85rem;
+    border: none; outline: none; padding: .4rem 0;
+  }
+  [data-theme="light"] .shell-input-row input { color: #fafafa; }
+  .shell-input-row input:disabled { opacity: .5; cursor: wait; }
+  .shell-input-row .send-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: .35rem .9rem; font-size: .75rem; font-weight: 600; cursor: pointer; }
+  .shell-input-row .send-btn:disabled { opacity: .5; cursor: wait; }
+
+  .quick-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .quick-actions button {
+    background: var(--surface); color: var(--text-2);
+    border: 1px solid var(--border-soft); border-radius: 6px;
+    padding: .35rem .8rem; font-size: .76rem; cursor: pointer;
+    font-family: ui-monospace, monospace;
+  }
+  .quick-actions button:hover { border-color: var(--accent); color: var(--text); }
+
+  .vitals-grid { display: grid; gap: .6rem; grid-template-columns: 1fr; margin-bottom: 1.4rem; }
+  @media (min-width: 540px) { .vitals-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 980px) { .vitals-grid { grid-template-columns: repeat(4, 1fr); } }
+  .vital { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 10px; padding: .85rem 1rem; box-shadow: var(--shadow); }
+  .vital .lbl { font-size: .65rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+  .vital .val { font-size: 1.2rem; font-weight: 600; color: var(--text); margin-top: .25rem; letter-spacing: -0.01em; }
+  .vital .unit { font-size: .8rem; color: var(--text-3); margin-left: .2rem; font-weight: 400; }
+  .vital .sub { font-size: .7rem; color: var(--text-3); margin-top: .25rem; }
+  .vital.warn .val { color: var(--warning); }
+  .vital.bad .val { color: var(--error); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
+    <a class="nav-link" href="/projects"><i class="icon-rocket"></i>Projects</a>
+    <a class="nav-link active" href="/shell"><i class="icon-screen-desktop"></i>Shell</a>
+    <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Shell</h1>
+          <p class="page-subtitle">Run commands on your phone from anywhere. No SSH required.</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span class="ws-badge"><span class="ws-dot"></span>live</span>
+        <button class="theme-toggle" data-action="theme-toggle" aria-label="Toggle theme">
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Vitals -->
+      <div class="vitals-grid" id="vitals">
+        <div class="vital" id="v-battery"><div class="lbl">Battery</div><div class="val">--<span class="unit">%</span></div><div class="sub">checking</div></div>
+        <div class="vital" id="v-mem"><div class="lbl">Memory</div><div class="val">--<span class="unit">%</span></div><div class="sub">used</div></div>
+        <div class="vital" id="v-disk"><div class="lbl">Disk</div><div class="val">--<span class="unit">GB</span></div><div class="sub">free</div></div>
+        <div class="vital" id="v-uptime"><div class="lbl">Uptime</div><div class="val">--</div><div class="sub">since boot</div></div>
+      </div>
+
+      <div class="quick-actions">
+        <button data-cmd="~/rebuild.sh 2>&amp;1 | tail -10">rebuild.sh</button>
+        <button data-cmd="ps -ef | grep -E 'hp-server|cloudflared|python3' | grep -v grep">processes</button>
+        <button data-cmd="df -h ~ /data 2>/dev/null | head">disk usage</button>
+        <button data-cmd="tail -30 ~/logs/hp-server.log 2>/dev/null">hp-server log</button>
+        <button data-cmd="tail -20 ~/logs/cloudflared.log 2>/dev/null">cloudflared log</button>
+        <button data-cmd="ls -la ~/data/projects/">projects dir</button>
+        <button data-cmd="git -C ~/zig/hp-server log --oneline -5 2>/dev/null">recent commits</button>
+        <button data-cmd="termux-battery-status 2>/dev/null">battery</button>
+      </div>
+
+      <div class="shell-card">
+        <div class="shell-header">
+          <div class="left">
+            <span class="dot-row"><span class="d r"></span><span class="d y"></span><span class="d g"></span></span>
+            <span class="shell-cwd" id="cwd-label">~</span>
+          </div>
+          <div class="shell-actions">
+            <button class="btn btn-sm" id="btn-clear">Clear</button>
+          </div>
+        </div>
+        <div class="shell-out" id="shell-out"><span class="meta">Welcome. Type a command and press Enter. Output capped at 256KB, timeout 60s. Up/Down for history.</span></div>
+        <div class="shell-input-row">
+          <span class="pfx">$</span>
+          <input type="text" id="cmd-input" placeholder="ls -la" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          <button class="send-btn" id="btn-run">Run</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=29"></script>
+<script src="https://rofihosted.space/app.js?v=29"></script>
+<script>
+RH.loadCurrentUser();
+
+var outEl = document.getElementById('shell-out');
+var inputEl = document.getElementById('cmd-input');
+var runBtn = document.getElementById('btn-run');
+var cwdLabel = document.getElementById('cwd-label');
+var history = [];
+var histIdx = -1;
+var currentCwd = null;
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function appendLine(html) {
+  outEl.insertAdjacentHTML('beforeend', '<div>' + html + '</div>');
+  outEl.scrollTop = outEl.scrollHeight;
+}
+
+function appendCmd(cmd) {
+  appendLine('<span class="prompt">$ </span><span class="cmd">' + escapeHtml(cmd) + '</span>');
+}
+
+function appendBlock(text, klass) {
+  if (!text) return;
+  appendLine('<span class="' + klass + '">' + escapeHtml(text) + '</span>');
+}
+
+function setRunning(b) {
+  inputEl.disabled = b;
+  runBtn.disabled = b;
+  runBtn.textContent = b ? 'Running...' : 'Run';
+  if (!b) inputEl.focus();
+}
+
+async function runCmd(cmd) {
+  cmd = (cmd || '').trim();
+  if (!cmd) return;
+
+  // Tiny "cd" pseudo-handling: keep cwd client-side and pass it on each call.
+  // (Real cd is per-process so it cannot persist across exec calls.)
+  var m = cmd.match(/^cd\s+(.+)$/);
+  if (m) {
+    var target = m[1].trim().replace(/^['"]|['"]$/g, '');
+    appendCmd(cmd);
+    var resolveCmd = 'cd "' + target.replace(/"/g, '\\"') + '" && pwd';
+    setRunning(true);
+    try {
+      var r = await fetch('/api/system/exec', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ cmd: resolveCmd, cwd: currentCwd || undefined, timeout_ms: 5000 })
+      });
+      var j = await r.json();
+      if (j.ok && j.exit_code === 0) {
+        currentCwd = (j.stdout || '').trim();
+        cwdLabel.textContent = currentCwd;
+        appendBlock('(cwd: ' + currentCwd + ')\n', 'meta ok');
+      } else {
+        appendBlock(j.stderr || 'cd failed', 'out-stderr');
+      }
+    } catch (e) {
+      appendBlock('network error: ' + e.message, 'out-stderr');
+    }
+    setRunning(false);
+    history.push(cmd); histIdx = history.length;
+    return;
+  }
+
+  history.push(cmd); histIdx = history.length;
+  appendCmd(cmd);
+  setRunning(true);
+  var t0 = performance.now();
+  try {
+    var r = await fetch('/api/system/exec', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cmd: cmd, cwd: currentCwd || undefined })
+    });
+    var j = await r.json();
+    if (!j.ok) {
+      appendBlock('error: ' + (j.err || 'unknown') + (j.detail ? ' (' + j.detail + ')' : ''), 'out-stderr');
+    } else {
+      if (j.stdout) appendBlock(j.stdout, 'out-stdout');
+      if (j.stdout_truncated) appendBlock('[stdout truncated at 256KB]', 'meta bad');
+      if (j.stderr) appendBlock(j.stderr, 'out-stderr');
+      if (j.stderr_truncated) appendBlock('[stderr truncated at 256KB]', 'meta bad');
+      var meta = 'exit=' + j.exit_code + ' in ' + j.elapsed_ms + 'ms';
+      if (j.timed_out) meta += ' [TIMED OUT]';
+      appendBlock(meta, j.exit_code === 0 ? 'meta ok' : 'meta bad');
+    }
+  } catch (e) {
+    appendBlock('network error: ' + e.message, 'out-stderr');
+  }
+  setRunning(false);
+}
+
+inputEl.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    var cmd = inputEl.value;
+    inputEl.value = '';
+    runCmd(cmd);
+  } else if (e.key === 'ArrowUp') {
+    if (history.length === 0) return;
+    e.preventDefault();
+    histIdx = Math.max(0, histIdx - 1);
+    inputEl.value = history[histIdx] || '';
+    setTimeout(function () { inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length); }, 0);
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    histIdx = Math.min(history.length, histIdx + 1);
+    inputEl.value = history[histIdx] || '';
+  } else if (e.key === 'l' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    clearOutput();
+  }
+});
+
+runBtn.addEventListener('click', function () {
+  var cmd = inputEl.value;
+  inputEl.value = '';
+  runCmd(cmd);
+});
+
+function clearOutput() {
+  outEl.innerHTML = '<span class="meta">Cleared. Type a command and press Enter.</span>';
+}
+document.getElementById('btn-clear').addEventListener('click', clearOutput);
+
+document.querySelectorAll('.quick-actions button[data-cmd]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    runCmd(btn.dataset.cmd);
+  });
+});
+
+// ---------- vitals refresh ----------
+function fmtUptime(s) {
+  if (!s) return '--';
+  var d = Math.floor(s / 86400);
+  var h = Math.floor((s % 86400) / 3600);
+  var m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+async function refreshVitals() {
+  try {
+    var r = await fetch('/api/system/info');
+    var j = await r.json();
+    if (!j.ok) return;
+
+    var bat = document.getElementById('v-battery');
+    if (j.battery_pct == null) {
+      bat.querySelector('.val').innerHTML = 'N/A';
+      bat.querySelector('.sub').textContent = 'install termux-api';
+    } else {
+      bat.querySelector('.val').innerHTML = j.battery_pct + '<span class="unit">%</span>';
+      bat.querySelector('.sub').textContent = (j.battery_status || '').toLowerCase();
+      bat.classList.toggle('warn', j.battery_pct < 30 && j.battery_pct >= 15);
+      bat.classList.toggle('bad', j.battery_pct < 15);
+    }
+
+    var mem = document.getElementById('v-mem');
+    if (j.mem_total_kb > 0) {
+      var usedPct = Math.round(((j.mem_total_kb - j.mem_avail_kb) / j.mem_total_kb) * 100);
+      mem.querySelector('.val').innerHTML = usedPct + '<span class="unit">%</span>';
+      var freeMb = Math.round(j.mem_avail_kb / 1024);
+      var totalMb = Math.round(j.mem_total_kb / 1024);
+      mem.querySelector('.sub').textContent = freeMb + ' MB free of ' + totalMb + ' MB';
+      mem.classList.toggle('warn', usedPct >= 75 && usedPct < 90);
+      mem.classList.toggle('bad', usedPct >= 90);
+    }
+
+    var disk = document.getElementById('v-disk');
+    if (j.disk_total_mb > 0) {
+      var freeGb = (j.disk_free_mb / 1024).toFixed(1);
+      var totalGb = (j.disk_total_mb / 1024).toFixed(1);
+      disk.querySelector('.val').innerHTML = freeGb + '<span class="unit">GB</span>';
+      disk.querySelector('.sub').textContent = 'of ' + totalGb + ' GB total';
+      var freePct = (j.disk_free_mb / j.disk_total_mb) * 100;
+      disk.classList.toggle('warn', freePct < 15 && freePct >= 5);
+      disk.classList.toggle('bad', freePct < 5);
+    }
+
+    var up = document.getElementById('v-uptime');
+    up.querySelector('.val').textContent = fmtUptime(j.system_uptime_s);
+    up.querySelector('.sub').textContent = 'since boot';
+
+    if (currentCwd == null && j.home) {
+      currentCwd = j.home;
+      cwdLabel.textContent = j.home;
+    }
+  } catch (e) {}
+}
+
+refreshVitals();
+setInterval(refreshVitals, 10000);
+inputEl.focus();
+</script>
+</body>
+</html>

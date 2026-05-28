@@ -592,6 +592,10 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock/update")) return apiGeoblockUpdate(app, req, res);
 
+    // Built-in shell + system info (replaces SSH for the operator)
+    if (std.mem.eql(u8, path, "/api/system/exec")) return apiSystemExec(app, req, res);
+    if (std.mem.eql(u8, path, "/api/system/info")) return apiSystemInfo(app, req, res);
+
     // Status badges (private, auth-gated)
     if (std.mem.startsWith(u8, path, "/badge/") and std.mem.endsWith(u8, path, ".svg")) {
         const name = path[7 .. path.len - 4];
@@ -645,6 +649,12 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
         res.content_type = .HTML;
         res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-projects.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/shell")) {
+        res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
+        res.body = @embedFile("templates/app-shell.html");
         return;
     }
     return notFound(res);
@@ -2602,6 +2612,369 @@ fn apiHostedRefresh(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
     });
     // No subdomain provided - just succeed; sites lazy-init on next request.
     try res.json(.{ .ok = true, .refreshed = "lazy" }, .{});
+}
+
+// =================================================================
+// SYSTEM SHELL (replaces SSH for the operator from anywhere)
+// =================================================================
+
+const SHELL_TIMEOUT_MS: u64 = 60_000;
+const SHELL_MAX_OUTPUT: usize = 256 * 1024; // 256KB
+
+fn apiSystemExec(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+
+    // Body can be JSON {"cmd":"..."} or form-encoded cmd=...
+    var cmd: []const u8 = "";
+    var cwd_opt: ?[]const u8 = null;
+    var timeout_ms: u64 = SHELL_TIMEOUT_MS;
+    if (req.body()) |body| {
+        if (body.len > 0 and body[0] == '{') {
+            const Body = struct { cmd: []const u8 = "", cwd: []const u8 = "", timeout_ms: ?u64 = null };
+            const parsed = std.json.parseFromSlice(Body, res.arena, body, .{ .ignore_unknown_fields = true }) catch {
+                res.status = 400;
+                try res.json(.{ .ok = false, .err = "bad_json" }, .{});
+                return;
+            };
+            cmd = parsed.value.cmd;
+            if (parsed.value.cwd.len > 0) cwd_opt = parsed.value.cwd;
+            if (parsed.value.timeout_ms) |t| timeout_ms = @min(t, 300_000);
+        }
+    }
+    if (cmd.len == 0) {
+        const form = req.formData() catch {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+            return;
+        };
+        cmd = form.get("cmd") orelse "";
+        if (form.get("cwd")) |c| if (c.len > 0) {
+            cwd_opt = c;
+        };
+    }
+    if (cmd.len == 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_cmd" }, .{});
+        return;
+    }
+    if (cmd.len > 8192) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "cmd_too_long" }, .{});
+        return;
+    }
+
+    // Resolve cwd. Default to operator $HOME so commands like 'ls' show
+    // the home dir. Caller can pass a cwd hint for project work.
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const cwd: []const u8 = cwd_opt orelse home;
+
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.cwd = cwd;
+
+    const t0 = std.time.milliTimestamp();
+    child.spawn() catch |err| {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed", .detail = @errorName(err) }, .{});
+        return;
+    };
+
+    // Read stdout + stderr concurrently with cap. Block on wait, but enforce
+    // wall-clock timeout via a watcher thread that sends SIGTERM.
+    const KillerCtx = struct {
+        pid: std.posix.pid_t,
+        ms: u64,
+        done: std.atomic.Value(bool),
+    };
+    var killer_ctx = KillerCtx{
+        .pid = child.id,
+        .ms = timeout_ms,
+        .done = std.atomic.Value(bool).init(false),
+    };
+    const Killer = struct {
+        fn run(ctx: *KillerCtx) void {
+            const step_ms: u64 = 100;
+            var elapsed: u64 = 0;
+            while (elapsed < ctx.ms) {
+                if (ctx.done.load(.acquire)) return;
+                std.Thread.sleep(step_ms * std.time.ns_per_ms);
+                elapsed += step_ms;
+            }
+            if (!ctx.done.load(.acquire)) {
+                std.posix.kill(ctx.pid, std.posix.SIG.TERM) catch {};
+                std.Thread.sleep(2 * std.time.ns_per_s);
+                if (!ctx.done.load(.acquire)) {
+                    std.posix.kill(ctx.pid, std.posix.SIG.KILL) catch {};
+                }
+            }
+        }
+    };
+    const killer_thread = std.Thread.spawn(.{}, Killer.run, .{&killer_ctx}) catch null;
+
+    var stdout_buf = std.ArrayList(u8).init(res.arena);
+    var stderr_buf = std.ArrayList(u8).init(res.arena);
+    var stdout_truncated = false;
+    var stderr_truncated = false;
+
+    if (child.stdout) |stdout| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&tmp) catch break;
+            if (n == 0) break;
+            const remaining = SHELL_MAX_OUTPUT -| stdout_buf.items.len;
+            const take = @min(n, remaining);
+            try stdout_buf.appendSlice(tmp[0..take]);
+            if (take < n) {
+                stdout_truncated = true;
+                break;
+            }
+        }
+    }
+    if (child.stderr) |stderr| {
+        var tmp: [4096]u8 = undefined;
+        while (true) {
+            const n = stderr.read(&tmp) catch break;
+            if (n == 0) break;
+            const remaining = SHELL_MAX_OUTPUT -| stderr_buf.items.len;
+            const take = @min(n, remaining);
+            try stderr_buf.appendSlice(tmp[0..take]);
+            if (take < n) {
+                stderr_truncated = true;
+                break;
+            }
+        }
+    }
+
+    const term = child.wait() catch |err| blk: {
+        std.log.warn("apiSystemExec wait: {s}", .{@errorName(err)});
+        break :blk std.process.Child.Term{ .Unknown = 0 };
+    };
+    killer_ctx.done.store(true, .release);
+    if (killer_thread) |th| th.join();
+
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        .Signal => |s| -@as(i32, @intCast(s)),
+        .Stopped => |s| -@as(i32, @intCast(s)),
+        .Unknown => -1,
+    };
+    const elapsed_ms = std.time.milliTimestamp() - t0;
+    const timed_out = elapsed_ms >= @as(i64, @intCast(timeout_ms));
+
+    // Truncate cmd for audit log so we don't bloat the file
+    const audit_cmd = if (cmd.len > 200) cmd[0..200] else cmd;
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "system_exec",
+        .target = audit_cmd,
+        .ok = exit_code == 0,
+    });
+
+    try res.json(.{
+        .ok = true,
+        .exit_code = exit_code,
+        .timed_out = timed_out,
+        .elapsed_ms = elapsed_ms,
+        .stdout = stdout_buf.items,
+        .stderr = stderr_buf.items,
+        .stdout_truncated = stdout_truncated,
+        .stderr_truncated = stderr_truncated,
+        .cwd = cwd,
+    }, .{});
+}
+
+fn apiSystemInfo(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    _ = req;
+
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+
+    // Battery via Termux:API if available; else null
+    var battery_pct: ?i32 = null;
+    var battery_status: []const u8 = "";
+    var battery_buf: [4096]u8 = undefined;
+    blk: {
+        var argv = [_][]const u8{ "sh", "-c", "command -v termux-battery-status >/dev/null && termux-battery-status 2>/dev/null" };
+        var child = std.process.Child.init(&argv, res.arena);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch break :blk;
+        var n: usize = 0;
+        if (child.stdout) |so| {
+            n = so.readAll(&battery_buf) catch 0;
+        }
+        _ = child.wait() catch {};
+        if (n == 0) break :blk;
+        const body = battery_buf[0..n];
+        // Tiny JSON peek: find "percentage" and "status"
+        if (std.mem.indexOf(u8, body, "\"percentage\"")) |i| {
+            var j = i + "\"percentage\"".len;
+            while (j < body.len and (body[j] == ':' or body[j] == ' ')) : (j += 1) {}
+            var end = j;
+            while (end < body.len and (body[end] >= '0' and body[end] <= '9')) : (end += 1) {}
+            battery_pct = std.fmt.parseInt(i32, body[j..end], 10) catch null;
+        }
+        if (std.mem.indexOf(u8, body, "\"status\"")) |i| {
+            var j = i + "\"status\"".len;
+            while (j < body.len and (body[j] == ':' or body[j] == ' ')) : (j += 1) {}
+            if (j < body.len and body[j] == '"') {
+                j += 1;
+                const end = std.mem.indexOfScalarPos(u8, body, j, '"') orelse j;
+                battery_status = try res.arena.dupe(u8, body[j..end]);
+            }
+        }
+    }
+
+    // Mem from /proc/meminfo
+    var mem_total_kb: u64 = 0;
+    var mem_avail_kb: u64 = 0;
+    if (std.fs.openFileAbsolute("/proc/meminfo", .{})) |f| {
+        defer f.close();
+        var meminfo: [4096]u8 = undefined;
+        const n = f.readAll(&meminfo) catch 0;
+        const body = meminfo[0..n];
+        if (std.mem.indexOf(u8, body, "MemTotal:")) |i| {
+            mem_total_kb = parseFirstU64(body[i..]) orelse 0;
+        }
+        if (std.mem.indexOf(u8, body, "MemAvailable:")) |i| {
+            mem_avail_kb = parseFirstU64(body[i..]) orelse 0;
+        }
+    } else |_| {}
+
+    // Disk usage on $HOME via 'df' (1K-blocks) - Termux's busybox df does
+    // not support -B, so we parse 1K columns and multiply.
+    var disk_total_mb: u64 = 0;
+    var disk_free_mb: u64 = 0;
+    {
+        const cmd = try std.fmt.allocPrint(res.arena, "df \"{s}\" 2>/dev/null | tail -1", .{home});
+        var argv = [_][]const u8{ "sh", "-c", cmd };
+        var child = std.process.Child.init(&argv, res.arena);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch {};
+        var df_buf: [512]u8 = undefined;
+        var n: usize = 0;
+        if (child.stdout) |so| {
+            n = so.readAll(&df_buf) catch 0;
+        }
+        _ = child.wait() catch {};
+        // Format: filesystem 1K-blocks used available use% mountpoint
+        if (n > 0) {
+            var it = std.mem.tokenizeAny(u8, df_buf[0..n], " \t\n");
+            _ = it.next(); // filesystem
+            const total_s = it.next() orelse "0";
+            _ = it.next(); // used
+            const avail_s = it.next() orelse "0";
+            const total_kb = std.fmt.parseInt(u64, total_s, 10) catch 0;
+            const avail_kb = std.fmt.parseInt(u64, avail_s, 10) catch 0;
+            disk_total_mb = total_kb / 1024;
+            disk_free_mb = avail_kb / 1024;
+        }
+    }
+
+    // System uptime via 'cat /proc/uptime' (often readable on Android) with
+    // fallback to parsing 'uptime' command output. /proc/uptime can be EACCES
+    // on hardened Android builds.
+    var hp_uptime_s: u64 = 0;
+    if (std.fs.openFileAbsolute("/proc/uptime", .{})) |f| {
+        defer f.close();
+        var buf: [128]u8 = undefined;
+        const n = f.readAll(&buf) catch 0;
+        const body = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
+        if (std.mem.indexOfScalar(u8, body, ' ')) |sp| {
+            const total = std.fmt.parseFloat(f64, body[0..sp]) catch 0.0;
+            hp_uptime_s = @intFromFloat(total);
+        }
+    } else |_| {}
+    if (hp_uptime_s == 0) {
+        // Fallback: 'uptime' prints "HH:MM:SS up X days, HH:MM, ..."
+        var argv = [_][]const u8{ "sh", "-c", "uptime 2>/dev/null" };
+        var child = std.process.Child.init(&argv, res.arena);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch {};
+        var buf: [256]u8 = undefined;
+        var n: usize = 0;
+        if (child.stdout) |so| n = so.readAll(&buf) catch 0;
+        _ = child.wait() catch {};
+        if (n > 0) {
+            const body = buf[0..n];
+            if (std.mem.indexOf(u8, body, " up ")) |i| {
+                const rest = body[i + 4 ..];
+                // Find ', load' or end of segment
+                const end = std.mem.indexOf(u8, rest, ",  load") orelse std.mem.indexOf(u8, rest, ", load") orelse rest.len;
+                const seg = std.mem.trim(u8, rest[0..end], &std.ascii.whitespace);
+                hp_uptime_s = parseUptimeSeg(seg);
+            }
+        }
+    }
+
+    try res.json(.{
+        .ok = true,
+        .battery_pct = battery_pct,
+        .battery_status = battery_status,
+        .mem_total_kb = mem_total_kb,
+        .mem_avail_kb = mem_avail_kb,
+        .disk_total_mb = disk_total_mb,
+        .disk_free_mb = disk_free_mb,
+        .system_uptime_s = hp_uptime_s,
+        .home = home,
+    }, .{});
+}
+
+fn parseFirstU64(s: []const u8) ?u64 {
+    var i: usize = 0;
+    // skip non-digits
+    while (i < s.len and (s[i] < '0' or s[i] > '9')) : (i += 1) {}
+    var end = i;
+    while (end < s.len and s[end] >= '0' and s[end] <= '9') : (end += 1) {}
+    if (end == i) return null;
+    return std.fmt.parseInt(u64, s[i..end], 10) catch null;
+}
+
+/// Parse uptime segments like "2 days,  5:49" or "3 min" or "1:23".
+fn parseUptimeSeg(s: []const u8) u64 {
+    var total_s: u64 = 0;
+    // Optional days
+    if (std.mem.indexOf(u8, s, "day")) |di| {
+        var j: usize = 0;
+        while (j < di and (s[j] < '0' or s[j] > '9')) : (j += 1) {}
+        var end = j;
+        while (end < di and s[end] >= '0' and s[end] <= '9') : (end += 1) {}
+        if (end > j) {
+            const d = std.fmt.parseInt(u64, s[j..end], 10) catch 0;
+            total_s += d * 86400;
+        }
+    }
+    // Find HH:MM after "days," or at start
+    if (std.mem.indexOf(u8, s, ":")) |c| {
+        // back up to start of digits
+        var j = c;
+        while (j > 0 and s[j - 1] >= '0' and s[j - 1] <= '9') : (j -= 1) {}
+        const h = std.fmt.parseInt(u64, s[j..c], 10) catch 0;
+        // forward to end of next digits
+        var end = c + 1;
+        while (end < s.len and s[end] >= '0' and s[end] <= '9') : (end += 1) {}
+        const m = std.fmt.parseInt(u64, s[c + 1 .. end], 10) catch 0;
+        total_s += h * 3600 + m * 60;
+    } else if (std.mem.indexOf(u8, s, "min")) |mi| {
+        var j: usize = 0;
+        while (j < mi and (s[j] < '0' or s[j] > '9')) : (j += 1) {}
+        var end = j;
+        while (end < mi and s[end] >= '0' and s[end] <= '9') : (end += 1) {}
+        if (end > j) {
+            const m = std.fmt.parseInt(u64, s[j..end], 10) catch 0;
+            total_s += m * 60;
+        }
+    }
+    return total_s;
 }
 
 fn apiDbPoolStats(app: *App, res: *httpz.Response) !void {
