@@ -96,6 +96,82 @@
         <p>Click <strong>New project</strong> to deploy your first app.</p>
       </div>
     </div>
+
+    <!-- Inline wizard (hidden by default) -->
+    <div id="wizard" style="display:none">
+      <div style="background:var(--surface); border:1px solid var(--border-soft); border-radius:12px; padding:1.5rem 1.6rem; max-width:560px; margin:1.2rem auto; box-shadow:var(--shadow)">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:1rem">
+          <h2 style="margin:0; font-size:1.05rem; font-weight:600; color:var(--text)">New project</h2>
+          <button class="btn btn-sm" id="wiz-cancel">Cancel</button>
+        </div>
+        <div id="wiz-step-indicator" style="display:flex; gap:.3rem; margin-bottom:1.2rem">
+          <div class="wiz-dot active" style="flex:1; height:4px; border-radius:2px; background:var(--accent)"></div>
+          <div class="wiz-dot" style="flex:1; height:4px; border-radius:2px; background:var(--border-soft)"></div>
+          <div class="wiz-dot" style="flex:1; height:4px; border-radius:2px; background:var(--border-soft)"></div>
+        </div>
+
+        <!-- Step 1: Source -->
+        <div id="wiz-s1">
+          <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Import a Git repository or start from scratch.</p>
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Git repository URL <span style="color:var(--text-3); font-weight:400">(optional)</span></label>
+          <input class="input" id="wiz-repo" placeholder="https://github.com/you/repo" style="margin-bottom:.8rem">
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Branch</label>
+          <input class="input" id="wiz-branch" value="main" placeholder="main" style="margin-bottom:.8rem">
+          <div id="wiz-detect-status" style="font-size:.76rem; color:var(--text-3); min-height:1.2rem"></div>
+        </div>
+
+        <!-- Step 2: Configure -->
+        <div id="wiz-s2" style="display:none">
+          <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Configure your project. Fields are pre-filled from auto-detection.</p>
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Project name</label>
+          <input class="input" id="wiz-name" placeholder="My app" style="margin-bottom:.8rem">
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Subdomain <span style="color:var(--text-3); font-weight:400">(.rofihosted.space)</span></label>
+          <input class="input" id="wiz-sub" placeholder="my-app" maxlength="63" style="margin-bottom:.8rem">
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Runtime</label>
+          <select class="input" id="wiz-runtime" style="margin-bottom:.8rem">
+            <option value="static">Static</option>
+            <option value="node">Node.js</option>
+            <option value="python">Python</option>
+            <option value="bun">Bun</option>
+            <option value="generic">Generic</option>
+          </select>
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Install command</label>
+          <input class="input" id="wiz-install" placeholder="npm ci" style="margin-bottom:.8rem">
+          <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Build command</label>
+          <input class="input" id="wiz-build" placeholder="npm run build" style="margin-bottom:.8rem">
+          <div id="wiz-publish-row">
+            <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Publish directory</label>
+            <input class="input" id="wiz-publish" placeholder="dist" style="margin-bottom:.8rem">
+          </div>
+          <div id="wiz-start-row" style="display:none">
+            <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Start command</label>
+            <input class="input" id="wiz-start" placeholder="node server.js" style="margin-bottom:.8rem">
+          </div>
+          <div id="wiz-hint" style="font-size:.74rem; color:var(--accent); margin-bottom:.5rem"></div>
+        </div>
+
+        <!-- Step 3: Environment variables -->
+        <div id="wiz-s3" style="display:none">
+          <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Add environment variables (encrypted at rest). You can add more later in project settings.</p>
+          <div id="wiz-env-list"></div>
+          <div style="display:grid; grid-template-columns:1fr 1fr auto; gap:.4rem; margin-top:.5rem">
+            <input class="input" id="wiz-env-key" placeholder="KEY" style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.8rem">
+            <input class="input" id="wiz-env-val" placeholder="value" type="password" style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.8rem">
+            <button class="btn btn-sm" id="wiz-env-add"><i class="icon-plus"></i></button>
+          </div>
+        </div>
+
+        <!-- Alert -->
+        <div id="wiz-alert" style="display:none; margin-top:1rem" class="alert"></div>
+
+        <!-- Footer -->
+        <div style="display:flex; justify-content:space-between; margin-top:1.4rem">
+          <button class="btn" id="wiz-back" style="display:none">Back</button>
+          <div style="flex:1"></div>
+          <button class="btn btn-accent" id="wiz-next">Next</button>
+        </div>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -109,6 +185,7 @@ RH.loadCurrentUser();
   var fmtTs = function (t) { if (!t) return '\u2014'; return new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' '); };
   var allProjects = [];
 
+  // --- Project list ---
   function renderProjects() {
     var wrap = document.getElementById('projects-list');
     if (!allProjects.length) {
@@ -117,7 +194,6 @@ RH.loadCurrentUser();
     }
     var html = '<div class="projects-grid">';
     allProjects.forEach(function (p) {
-      var url = 'https://' + p.subdomain + '.rofihosted.space';
       var deployed = p.last_deploy_at ? fmtTs(p.last_deploy_at) : 'never deployed';
       html += '<div class="project-card" data-id="' + escapeHtml(p.id) + '">'
         + '<div class="pname">' + escapeHtml(p.name) + '</div>'
@@ -143,37 +219,209 @@ RH.loadCurrentUser();
     });
   }
 
-  document.getElementById('new-project-btn').addEventListener('click', function () {
-    // For now, redirect to a simple prompt-based flow. The full Netlify-style
-    // wizard will be a separate page (/projects/new) in a future iteration.
-    var repo = prompt('Git repo URL (leave empty for upload-only):');
-    if (repo === null) return;
-    var name = prompt('Project name:', '');
-    if (!name) return;
-    var sub = prompt('Subdomain (lowercase, a-z0-9 and dashes):', name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''));
-    if (!sub) return;
-    var runtime = prompt('Runtime (static / node / python / bun / generic):', 'static');
-    if (!runtime) return;
+  // --- Wizard state ---
+  var wiz = { step: 1, envs: [] };
+  var wizEl = document.getElementById('wizard');
+  var listEl = document.getElementById('projects-list');
+  var steps = [document.getElementById('wiz-s1'), document.getElementById('wiz-s2'), document.getElementById('wiz-s3')];
+  var dots = document.querySelectorAll('#wiz-step-indicator > div');
+  var backBtn = document.getElementById('wiz-back');
+  var nextBtn = document.getElementById('wiz-next');
+  var alertEl = document.getElementById('wiz-alert');
 
-    var fd = new FormData();
-    fd.append('name', name);
-    fd.append('subdomain', sub);
-    fd.append('repo_url', repo || '');
-    fd.append('runtime', runtime);
-    fd.append('branch', 'main');
-    fetch('/api/projects/create', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (!j.ok) { alert('Create failed: ' + (j.err || 'unknown')); return; }
-        loadProjects();
-        if (repo) {
-          // Auto-deploy
-          var fd2 = new FormData();
-          fd2.append('id', j.id);
-          fetch('/api/projects/deploy', { method: 'POST', body: fd2 });
-        }
-      });
+  function showStep(n) {
+    wiz.step = n;
+    steps.forEach(function (s, i) { s.style.display = i === n - 1 ? '' : 'none'; });
+    dots.forEach(function (d, i) { d.style.background = i < n ? 'var(--accent)' : 'var(--border-soft)'; });
+    backBtn.style.display = n > 1 ? '' : 'none';
+    nextBtn.textContent = n === 3 ? 'Deploy' : 'Next';
+    alertEl.style.display = 'none';
+  }
+
+  function showWizard() {
+    wiz = { step: 1, envs: [] };
+    document.getElementById('wiz-repo').value = '';
+    document.getElementById('wiz-branch').value = 'main';
+    document.getElementById('wiz-name').value = '';
+    document.getElementById('wiz-sub').value = '';
+    document.getElementById('wiz-runtime').value = 'static';
+    document.getElementById('wiz-install').value = '';
+    document.getElementById('wiz-build').value = '';
+    document.getElementById('wiz-publish').value = '';
+    document.getElementById('wiz-start').value = '';
+    document.getElementById('wiz-hint').textContent = '';
+    document.getElementById('wiz-detect-status').textContent = '';
+    document.getElementById('wiz-env-list').innerHTML = '';
+    showStep(1);
+    wizEl.style.display = '';
+    listEl.style.display = 'none';
+  }
+
+  function hideWizard() {
+    wizEl.style.display = 'none';
+    listEl.style.display = '';
+  }
+
+  document.getElementById('new-project-btn').addEventListener('click', showWizard);
+  document.getElementById('wiz-cancel').addEventListener('click', hideWizard);
+  backBtn.addEventListener('click', function () { if (wiz.step > 1) showStep(wiz.step - 1); });
+
+  // Runtime toggle: show publish_dir for static, start_cmd for backend
+  document.getElementById('wiz-runtime').addEventListener('change', function () {
+    var isStatic = this.value === 'static';
+    document.getElementById('wiz-publish-row').style.display = isStatic ? '' : 'none';
+    document.getElementById('wiz-start-row').style.display = isStatic ? 'none' : '';
   });
+
+  // Env var add
+  document.getElementById('wiz-env-add').addEventListener('click', function () {
+    var k = document.getElementById('wiz-env-key').value.trim();
+    var v = document.getElementById('wiz-env-val').value;
+    if (!k) return;
+    wiz.envs.push({ key: k, value: v });
+    document.getElementById('wiz-env-key').value = '';
+    document.getElementById('wiz-env-val').value = '';
+    renderEnvList();
+  });
+
+  function renderEnvList() {
+    var html = '';
+    wiz.envs.forEach(function (e, i) {
+      html += '<div style="display:flex; align-items:center; gap:.4rem; padding:.3rem 0; border-bottom:1px solid var(--border-soft)">'
+        + '<span style="font-family:ui-monospace,monospace; font-size:.78rem; color:var(--text); flex:1">' + escapeHtml(e.key) + '</span>'
+        + '<span style="font-size:.74rem; color:var(--text-3)">set</span>'
+        + '<button class="btn btn-sm" data-rm="' + i + '" style="padding:.1rem .4rem; font-size:.7rem">x</button>'
+        + '</div>';
+    });
+    document.getElementById('wiz-env-list').innerHTML = html;
+    document.querySelectorAll('[data-rm]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        wiz.envs.splice(parseInt(b.dataset.rm, 10), 1);
+        renderEnvList();
+      });
+    });
+  }
+
+  // Next button
+  nextBtn.addEventListener('click', function () {
+    alertEl.style.display = 'none';
+
+    if (wiz.step === 1) {
+      // If repo URL provided, run auto-detect before going to step 2
+      var repo = document.getElementById('wiz-repo').value.trim();
+      var branch = document.getElementById('wiz-branch').value.trim() || 'main';
+      if (repo) {
+        document.getElementById('wiz-detect-status').textContent = 'Detecting framework...';
+        nextBtn.disabled = true;
+        fetch('/api/projects/preview-repo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_url: repo, branch: branch })
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          nextBtn.disabled = false;
+          document.getElementById('wiz-detect-status').textContent = '';
+          if (j.ok) {
+            document.getElementById('wiz-name').value = j.suggested_name || '';
+            document.getElementById('wiz-sub').value = j.suggested_subdomain || '';
+            document.getElementById('wiz-runtime').value = j.runtime || 'static';
+            document.getElementById('wiz-install').value = j.install_cmd || '';
+            document.getElementById('wiz-build').value = j.build_cmd || '';
+            document.getElementById('wiz-publish').value = j.publish_dir || '';
+            document.getElementById('wiz-start').value = j.start_cmd || '';
+            document.getElementById('wiz-hint').textContent = j.framework_hint || '';
+            // Toggle visibility
+            var isStatic = j.runtime === 'static';
+            document.getElementById('wiz-publish-row').style.display = isStatic ? '' : 'none';
+            document.getElementById('wiz-start-row').style.display = isStatic ? 'none' : '';
+          }
+          showStep(2);
+        }).catch(function () {
+          nextBtn.disabled = false;
+          document.getElementById('wiz-detect-status').textContent = '';
+          showStep(2);
+        });
+        return;
+      }
+      showStep(2);
+      return;
+    }
+
+    if (wiz.step === 2) {
+      var name = document.getElementById('wiz-name').value.trim();
+      var sub = document.getElementById('wiz-sub').value.trim().toLowerCase();
+      if (!name) { showAlert('Project name is required.'); return; }
+      if (!sub || !/^[a-z0-9](-?[a-z0-9])*$/.test(sub) || sub.length > 63) {
+        showAlert('Subdomain must be lowercase letters, numbers, and dashes (1-63 chars, no leading/trailing dash).');
+        return;
+      }
+      showStep(3);
+      return;
+    }
+
+    if (wiz.step === 3) {
+      // Create project + push secrets + deploy
+      nextBtn.disabled = true;
+      nextBtn.textContent = 'Deploying...';
+      var fd = new FormData();
+      fd.append('name', document.getElementById('wiz-name').value.trim());
+      fd.append('subdomain', document.getElementById('wiz-sub').value.trim().toLowerCase());
+      fd.append('repo_url', document.getElementById('wiz-repo').value.trim());
+      fd.append('branch', document.getElementById('wiz-branch').value.trim() || 'main');
+      fd.append('runtime', document.getElementById('wiz-runtime').value);
+      fd.append('install_cmd', document.getElementById('wiz-install').value);
+      fd.append('build_cmd', document.getElementById('wiz-build').value);
+      fd.append('start_cmd', document.getElementById('wiz-start').value);
+      fd.append('publish_dir', document.getElementById('wiz-publish').value);
+
+      fetch('/api/projects/create', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j.ok) { nextBtn.disabled = false; nextBtn.textContent = 'Deploy'; showAlert('Create failed: ' + (j.err || 'unknown')); return; }
+          var projectId = j.id;
+
+          // Push secrets sequentially
+          var pushSecrets = function (i) {
+            if (i >= wiz.envs.length) { triggerDeploy(projectId); return; }
+            var e = wiz.envs[i];
+            var sf = new FormData();
+            sf.append('project_id', projectId);
+            sf.append('key', e.key);
+            sf.append('value', e.value);
+            fetch('/api/projects/secrets/set', { method: 'POST', body: sf })
+              .then(function () { pushSecrets(i + 1); })
+              .catch(function () { pushSecrets(i + 1); });
+          };
+          pushSecrets(0);
+        })
+        .catch(function () { nextBtn.disabled = false; nextBtn.textContent = 'Deploy'; showAlert('Network error.'); });
+    }
+  });
+
+  function triggerDeploy(projectId) {
+    var repo = document.getElementById('wiz-repo').value.trim();
+    if (repo) {
+      var df = new FormData();
+      df.append('id', projectId);
+      fetch('/api/projects/deploy', { method: 'POST', body: df }).then(function () {
+        finishWizard();
+      });
+    } else {
+      finishWizard();
+    }
+  }
+
+  function finishWizard() {
+    nextBtn.disabled = false;
+    nextBtn.textContent = 'Deploy';
+    hideWizard();
+    loadProjects();
+  }
+
+  function showAlert(msg) {
+    alertEl.className = 'alert error';
+    alertEl.innerHTML = '<i class="icon-exclamation"></i> ' + escapeHtml(msg);
+    alertEl.style.display = '';
+  }
 
   loadProjects();
 })();
