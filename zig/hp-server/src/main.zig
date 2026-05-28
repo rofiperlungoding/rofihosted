@@ -34,6 +34,7 @@ const supervisor = @import("supervisor.zig");
 const proxy = @import("proxy.zig");
 const projauth = @import("projauth.zig");
 const cron = @import("cron.zig");
+const detect = @import("detect.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -577,6 +578,10 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/projects/cron/delete")) return apiCronDelete(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/cron/toggle")) return apiCronToggle(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/cron/run")) return apiCronRun(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/preview-repo")) return apiProjectsPreviewRepo(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/users")) return apiProjectsUsers(app, req, res);
+    if (std.mem.startsWith(u8, path, "/api/projects/tables")) return apiProjectsTables(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/log-stream")) return apiProjectsLogStream(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -4162,4 +4167,301 @@ fn apiCronRun(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .target = id,
     });
     try res.json(.{ .ok = true }, .{});
+}
+
+// =================================================================
+// PROJECT IMPORT WIZARD HELPERS
+// =================================================================
+
+/// Shallow-clone or unzip a repo URL to ~/.tmp-preview/<random>/, run the
+/// framework detector against it, return the suggestions, then delete the
+/// temp tree. Lets the wizard show pre-filled commands like Netlify does.
+fn apiProjectsPreviewRepo(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    const body = req.body() orelse "";
+    const Payload = struct {
+        repo_url: []const u8,
+        branch: []const u8 = "main",
+    };
+    const parsed = std.json.parseFromSlice(Payload, res.arena, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_json" }, .{});
+        return;
+    };
+    defer parsed.deinit();
+    const p = parsed.value;
+    if (p.repo_url.len == 0 or p.repo_url.len > 512) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_repo_url" }, .{});
+        return;
+    }
+    if (!std.mem.startsWith(u8, p.repo_url, "https://") and !std.mem.startsWith(u8, p.repo_url, "git@")) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_protocol" }, .{});
+        return;
+    }
+
+    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    std.fs.makeDirAbsolute(tmp_root) catch {};
+    var rand: [8]u8 = undefined;
+    std.crypto.random.bytes(&rand);
+    const cs = "0123456789abcdef";
+    var rand_hex: [16]u8 = undefined;
+    for (rand, 0..) |b, i| {
+        rand_hex[i * 2] = cs[b >> 4];
+        rand_hex[i * 2 + 1] = cs[b & 0xf];
+    }
+    const tmp_dir = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_root, &rand_hex });
+    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    // git clone --depth=1 --single-branch --branch <branch> <url> <tmp_dir>
+    var argv = [_][]const u8{ "git", "clone", "--depth=1", "--single-branch", "--branch", p.branch, p.repo_url, tmp_dir };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+    var stderr_buf: [2048]u8 = undefined;
+    var stderr_n: usize = 0;
+    if (child.stderr) |stderr| stderr_n = stderr.read(&stderr_buf) catch 0;
+    const term = child.wait() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "wait_failed" }, .{});
+        return;
+    };
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        else => -1,
+    };
+    if (exit_code != 0) {
+        res.status = 400;
+        try res.json(.{
+            .ok = false,
+            .err = "clone_failed",
+            .stderr = stderr_buf[0..@min(stderr_n, 1024)],
+        }, .{});
+        return;
+    }
+
+    const sug = detect.detect(res.arena, tmp_dir) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "detect_failed" }, .{});
+        return;
+    };
+    const name_hint = detect.nameFromRepo(res.arena, p.repo_url) catch try res.arena.dupe(u8, "");
+    const sub_hint = detect.suggestSubdomain(res.arena, name_hint) catch try res.arena.dupe(u8, "");
+
+    try res.json(.{
+        .ok = true,
+        .suggested_name = name_hint,
+        .suggested_subdomain = sub_hint,
+        .runtime = sug.runtime,
+        .install_cmd = sug.install_cmd,
+        .build_cmd = sug.build_cmd,
+        .start_cmd = sug.start_cmd,
+        .publish_dir = sug.publish_dir,
+        .framework_hint = sug.framework_hint,
+    }, .{});
+}
+
+/// List users in the per-project auth DB.
+fn apiProjectsUsers(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{id});
+    // Check db file exists
+    std.fs.accessAbsolute(db_path, .{}) catch {
+        try res.json(.{ .ok = true, .users = &[_]u8{} }, .{});
+        return;
+    };
+
+    const sql =
+        \\.mode json
+        \\SELECT id, email, created_at, last_login FROM users ORDER BY id DESC LIMIT 200;
+        \\
+    ;
+    var argv = [_][]const u8{ "sqlite3", "-batch", db_path };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "spawn_failed" }, .{});
+        return;
+    };
+    if (child.stdin) |stdin| {
+        stdin.writeAll(sql) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+    var stdout_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |stdout| {
+        var rb: [4096]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&rb) catch 0;
+            if (n == 0) break;
+            stdout_buf.appendSlice(rb[0..n]) catch break;
+        }
+    }
+    _ = child.wait() catch {};
+
+    res.content_type = .JSON;
+    var out = std.ArrayList(u8).init(res.arena);
+    try out.appendSlice("{\"ok\":true,\"users\":");
+    const trimmed = std.mem.trim(u8, stdout_buf.items, " \t\r\n");
+    try out.appendSlice(if (trimmed.len > 0) trimmed else "[]");
+    try out.appendSlice("}");
+    res.body = try out.toOwnedSlice();
+}
+
+/// List tables in the per-project DB. Used to populate the Database tab.
+fn apiProjectsTables(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{id});
+    std.fs.accessAbsolute(db_path, .{}) catch {
+        try res.json(.{ .ok = true, .tables = &[_]u8{} }, .{});
+        return;
+    };
+
+    const sql =
+        \\.mode json
+        \\SELECT name, (SELECT COUNT(*) FROM pragma_table_info(m.name)) as col_count FROM sqlite_master m WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;
+        \\
+    ;
+    var argv = [_][]const u8{ "sqlite3", "-batch", db_path };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        try res.json(.{ .ok = true, .tables = &[_]u8{} }, .{});
+        return;
+    };
+    if (child.stdin) |stdin| {
+        stdin.writeAll(sql) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+    var stdout_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |stdout| {
+        var rb: [4096]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&rb) catch 0;
+            if (n == 0) break;
+            stdout_buf.appendSlice(rb[0..n]) catch break;
+        }
+    }
+    _ = child.wait() catch {};
+
+    res.content_type = .JSON;
+    var out = std.ArrayList(u8).init(res.arena);
+    try out.appendSlice("{\"ok\":true,\"tables\":");
+    const trimmed = std.mem.trim(u8, stdout_buf.items, " \t\r\n");
+    try out.appendSlice(if (trimmed.len > 0) trimmed else "[]");
+    try out.appendSlice("}");
+    res.body = try out.toOwnedSlice();
+}
+
+/// SSE endpoint that streams the build log of a project as it grows. Used by
+/// the wizard's 'deploying...' screen so the operator sees output live.
+fn apiProjectsLogStream(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = app;
+    const q = req.query() catch return res.json(.{ .ok = false, .err = "bad_query" }, .{});
+    const id = q.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const kind = q.get("kind") orelse "build"; // build|runtime|cron
+    if (!isValidProjectId(id)) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
+        return;
+    }
+
+    const log_name: []const u8 = if (std.mem.eql(u8, kind, "runtime"))
+        "runtime.log"
+    else if (std.mem.eql(u8, kind, "cron"))
+        "cron.log"
+    else
+        "build.log";
+
+    const log_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/{s}", .{ id, log_name });
+
+    res.header("Content-Type", "text/event-stream");
+    res.header("Cache-Control", "no-cache");
+    res.header("X-Accel-Buffering", "no");
+
+    var stream = try res.startEventStreamSync();
+
+    // Tail-follow: send what's there now, then poll the file size every 500ms.
+    var offset: u64 = 0;
+    var idle_ticks: u32 = 0;
+    const MAX_IDLE: u32 = 240; // 2 minutes of silence -> close
+    while (idle_ticks < MAX_IDLE) {
+        const file = std.fs.openFileAbsolute(log_path, .{}) catch {
+            // Send a comment so the connection stays warm even if file isn't
+            // there yet (deploy hasn't started).
+            stream.writeAll(":waiting\n\n") catch break;
+            std.Thread.sleep(500 * std.time.ns_per_ms);
+            idle_ticks += 1;
+            continue;
+        };
+        defer file.close();
+
+        const stat = file.stat() catch break;
+        if (stat.size > offset) {
+            const to_read = stat.size - offset;
+            const chunk = std.heap.page_allocator.alloc(u8, to_read) catch break;
+            defer std.heap.page_allocator.free(chunk);
+            file.seekTo(offset) catch break;
+            const n = file.readAll(chunk) catch 0;
+            // Emit as SSE data line(s). Split on newlines so the client gets
+            // one event per line (cleaner UX).
+            var line_iter = std.mem.splitScalar(u8, chunk[0..n], '\n');
+            while (line_iter.next()) |line| {
+                if (line.len == 0) continue;
+                stream.writeAll("data: ") catch return;
+                stream.writeAll(line) catch return;
+                stream.writeAll("\n\n") catch return;
+            }
+            offset += n;
+            idle_ticks = 0;
+        } else {
+            stream.writeAll(":heartbeat\n\n") catch break;
+            idle_ticks += 1;
+        }
+
+        std.Thread.sleep(500 * std.time.ns_per_ms);
+    }
+    stream.writeAll("event: end\ndata: done\n\n") catch {};
 }
