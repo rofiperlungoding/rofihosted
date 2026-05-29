@@ -5700,7 +5700,28 @@ fn projectMimeFromPath(p: []const u8) []const u8 {
 // endpoint. Returns the Identity on success; on missing or invalid auth
 // it writes an error response and returns null. Use the .role/.user_id
 // to authorize per-resource checks.
+//
+// Two auth paths:
+//  - Cookie session (web dashboard): handled via auth.currentIdentity().
+//  - Admin API key (rh CLI, GitHub Actions, MCP, etc): treated as the
+//    legacy admin operator identity.
 fn requireUser(app: *App, req: *httpz.Request, res: *httpz.Response) !?auth.Identity {
+    // Admin API key shortcut.
+    const raw_key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
+    if (raw_key.len > 0) {
+        if (app.apikey.verify(raw_key)) |rec| {
+            if (rec.hasScope(.admin)) {
+                return auth.Identity{
+                    .user_id = "legacy",
+                    .username = rec.name,
+                    .role = .admin,
+                    .status = .active,
+                    .legacy = true,
+                };
+            }
+        }
+    }
+
     if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
         if (ident.status == .pending) {
             res.status = 403;
