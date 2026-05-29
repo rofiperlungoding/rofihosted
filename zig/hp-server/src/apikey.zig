@@ -55,6 +55,9 @@ pub const Record = struct {
     last_used: i64,
     revoked_at: i64,
     scopes_bits: u8,
+    /// Owner of this key. Empty string for legacy keys created before
+    /// multi-tenancy. Tenants only see keys they own; admins see all.
+    owner_id: []const u8 = "",
 
     pub fn hasScope(self: Record, s: Scope) bool {
         const bit = @as(u8, 1) << @intFromEnum(s);
@@ -112,6 +115,7 @@ pub const Manager = struct {
                 last_used: i64 = 0,
                 revoked_at: i64 = 0,
                 scopes: []const []const u8 = &.{},
+                owner_id: []const u8 = "",
             };
             const parsed = std.json.parseFromSlice(Wire, self.allocator, line, .{
                 .allocate = .alloc_always,
@@ -139,6 +143,7 @@ pub const Manager = struct {
                 .last_used = w.last_used,
                 .revoked_at = w.revoked_at,
                 .scopes_bits = bits,
+                .owner_id = try arena.dupe(u8, w.owner_id),
             });
         }
     }
@@ -146,30 +151,7 @@ pub const Manager = struct {
     fn appendToDisk(self: *Manager, rec: Record) !void {
         var buf = std.ArrayList(u8).init(self.allocator);
         defer buf.deinit();
-        const w = buf.writer();
-        try w.writeAll("{\"id\":\"");
-        try w.writeAll(rec.id);
-        try w.writeAll("\",\"name\":\"");
-        for (rec.name) |c| {
-            if (c == '"' or c == '\\') try w.writeByte('\\');
-            try w.writeByte(c);
-        }
-        try w.writeAll("\",\"hash\":\"");
-        try w.writeAll(&rec.hash_hex);
-        try w.print("\",\"created_at\":{d},\"last_used\":{d},\"revoked_at\":{d},\"scopes\":[", .{ rec.created_at, rec.last_used, rec.revoked_at });
-        var first = true;
-        var bits = rec.scopes_bits;
-        var idx: u8 = 0;
-        while (bits != 0) : (idx += 1) {
-            if ((bits & 1) != 0) {
-                if (!first) try w.writeAll(",");
-                first = false;
-                const scope: Scope = @enumFromInt(idx);
-                try w.print("\"{s}\"", .{scope.toString()});
-            }
-            bits >>= 1;
-        }
-        try w.writeAll("]}\n");
+        try writeRecordJsonl(buf.writer(), rec);
 
         const f = try std.fs.createFileAbsolute(KEYS_PATH, .{
             .truncate = false,
@@ -189,30 +171,7 @@ pub const Manager = struct {
         defer buf.deinit();
         for (self.records.items) |r| {
             buf.clearRetainingCapacity();
-            const w = buf.writer();
-            try w.writeAll("{\"id\":\"");
-            try w.writeAll(r.id);
-            try w.writeAll("\",\"name\":\"");
-            for (r.name) |c| {
-                if (c == '"' or c == '\\') try w.writeByte('\\');
-                try w.writeByte(c);
-            }
-            try w.writeAll("\",\"hash\":\"");
-            try w.writeAll(&r.hash_hex);
-            try w.print("\",\"created_at\":{d},\"last_used\":{d},\"revoked_at\":{d},\"scopes\":[", .{ r.created_at, r.last_used, r.revoked_at });
-            var first = true;
-            var bits = r.scopes_bits;
-            var idx: u8 = 0;
-            while (bits != 0) : (idx += 1) {
-                if ((bits & 1) != 0) {
-                    if (!first) try w.writeAll(",");
-                    first = false;
-                    const scope: Scope = @enumFromInt(idx);
-                    try w.print("\"{s}\"", .{scope.toString()});
-                }
-                bits >>= 1;
-            }
-            try w.writeAll("]}\n");
+            try writeRecordJsonl(buf.writer(), r);
             try f.writeAll(buf.items);
         }
         try std.fs.renameAbsolute(tmp, KEYS_PATH);
@@ -242,6 +201,7 @@ pub const Manager = struct {
         self: *Manager,
         name: []const u8,
         scopes: []const Scope,
+        owner_id: []const u8,
     ) ![]u8 {
         var raw_bytes: [RAW_KEY_BYTES]u8 = undefined;
         std.crypto.random.bytes(&raw_bytes);
@@ -275,6 +235,7 @@ pub const Manager = struct {
             .last_used = 0,
             .revoked_at = 0,
             .scopes_bits = bits,
+            .owner_id = try arena.dupe(u8, owner_id),
         };
 
         self.mutex.lock();
@@ -318,7 +279,13 @@ pub const Manager = struct {
     }
 
     /// Public listing for the Settings page. Hash is NEVER returned.
+    /// If owner_filter is non-empty, only return keys with that owner_id
+    /// (or with empty owner_id, treated as legacy admin-owned).
     pub fn listJson(self: *Manager, allocator: std.mem.Allocator) ![]u8 {
+        return self.listJsonFiltered(allocator, null);
+    }
+
+    pub fn listJsonFiltered(self: *Manager, allocator: std.mem.Allocator, owner_filter: ?[]const u8) ![]u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
         var out = std.ArrayList(u8).init(allocator);
@@ -326,6 +293,9 @@ pub const Manager = struct {
         try w.writeAll("{\"ok\":true,\"keys\":[");
         var first = true;
         for (self.records.items) |r| {
+            if (owner_filter) |f| {
+                if (!std.mem.eql(u8, r.owner_id, f)) continue;
+            }
             if (!first) try w.writeAll(",");
             first = false;
             try w.writeAll("{\"id\":\"");
@@ -352,12 +322,70 @@ pub const Manager = struct {
                 }
                 bits >>= 1;
             }
-            try w.writeAll("]}");
+            try w.writeAll("]");
+            if (r.owner_id.len > 0) {
+                try w.writeAll(",\"owner_id\":\"");
+                for (r.owner_id) |c| {
+                    if (c == '"' or c == '\\') try w.writeByte('\\');
+                    try w.writeByte(c);
+                }
+                try w.writeByte('"');
+            }
+            try w.writeByte('}');
         }
         try w.writeAll("]}");
         return out.toOwnedSlice();
     }
+
+    /// Look up the owner_id of a key by id (without exposing hash).
+    /// Used by revoke handler so we can authorize "tenant only revokes
+    /// their own keys".
+    pub fn ownerOf(self: *Manager, key_id: []const u8) ?[]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.records.items) |r| {
+            if (std.mem.eql(u8, r.id, key_id)) return r.owner_id;
+        }
+        return null;
+    }
 };
+
+/// Shared writer used by appendToDisk + rewriteToDisk. Matches the JSON
+/// shape parsed in loadFromDisk so persistence round-trips cleanly.
+fn writeRecordJsonl(w: anytype, r: Record) !void {
+    try w.writeAll("{\"id\":\"");
+    try w.writeAll(r.id);
+    try w.writeAll("\",\"name\":\"");
+    for (r.name) |c| {
+        if (c == '"' or c == '\\') try w.writeByte('\\');
+        try w.writeByte(c);
+    }
+    try w.writeAll("\",\"hash\":\"");
+    try w.writeAll(&r.hash_hex);
+    try w.print("\",\"created_at\":{d},\"last_used\":{d},\"revoked_at\":{d}", .{ r.created_at, r.last_used, r.revoked_at });
+    if (r.owner_id.len > 0) {
+        try w.writeAll(",\"owner_id\":\"");
+        for (r.owner_id) |c| {
+            if (c == '"' or c == '\\') try w.writeByte('\\');
+            try w.writeByte(c);
+        }
+        try w.writeByte('"');
+    }
+    try w.writeAll(",\"scopes\":[");
+    var first = true;
+    var bits = r.scopes_bits;
+    var idx: u8 = 0;
+    while (bits != 0) : (idx += 1) {
+        if ((bits & 1) != 0) {
+            if (!first) try w.writeAll(",");
+            first = false;
+            const scope: Scope = @enumFromInt(idx);
+            try w.print("\"{s}\"", .{scope.toString()});
+        }
+        bits >>= 1;
+    }
+    try w.writeAll("]}\n");
+}
 
 test "scope bits roundtrip" {
     var bits: u8 = 0;

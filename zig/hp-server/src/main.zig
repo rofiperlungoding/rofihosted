@@ -663,7 +663,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/dbcache/stats")) return apiDbCacheStats(app, res);
     if (std.mem.eql(u8, path, "/api/dbcache/sync")) return apiDbCacheSync(app, req, res);
     if (std.mem.eql(u8, path, "/api/dbpool/stats")) return apiDbPoolStats(app, res);
-    if (std.mem.eql(u8, path, "/api/apikeys")) return apiApikeysList(app, res);
+    if (std.mem.eql(u8, path, "/api/apikeys")) return apiApikeysList(app, req, res);
     if (std.mem.eql(u8, path, "/api/apikeys/create")) return apiApikeysCreate(app, req, res);
     if (std.mem.eql(u8, path, "/api/apikeys/revoke")) return apiApikeysRevoke(app, req, res);
     if (std.mem.eql(u8, path, "/api/webhooks")) return apiWebhooksList(app, res);
@@ -708,6 +708,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.startsWith(u8, path, "/api/projects/users")) return apiProjectsUsers(app, req, res);
     if (std.mem.startsWith(u8, path, "/api/projects/tables")) return apiProjectsTables(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/log-stream")) return apiProjectsLogStream(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/transfer")) return apiProjectsTransfer(app, req, res);
     if (std.mem.eql(u8, path, "/api/hosted/stats")) return apiHostedStats(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/list")) return apiHostedList(app, res);
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
@@ -3972,11 +3973,11 @@ fn handleMcp(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         try mcpJsonError(res, "null", -32002, "invalid api key");
         return;
     };
-    if (!rec.hasScope(.admin)) {
-        res.status = 403;
-        try mcpJsonError(res, "null", -32003, "admin scope required");
-        return;
-    }
+    // Either admin or a regular per-tenant key. We allow both, but the
+    // tools dispatcher uses the key's owner_id to filter project-scoped
+    // operations so a tenant can only see and act on their own stuff.
+    const is_admin = rec.hasScope(.admin);
+    const caller_owner: []const u8 = if (is_admin) "" else rec.owner_id;
 
     const body_raw = req.body() orelse {
         res.status = 400;
@@ -4028,7 +4029,7 @@ fn handleMcp(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         return;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
-        return handleMcpToolCall(app, req, res, id_json, parsed.value.params);
+        return handleMcpToolCall(app, req, res, id_json, parsed.value.params, caller_owner);
     }
 
     // Unknown method
@@ -4078,7 +4079,7 @@ fn mcpJsonToolText(res: *httpz.Response, id_json: []const u8, text: []const u8, 
     res.body = try buf.toOwnedSlice();
 }
 
-fn handleMcpToolCall(app: *App, req: *httpz.Request, res: *httpz.Response, id_json: []const u8, params_v: ?std.json.Value) !void {
+fn handleMcpToolCall(app: *App, req: *httpz.Request, res: *httpz.Response, id_json: []const u8, params_v: ?std.json.Value, caller_owner: []const u8) !void {
     _ = req;
     const params = params_v orelse {
         try mcpJsonError(res, id_json, -32602, "missing params");
@@ -4100,13 +4101,73 @@ fn handleMcpToolCall(app: *App, req: *httpz.Request, res: *httpz.Response, id_js
     const args_v = params.object.get("arguments");
     const args = if (args_v) |a| (if (a == .object) a.object else std.json.ObjectMap.init(res.arena)) else std.json.ObjectMap.init(res.arena);
 
+    // Tenant gate: caller_owner is "" for admin keys, "u_..." for tenants.
+    const is_admin = caller_owner.len == 0;
+
+    // Tools that are operator-only (system-wide). Tenants get blocked.
+    const ADMIN_ONLY_TOOLS = [_][]const u8{
+        "exec_shell",         "trigger_update", "list_blocked_ips",
+        "block_ip",           "unblock_ip",     "search_audit",
+        "list_recent_visits", "list_backups",   "trigger_backup",
+        "get_system_info",    "get_version",
+    };
+    if (!is_admin) {
+        for (ADMIN_ONLY_TOOLS) |t| {
+            if (std.mem.eql(u8, tool_name, t)) {
+                try mcpJsonError(res, id_json, -32003, "this tool is admin-only");
+                return;
+            }
+        }
+    }
+
+    // For project-scoped tools, verify ownership before dispatching.
+    if (!is_admin) {
+        const PROJECT_TOOLS = [_][]const u8{
+            "get_project_status", "start_project",  "stop_project",     "restart_project",
+            "deploy_project",     "read_build_log", "read_runtime_log", "list_secrets",
+            "set_secret",         "delete_secret",  "query_db",         "exec_db",
+            "list_tables",
+        };
+        var is_project_tool = false;
+        for (PROJECT_TOOLS) |t| {
+            if (std.mem.eql(u8, tool_name, t)) {
+                is_project_tool = true;
+                break;
+            }
+        }
+        if (is_project_tool) {
+            // The id arg can be "id" or "project_id" depending on the tool.
+            var pid: []const u8 = "";
+            if (args.get("id")) |v| if (v == .string) {
+                pid = v.string;
+            };
+            if (pid.len == 0) {
+                if (args.get("project_id")) |v| if (v == .string) {
+                    pid = v.string;
+                };
+            }
+            if (pid.len == 0) {
+                try mcpJsonError(res, id_json, -32602, "id required");
+                return;
+            }
+            const proj = app.projects.getById(pid) orelse {
+                try mcpJsonToolText(res, id_json, "project not found", true);
+                return;
+            };
+            if (!std.mem.eql(u8, proj.owner_id, caller_owner)) {
+                try mcpJsonError(res, id_json, -32003, "forbidden: not your project");
+                return;
+            }
+        }
+    }
+
     // Dispatch
     if (std.mem.eql(u8, tool_name, "get_system_info")) return mcpToolGetSystemInfo(app, res, id_json);
     if (std.mem.eql(u8, tool_name, "get_version")) return mcpToolGetVersion(app, res, id_json);
     if (std.mem.eql(u8, tool_name, "trigger_update")) return mcpToolTriggerUpdate(app, res, id_json);
     if (std.mem.eql(u8, tool_name, "exec_shell")) return mcpToolExecShell(app, res, id_json, args);
 
-    if (std.mem.eql(u8, tool_name, "list_projects")) return mcpToolListProjects(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "list_projects")) return mcpToolListProjects(app, res, id_json, caller_owner);
     if (std.mem.eql(u8, tool_name, "get_project_status")) return mcpToolProjectStatus(app, res, id_json, args);
     if (std.mem.eql(u8, tool_name, "start_project")) return mcpToolProjectAction(app, res, id_json, args, .start);
     if (std.mem.eql(u8, tool_name, "stop_project")) return mcpToolProjectAction(app, res, id_json, args, .stop);
@@ -4272,11 +4333,20 @@ fn mcpToolExecShell(app: *App, res: *httpz.Response, id_json: []const u8, args: 
 
 // ===== project tools =====
 
-fn mcpToolListProjects(app: *App, res: *httpz.Response, id_json: []const u8) !void {
-    const json_blob = try app.projects.listJson(res.arena);
-    var out = std.ArrayList(u8).init(res.arena);
-    try out.writer().print("Project registry (raw JSON):\n{s}", .{json_blob});
-    try mcpJsonToolText(res, id_json, out.items, false);
+fn mcpToolListProjects(app: *App, res: *httpz.Response, id_json: []const u8, owner_filter: []const u8) !void {
+    const all = try app.projects.listSnapshot(res.arena);
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    try w.writeAll("Project registry (raw JSON):\n{\"ok\":true,\"projects\":[");
+    var first = true;
+    for (all) |p| {
+        if (owner_filter.len > 0 and !std.mem.eql(u8, p.owner_id, owner_filter)) continue;
+        if (!first) try w.writeByte(',');
+        first = false;
+        try projects.writeProjectJson(w, p);
+    }
+    try w.writeAll("]}");
+    try mcpJsonToolText(res, id_json, buf.items, false);
 }
 
 fn mcpArgString(args: std.json.ObjectMap, key: []const u8) ?[]const u8 {
@@ -5179,6 +5249,57 @@ fn apiInvitesRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
     try res.json(.{ .ok = true }, .{});
 }
 
+/// Admin-only: transfer a project from one owner to another (or claim a
+/// legacy project that has owner_id == ""). Useful when a tenant signs up
+/// after a project was created on their behalf, or when reorganizing.
+fn apiProjectsTransfer(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const project_id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const new_owner = form.get("owner_id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_owner_id" }, .{});
+        return;
+    };
+
+    // Validate the target user exists (or empty string meaning "unowned").
+    if (new_owner.len > 0) {
+        if (app.users.findById(new_owner) == null) {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "owner_not_found" }, .{});
+            return;
+        }
+    }
+
+    app.projects.setOwner(project_id, new_owner) catch |e| {
+        res.status = 400;
+        const msg = switch (e) {
+            error.NotFound => "project_not_found",
+            else => "transfer_failed",
+        };
+        try res.json(.{ .ok = false, .err = msg }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "project_transfer",
+        .target = project_id,
+        .detail = new_owner,
+        .ok = true,
+    });
+    try res.json(.{ .ok = true }, .{});
+}
+
 // JSON string writer used by the user/invite list endpoints.
 fn writeJsonStr(w: anytype, s: []const u8) !void {
     try w.writeByte('"');
@@ -5374,8 +5495,10 @@ fn v1Execute(app: *App, req: *httpz.Request, res: *httpz.Response, rec: apikey.R
 // =================================================================
 // API KEYS (operator-only Settings page)
 // =================================================================
-fn apiApikeysList(app: *App, res: *httpz.Response) !void {
-    const json_body = app.apikey.listJson(res.arena) catch {
+fn apiApikeysList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireUser(app, req, res)) orelse return;
+    const filter: ?[]const u8 = if (ident.role == .admin) null else ident.user_id;
+    const json_body = app.apikey.listJsonFiltered(res.arena, filter) catch {
         res.status = 500;
         try res.json(.{ .ok = false, .err = "list_failed" }, .{});
         return;
@@ -5385,7 +5508,8 @@ fn apiApikeysList(app: *App, res: *httpz.Response) !void {
 }
 
 fn apiApikeysCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
-    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const ident = (try requireUser(app, req, res)) orelse return;
+    const actor = ident.username;
     const form = req.formData() catch {
         res.status = 400;
         try res.json(.{ .ok = false, .err = "bad_form" }, .{});
@@ -5406,7 +5530,23 @@ fn apiApikeysCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         return;
     }
 
-    const raw = app.apikey.create(name, scopes.items) catch {
+    // Tenants cannot mint admin-scoped keys. That power belongs to the
+    // platform operator only.
+    if (ident.role != .admin) {
+        for (scopes.items) |sc| {
+            if (sc == .admin) {
+                res.status = 403;
+                try res.json(.{ .ok = false, .err = "admin_scope_forbidden" }, .{});
+                return;
+            }
+        }
+    }
+
+    // Owner: legacy admin sessions get "" (no owner_id) so behavior matches
+    // pre-multi-tenant; everyone else gets stamped.
+    const owner = if (ident.legacy) "" else ident.user_id;
+
+    const raw = app.apikey.create(name, scopes.items, owner) catch {
         res.status = 500;
         try res.json(.{ .ok = false, .err = "create_failed" }, .{});
         return;
@@ -5422,7 +5562,8 @@ fn apiApikeysCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
 }
 
 fn apiApikeysRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
-    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const ident = (try requireUser(app, req, res)) orelse return;
+    const actor = ident.username;
     const form = req.formData() catch {
         res.status = 400;
         try res.json(.{ .ok = false, .err = "bad_form" }, .{});
@@ -5433,6 +5574,21 @@ fn apiApikeysRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         try res.json(.{ .ok = false, .err = "missing_id" }, .{});
         return;
     };
+
+    // Tenants can only revoke keys they own. Admins can revoke anything.
+    if (ident.role != .admin) {
+        const owner = app.apikey.ownerOf(id) orelse {
+            res.status = 404;
+            try res.json(.{ .ok = false, .err = "not_found" }, .{});
+            return;
+        };
+        if (!std.mem.eql(u8, owner, ident.user_id)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "forbidden" }, .{});
+            return;
+        }
+    }
+
     const did = app.apikey.revoke(id) catch {
         res.status = 500;
         try res.json(.{ .ok = false, .err = "revoke_failed" }, .{});
@@ -6475,9 +6631,41 @@ fn apiProjectsStart(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         return;
     };
 
-    // Static projects: just flip the registry status. The static serving path
-    // honors .stopped and serves a 'site paused' page instead of the build
-    // output.
+    // Per-user RSS budget pre-check: if the project is owned by a tenant
+    // (not legacy / not admin-owned), make sure starting it doesn't push
+    // the owner past their max_rss_mb. Static projects don't count
+    // because they don't run a process.
+    if (project.runtime != .static and project.owner_id.len > 0) {
+        const owner = app.users.findById(project.owner_id) orelse null;
+        if (owner) |u| {
+            if (u.role != .admin and u.max_rss_mb > 0) {
+                const all = app.projects.listSnapshot(res.arena) catch &[_]projects.Project{};
+                var used: u32 = 0;
+                for (all) |p| {
+                    if (p.runtime == .static) continue;
+                    if (!std.mem.eql(u8, p.owner_id, project.owner_id)) continue;
+                    if (std.mem.eql(u8, p.id, project.id)) continue; // skip self
+                    if (p.status != .running) continue;
+                    used += p.rss_limit_mb;
+                }
+                const total = used + project.rss_limit_mb;
+                if (total > u.max_rss_mb) {
+                    res.status = 403;
+                    try res.json(.{
+                        .ok = false,
+                        .err = "rss_quota_exceeded",
+                        .detail = "starting this project would exceed your RAM budget",
+                        .max_rss_mb = u.max_rss_mb,
+                        .currently_used_mb = used,
+                        .would_use_mb = total,
+                    }, .{});
+                    return;
+                }
+            }
+        }
+    }
+
+    // Static projects: just flip the registry status.
     if (project.runtime == .static) {
         if (project.status == .running) {
             res.status = 400;

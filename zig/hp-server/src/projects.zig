@@ -408,6 +408,23 @@ pub const Manager = struct {
         return allocator.dupe(Project, self.projects.items);
     }
 
+    /// Reassign ownership of a project. Used by admins for transfers and by
+    /// the migration flow to claim legacy (owner_id == "") projects.
+    pub fn setOwner(self: *Manager, id: []const u8, new_owner_id: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const arena = self.arena_state.allocator();
+        for (self.projects.items) |*p| {
+            if (std.mem.eql(u8, p.id, id)) {
+                p.owner_id = try arena.dupe(u8, new_owner_id);
+                p.updated_at = std.time.timestamp();
+                try self.rewriteToDisk();
+                return;
+            }
+        }
+        return error.NotFound;
+    }
+
     pub fn workingDir(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
         return std.fmt.allocPrint(allocator, "{s}/{s}", .{ PROJECTS_DIR, id });
     }
