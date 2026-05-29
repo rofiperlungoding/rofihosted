@@ -6,6 +6,38 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: Tenant API keys + MCP per-user scoping + project transfer + RAM budget (Phase 2.5 - 2.8)
+
+The platform is now fully ready to host multiple developers safely.
+
+**API keys (Phase 2.5):**
+- `Record.owner_id` field. Tenants only see + manage their own keys; admins see all.
+- Tenants cannot mint admin-scoped keys (403 `admin_scope_forbidden`).
+- Revoke gated on owner match (tenant can revoke own keys; admins can revoke any).
+- New `Manager.listJsonFiltered()` and `ownerOf()` helpers.
+
+**MCP per-user scoping (Phase 2.6):**
+- POST `/mcp` accepts both admin and per-tenant API keys. The dispatcher derives `caller_owner` from `rec.owner_id`.
+- Admin-only tools (exec_shell, trigger_update, list_blocked_ips, list_recent_visits, system_info, get_version, list_backups, trigger_backup, search_audit, block_ip, unblock_ip) refuse non-admin callers with `-32003: this tool is admin-only`.
+- Project-scoped tools (start/stop/deploy/secret/db/log) verify `caller_owner == project.owner_id` before dispatching. Cross-tenant access returns `forbidden: not your project`.
+- `list_projects` filters by owner so each tenant sees only their own.
+
+**Project ownership transfer (Phase 2.7):**
+- `Manager.setOwner()` on projects.zig.
+- POST `/api/projects/transfer` (admin-only). Body: `id`, `owner_id`. Empty `owner_id` unowns the project (legacy admin-only state).
+
+**Per-user RAM budget (Phase 2.8):**
+- `apiProjectsStart` pre-checks: when a tenant tries to start a backend project, sum the `rss_limit_mb` of their currently-running backend projects + this project. If total > `user.max_rss_mb`, refuse with `rss_quota_exceeded` and a detailed payload (`max_rss_mb`, `currently_used_mb`, `would_use_mb`).
+- Admins are unlimited. Static projects don't count.
+
+**Verified end-to-end:**
+- Tenant can create / list / revoke own API keys, blocked from admin-scope.
+- Tenant MCP key works for project tools (filtered to own); admin tools rejected.
+- Admin transfer projects to tenants; tenants see them immediately.
+- 96/96 smoke tests across all phases.
+
+Cache busters bumped v=37 -> v=38.
+
 ### Added: Role-aware UI + Telegram alerts + CLI signup (Phase 2.2 + 2.3)
 
 Tenants and admins now see different dashboards from the same console.
