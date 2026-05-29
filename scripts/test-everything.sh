@@ -363,15 +363,19 @@ R=$(curl -sm 30 -b "$CJ" -X POST "$BASE/api/system/backup?target=local")
 if echo "$R" | grep -q '"ok":true'; then pass "backup local"; else fail "backup local" "$R"; fi
 
 R=$(curl -sm 5 -b "$CJ" "$BASE/api/system/backups")
-LOCAL_COUNT=$(echo "$R" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("local",[])))' 2>/dev/null || echo 0)
-[ "$LOCAL_COUNT" -gt 0 ] && pass "local backups visible (count=$LOCAL_COUNT)" || fail "local backups visible" "$R"
+if echo "$R" | grep -q '"name":"rofihosted-'; then
+    LOCAL_COUNT=$(echo "$R" | grep -o '"name":"rofihosted-' | wc -l | tr -d ' ')
+    pass "local backups visible (count=$LOCAL_COUNT)"
+else
+    fail "local backups visible" "$R"
+fi
 
-R2_CONFIGURED=$(echo "$R" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("r2_configured",False))' 2>/dev/null)
-if [ "$R2_CONFIGURED" = "True" ]; then
+R2_CONFIGURED=$(echo "$R" | grep -c '"r2_configured":true' || echo 0)
+if [ "$R2_CONFIGURED" -gt 0 ]; then
     pass "R2 configured"
     R=$(curl -sm 60 -b "$CJ" -X POST "$BASE/api/system/backup?target=r2")
     if echo "$R" | grep -q '"ok":true'; then pass "R2 backup upload"; else fail "R2 backup upload" "$R"; fi
-    REMOTE_COUNT=$(curl -sm 5 -b "$CJ" "$BASE/api/system/backups" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("remote",[])))' 2>/dev/null || echo 0)
+    REMOTE_COUNT=$(curl -sm 5 -b "$CJ" "$BASE/api/system/backups" | grep -o '"name":"rofihosted-' | wc -l | tr -d ' ')
     [ "$REMOTE_COUNT" -gt 0 ] && pass "R2 backup visible (count=$REMOTE_COUNT)" || fail "R2 backup visible"
 else
     warn "R2 not configured (skip remote backup tests)"

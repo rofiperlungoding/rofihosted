@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="id">
 <head>
 <meta charset="utf-8">
@@ -7,60 +7,90 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=32">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=32">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=32">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=33">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=33">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=33">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
-  .dbc-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: .6rem;
-    margin: .6rem 0 .4rem;
+  /* ---- stat grid (db cache) ---- */
+  .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:.5rem; margin:.6rem 0 .4rem; }
+  .stat-cell { background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; padding:.65rem .9rem; }
+  .stat-cell .lbl { font-size:.65rem; color:var(--text-3); text-transform:uppercase; letter-spacing:.07em; font-weight:600; }
+  .stat-cell .val { font-size:1rem; font-weight:600; color:var(--text); font-family:ui-monospace,"SF Mono",Menlo,monospace; margin-top:.2rem; }
+
+  /* ---- scope toggle chips ---- */
+  .scope-chips { display:flex; gap:.5rem; flex-wrap:wrap; margin:.6rem 0; }
+  .scope-chip { position:relative; }
+  .scope-chip input[type=checkbox] { position:absolute; opacity:0; width:0; height:0; }
+  .scope-chip label {
+    display:inline-flex; align-items:center; gap:.4rem;
+    padding:.3rem .75rem; border-radius:6px; cursor:pointer;
+    font-size:.8rem; font-weight:500; user-select:none;
+    border:1px solid var(--border); background:var(--surface);
+    color:var(--text-2); transition:all .15s;
   }
-  .dbc-stat {
-    background: var(--surface-2);
-    border: 1px solid var(--border-soft);
-    border-radius: 8px;
-    padding: .7rem .9rem;
-    display: flex; flex-direction: column; gap: .3rem;
+  .scope-chip input:checked + label {
+    background:var(--accent-soft); border-color:var(--accent);
+    color:var(--accent); font-weight:600;
   }
-  .dbc-stat .label {
-    font-size: .68rem;
-    color: var(--text-3);
-    text-transform: uppercase;
-    letter-spacing: .07em;
-    font-weight: 600;
+  .scope-chip label:hover { border-color:var(--text-3); }
+  .scope-chip .chip-dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.6; }
+
+  /* ---- pill badges ---- */
+  .pill-sm {
+    display:inline-block; padding:.1rem .45rem; border-radius:4px;
+    background:var(--surface-2); font-size:.68rem; margin-right:.2rem;
+    border:1px solid var(--border-soft); font-family:ui-monospace,monospace;
   }
-  .dbc-stat .value {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--text);
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  .pill-sm.admin { background:rgba(167,139,250,.12); border-color:rgba(167,139,250,.4); color:var(--accent); }
+  .pill-sm.sql { background:rgba(16,185,129,.1); border-color:rgba(16,185,129,.3); color:#10b981; }
+
+  /* ---- status badges ---- */
+  .badge-active { color:var(--success); font-weight:600; font-size:.8rem; }
+  .badge-revoked { color:var(--text-3); font-weight:600; font-size:.8rem; }
+
+  /* ---- fresh key display ---- */
+  .fresh-key {
+    background:var(--surface-2); padding:.65rem .9rem; border-radius:6px;
+    font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:.82rem;
+    word-break:break-all; user-select:text; margin-top:.5rem;
+    border:1px solid var(--border-soft);
   }
-  .apikey-create { margin-top: .8rem; }
-  .apikey-scopes { display: flex; gap: 1rem; font-size: .82rem; }
-  .apikey-scopes label { display: flex; align-items: center; gap: .35rem; }
-  .apikey-table {
-    width: 100%; margin-top: 1rem; border-collapse: collapse; font-size: .85rem;
+
+  /* ---- session info card ---- */
+  .info-grid { display:grid; gap:0; }
+  .info-row {
+    display:flex; justify-content:space-between; align-items:baseline;
+    gap:1rem; padding:.55rem 0; border-bottom:1px solid var(--border-soft);
+    font-size:.85rem;
   }
-  .apikey-table th, .apikey-table td {
-    padding: .5rem .65rem; text-align: left; border-bottom: 1px solid var(--border-soft);
+  .info-row:last-child { border-bottom:none; }
+  .info-row .k { color:var(--text-3); font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
+  .info-row .v { font-family:ui-monospace,monospace; font-size:.8rem; color:var(--text); }
+
+  /* ---- version row ---- */
+  .ver-row {
+    display:flex; justify-content:space-between; align-items:baseline;
+    gap:1rem; padding:.5rem 0; border-bottom:1px solid var(--border-soft);
+    font-size:.85rem; flex-wrap:wrap;
   }
-  .apikey-table th { color: var(--text-3); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
-  .apikey-table td { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .8rem; color: var(--text); }
-  .apikey-table .scope-pill {
-    display: inline-block; padding: .1rem .45rem; border-radius: 4px;
-    background: var(--surface-2); font-size: .68rem; margin-right: .25rem;
-    border: 1px solid var(--border-soft);
+  .ver-row:last-child { border-bottom:none; }
+  .ver-row .k { color:var(--text-3); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600; flex-shrink:0; }
+  .ver-row .v { font-family:ui-monospace,monospace; font-size:.8rem; color:var(--text); text-align:right; }
+
+  /* ---- code output panel ---- */
+  .code-out {
+    display:none; font-family:ui-monospace,monospace; font-size:.76rem;
+    padding:.8rem 1rem; background:#0a0a10; color:#d4d4d8;
+    border-radius:6px; white-space:pre-wrap; word-break:break-all;
+    max-height:200px; overflow-y:auto; margin-top:.8rem;
   }
-  .apikey-table .status-active { color: #16a34a; font-weight: 600; }
-  .apikey-table .status-revoked { color: var(--text-3); font-weight: 600; }
-  .apikey-fresh-key {
-    background: var(--surface-2); padding: .6rem .8rem; border-radius: 6px;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85rem;
-    word-break: break-all; user-select: text; margin-top: .5rem;
-  }
+  [data-theme="light"] .code-out { background:#18181b; }
+
+  /* ---- backup tables ---- */
+  .bk-grid { display:grid; gap:1.2rem; grid-template-columns:1fr; }
+  @media (min-width:900px) { .bk-grid { grid-template-columns:1fr 1fr; } }
+  .bk-section h3 { font-size:.82rem; margin:0 0 .5rem; color:var(--text-2); font-weight:600; }
 </style>
 </head>
 <body>
@@ -90,253 +120,260 @@
         <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
         <div class="topbar-text">
           <h1 class="page-title">Settings</h1>
-          <p class="page-subtitle">Manage your account credentials.</p>
+          <p class="page-subtitle">Credentials, security policies, API keys, backups, and system management.</p>
         </div>
       </div>
-      <div class="topbar-actions">
-        <span id="ws-status" class="ws-badge poll"><span class="dot"></span> connecting</span>
-        <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
-          <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-          <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <div class="topbar-right">
+        <span class="ws-badge"><span class="ws-dot"></span>live</span>
+        <button class="theme-toggle" data-action="theme-toggle" aria-label="Toggle theme">
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
         </button>
       </div>
     </div>
 
-    <div id="alert" class="alert" style="display:none"></div>
+    <div class="content">
+      <div id="alert" class="alert" style="display:none"></div>
 
-    <div class="form-card">
-      <h2>Change credentials</h2>
-      <p class="lead">Update your username or password. Existing sessions on other devices stay signed in until they expire (7 days) or you sign out from there.</p>
-      <form method="POST" action="/settings/change" autocomplete="off">
+      <!-- ===== CREDENTIALS ===== -->
+      <div class="form-card">
+        <h2>Credentials</h2>
+        <p class="lead">Update your username or password. Existing sessions stay signed in until they expire (7 days).</p>
+
+        <div class="info-grid" style="margin-bottom:1.2rem">
+          <div class="info-row"><span class="k">Current user</span><span class="v" id="cur-user-2">loading</span></div>
+          <div class="info-row"><span class="k">Session</span><span class="v">cookie, 7-day TTL, HttpOnly + Secure + SameSite=Lax</span></div>
+        </div>
+
+        <form method="POST" action="/settings/change" autocomplete="off">
+          <div class="form-row">
+            <label class="input-label" for="current_password">Current password</label>
+            <input class="input" type="password" id="current_password" name="current_password" required>
+          </div>
+          <div class="form-row">
+            <label class="input-label" for="new_username">New username</label>
+            <input class="input" type="text" id="new_username" name="new_username" required>
+          </div>
+          <div class="form-row">
+            <label class="input-label" for="new_password">New password</label>
+            <input class="input" type="password" id="new_password" name="new_password" required>
+          </div>
+          <div class="submit-row">
+            <button type="submit" class="btn btn-accent"><i class="icon-check"></i><span>Save changes</span></button>
+            <a href="/" class="btn"><span>Cancel</span></a>
+          </div>
+        </form>
+      </div>
+
+      <!-- ===== GEO-BLOCK ===== -->
+      <div class="form-card">
+        <h2>Geo-block</h2>
+        <p class="lead">Drop traffic from countries not in the allow list. Uses Cloudflare's <code>cf-ipcountry</code> header. Authenticated requests and local requests are never blocked.</p>
+        <form id="geoblock-form" autocomplete="off">
+          <div class="form-row inline">
+            <label class="switch">
+              <input type="checkbox" id="geo-enabled" name="enabled">
+              <span>Enable geo-block</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="input-label" for="geo-allow">Allowed country codes</label>
+            <input class="input" type="text" id="geo-allow" name="allow" placeholder="ID, SG, JP" autocapitalize="characters">
+            <p class="hint">Comma or space separated ISO 3166-1 alpha-2 codes. Leave empty to block all (except your session).</p>
+          </div>
+          <div class="submit-row">
+            <button type="submit" class="btn btn-accent"><i class="icon-globe"></i><span>Save geo policy</span></button>
+          </div>
+        </form>
+        <div id="geo-alert" class="alert" style="display:none; margin-top:1rem"></div>
+      </div>
+
+      <!-- ===== HONEYPOT ===== -->
+      <div class="form-card">
+        <h2>Honeypot</h2>
+        <p class="lead">Scanner-classified requests targeting common probe paths (<code>/wp-admin</code>, <code>/.env</code>, etc) get answered with AI-generated decoy content instead of a 403. Requires Mistral API key.</p>
+        <form id="honey-form" autocomplete="off">
+          <div class="form-row inline">
+            <label class="switch">
+              <input type="checkbox" id="honey-enabled" name="enabled">
+              <span>Enable honeypot</span>
+            </label>
+          </div>
+          <p class="hint" id="honey-status" style="margin-top:.4rem">&mdash;</p>
+          <div class="submit-row">
+            <button type="submit" class="btn btn-accent"><i class="icon-ghost"></i><span>Save honeypot</span></button>
+          </div>
+        </form>
+        <div id="honey-alert" class="alert" style="display:none; margin-top:1rem"></div>
+      </div>
+
+      <!-- ===== DATABASE CACHE ===== -->
+      <div class="form-card">
+        <h2>Database cache</h2>
+        <p class="lead">SQLite read-side cache at <code>~/data/cache.db</code>. Makes the AI query bar fast. Auto-syncs every 5 minutes from <code>visits.jsonl</code>.</p>
+        <div class="stat-grid" id="dbcache-grid">
+          <div class="stat-cell"><div class="lbl">Rows cached</div><div class="val" id="dbc-rows">&mdash;</div></div>
+          <div class="stat-cell"><div class="lbl">Sync count</div><div class="val" id="dbc-syncs">&mdash;</div></div>
+          <div class="stat-cell"><div class="lbl">Last sync</div><div class="val" id="dbc-last">&mdash;</div></div>
+          <div class="stat-cell"><div class="lbl">Last duration</div><div class="val" id="dbc-dur">&mdash;</div></div>
+        </div>
+        <div class="submit-row" style="margin-top:.8rem">
+          <button type="button" class="btn btn-accent" id="dbc-sync-btn"><i class="icon-refresh"></i><span>Sync now</span></button>
+        </div>
+        <div id="dbc-alert" class="alert" style="display:none; margin-top:1rem"></div>
+      </div>
+
+
+      <!-- ===== API KEYS ===== -->
+      <div class="form-card">
+        <h2>API keys</h2>
+        <p class="lead">Tokens for <code>/v1/*</code> endpoints. Different from your operator login (which uses cookies).</p>
+        <p class="hint">A new key is shown once at creation. Save it somewhere safe; we only store its hash. Revoke any time, no grace period.</p>
+
         <div class="form-row">
-          <label class="input-label" for="current_password">Current password</label>
-          <input class="input" type="password" id="current_password" name="current_password" required>
+          <label class="input-label" for="apikey-name">Key name</label>
+          <input type="text" id="apikey-name" class="input" placeholder="e.g. kiro-access, laptop-cli" maxlength="64">
         </div>
         <div class="form-row">
-          <label class="input-label" for="new_username">New username</label>
-          <input class="input" type="text" id="new_username" name="new_username" required>
-        </div>
-        <div class="form-row">
-          <label class="input-label" for="new_password">New password</label>
-          <input class="input" type="password" id="new_password" name="new_password" required>
+          <label class="input-label">Scopes</label>
+          <div class="scope-chips">
+            <div class="scope-chip">
+              <input type="checkbox" id="apikey-scope-sql">
+              <label for="apikey-scope-sql"><span class="chip-dot"></span>sql <span style="color:var(--text-3); font-weight:400; font-size:.72rem">(/v1/execute)</span></label>
+            </div>
+            <div class="scope-chip">
+              <input type="checkbox" id="apikey-scope-admin">
+              <label for="apikey-scope-admin"><span class="chip-dot"></span>admin <span style="color:var(--text-3); font-weight:400; font-size:.72rem">(system + shell + deploy)</span></label>
+            </div>
+          </div>
         </div>
         <div class="submit-row">
-          <button type="submit" class="btn btn-accent">
-            <span>Save changes</span>
-            <i class="icon-arrow-right"></i>
-          </button>
-          <a href="/" class="btn"><span>Cancel</span></a>
+          <button type="button" class="btn btn-accent" id="apikey-create-btn"><i class="icon-key"></i><span>Create key</span></button>
         </div>
-      </form>
-    </div>
 
-    <div class="session-card">
-      <div class="row"><span class="k">Current user</span><span class="v" id="cur-user-2">loading</span></div>
-      <div class="row"><span class="k">Session</span><span class="v">cookie based, 7 day TTL</span></div>
-      <div class="row"><span class="k">Cookie</span><span class="v">HttpOnly, Secure, SameSite=Lax</span></div>
-    </div>
+        <div id="apikey-fresh" class="alert" style="display:none; margin-top:1rem"></div>
 
-    <div class="form-card">
-      <h2>Geo-block</h2>
-      <p class="lead">Optionally drop traffic from countries that are not in the allow list. Uses Cloudflare's <code>cf-ipcountry</code> header. Authenticated requests (you) and local requests are never blocked. Self-locking is impossible.</p>
-      <form id="geoblock-form" autocomplete="off">
-        <div class="form-row inline">
-          <label class="switch">
-            <input type="checkbox" id="geo-enabled" name="enabled">
-            <span>Enable geo-block</span>
-          </label>
+        <table class="table" id="apikey-table" style="display:none; margin-top:1rem; font-size:.82rem">
+          <thead><tr><th>Name</th><th>Scopes</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+          <tbody id="apikey-rows"></tbody>
+        </table>
+        <div id="apikey-empty" class="hint">No API keys yet.</div>
+      </div>
+
+      <!-- ===== WEBHOOKS ===== -->
+      <div class="form-card">
+        <h2>Webhooks</h2>
+        <p class="lead">Outbound HTTP POST when internal events fire. Push <code>blocklist_change</code> alerts to Telegram, Discord, Pushover, or your own automation.</p>
+        <p class="hint">Events: <code>visit</code>, <code>login_attempt</code>, <code>blocklist_change</code>, <code>digest_ready</code>, <code>tunnel_health</code>, <code>anomaly_detected</code>, <code>rule_fired</code>. Best-effort, 5s timeout, no retry.</p>
+
+        <div class="form-row">
+          <label class="input-label" for="wh-name">Name</label>
+          <input type="text" id="wh-name" class="input" placeholder="e.g. telegram-alerts" maxlength="64">
         </div>
         <div class="form-row">
-          <label class="input-label" for="geo-allow">Allowed country codes</label>
-          <input class="input" type="text" id="geo-allow" name="allow" placeholder="ID, SG, JP" autocapitalize="characters">
-          <p class="hint">Comma or space separated ISO 3166-1 alpha-2 codes. Leave empty to block all (except your authenticated session).</p>
+          <label class="input-label" for="wh-url">URL</label>
+          <input type="text" id="wh-url" class="input" placeholder="https://example.com/hook">
+        </div>
+        <div class="form-row">
+          <label class="input-label" for="wh-events">Events</label>
+          <input type="text" id="wh-events" class="input" placeholder="anomaly_detected, blocklist_change">
         </div>
         <div class="submit-row">
-          <button type="submit" class="btn btn-accent"><span>Save geo policy</span><i class="icon-arrow-right"></i></button>
+          <button type="button" class="btn btn-accent" id="wh-create-btn"><i class="icon-link"></i><span>Create webhook</span></button>
         </div>
-      </form>
-      <div id="geo-alert" class="alert" style="display:none; margin-top: 1rem"></div>
-    </div>
 
-    <div class="form-card">
-      <h2>Honeypot</h2>
-      <p class="lead">When enabled, scanner-classified requests targeting common probe paths (<code>/wp-admin</code>, <code>/.env</code>, <code>/.git/config</code>, etc) get answered with AI-generated decoy content instead of a 403. All decoys contain only obviously fake placeholder values. Off by default. Requires the Mistral API key.</p>
-      <form id="honey-form" autocomplete="off">
-        <div class="form-row inline">
-          <label class="switch">
-            <input type="checkbox" id="honey-enabled" name="enabled">
-            <span>Enable honeypot</span>
-          </label>
+        <div id="wh-alert" class="alert" style="display:none; margin-top:1rem"></div>
+
+        <table class="table" id="wh-table" style="display:none; margin-top:1rem; font-size:.82rem">
+          <thead><tr><th>Name</th><th>URL</th><th>Events</th><th>Fires</th><th>Last status</th><th></th></tr></thead>
+          <tbody id="wh-rows"></tbody>
+        </table>
+        <div id="wh-empty" class="hint">No webhooks yet.</div>
+      </div>
+
+
+      <!-- ===== SYSTEM ===== -->
+      <div class="form-card">
+        <h2>System</h2>
+        <p class="lead">Pull the latest code from GitHub, rebuild, and validate backups. No SSH required.</p>
+
+        <div style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:1rem">
+          <div class="ver-row"><span class="k">Running</span><span class="v" id="sv-local">--</span></div>
+          <div class="ver-row"><span class="k">Latest on GitHub</span><span class="v" id="sv-remote">--</span></div>
+          <div id="sv-uptodate" style="display:none; color:var(--success); font-size:.78rem; font-weight:500; padding-top:.4rem"><i class="icon-check"></i> Up to date</div>
+          <div id="sv-behind" style="display:none; color:var(--warning); font-size:.78rem; font-weight:500; padding-top:.4rem"><i class="icon-arrow-up"></i> Update available</div>
         </div>
-        <p class="hint" id="honey-status">&mdash;</p>
+
         <div class="submit-row">
-          <button type="submit" class="btn btn-accent"><span>Save honeypot</span><i class="icon-arrow-right"></i></button>
+          <button type="button" class="btn btn-accent" id="sys-update-btn"><i class="icon-cloud-download"></i><span>Pull latest and rebuild</span></button>
+          <button type="button" class="btn" id="sys-version-refresh"><i class="icon-refresh"></i><span>Refresh</span></button>
+          <button type="button" class="btn" id="sys-restore-test-btn"><i class="icon-shield"></i><span>Validate backup</span></button>
         </div>
-      </form>
-      <div id="honey-alert" class="alert" style="display:none; margin-top: 1rem"></div>
-    </div>
 
-    <div class="form-card">
-      <h2>Database cache</h2>
-      <p class="lead">SQLite read-side cache at <code>~/data/cache.db</code>. JSONL stays the source of truth, this just makes the AI query bar fast. Auto-syncs every 5 minutes from <code>visits.jsonl</code>. WAL mode + synchronous=NORMAL = Android-safe.</p>
-      <div class="dbc-stats" id="dbcache-grid">
-        <div class="dbc-stat"><span class="label">Rows cached</span><span class="value" id="dbc-rows">&mdash;</span></div>
-        <div class="dbc-stat"><span class="label">Sync count</span><span class="value" id="dbc-syncs">&mdash;</span></div>
-        <div class="dbc-stat"><span class="label">Last sync</span><span class="value" id="dbc-last">&mdash;</span></div>
-        <div class="dbc-stat"><span class="label">Last duration</span><span class="value" id="dbc-dur">&mdash;</span></div>
-      </div>
-      <div class="submit-row" style="margin-top: 1rem">
-        <button type="button" class="btn btn-accent" id="dbc-sync-btn"><span>Sync now</span><i class="icon-refresh"></i></button>
-      </div>
-      <div id="dbc-alert" class="alert" style="display:none; margin-top: 1rem"></div>
-    </div>
-
-    <div class="form-card">
-      <h2>API keys</h2>
-      <p class="lead">Tokens that authorize your other apps and scripts to talk to <code>/v1/*</code> endpoints. Different from your operator login (which uses cookies). Scopes: <code>sql</code> (SQLite queries via <code>/v1/execute</code>), <code>admin</code> (system ops, shell exec, rebuild, deploy — same power as operator login, use carefully).</p>
-      <p class="hint">A new key is shown once at creation. Save it somewhere safe; we only store its hash. Revoke any time, no grace period.</p>
-
-      <div class="apikey-create">
-        <input type="text" id="apikey-name" class="input" placeholder="Name (e.g. laptop-cli)" maxlength="64" style="margin-bottom:.6rem">
-        <div class="apikey-scopes">
-          <label><input type="checkbox" id="apikey-scope-sql"> sql</label>
-          <label><input type="checkbox" id="apikey-scope-admin"> <strong>admin</strong> <span style="color:var(--text-3); font-size:.72rem">(system + shell + deploy)</span></label>
-        </div>
-        <div class="submit-row" style="margin-top: .8rem">
-          <button type="button" class="btn btn-accent" id="apikey-create-btn"><span>Create key</span><i class="icon-key"></i></button>
-        </div>
+        <div id="sys-alert" class="alert" style="display:none; margin-top:1rem"></div>
+        <div class="code-out" id="sys-update-output"></div>
       </div>
 
-      <div id="apikey-fresh" class="alert" style="display:none; margin-top: 1rem"></div>
+      <!-- ===== BACKUPS ===== -->
+      <div class="form-card">
+        <h2>Backups</h2>
+        <p class="lead">Snapshot the irreplaceable bits (registry, project DBs, encrypted secrets vaults) into a tarball. Local copies kept in <code>~/backups/</code>; R2 copies pushed offsite hourly. Run <code>bash ~/r2-setup.sh</code> from Shell to wire R2 credentials.</p>
 
-      <table class="apikey-table" id="apikey-table" style="display:none">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Scopes</th>
-            <th>Created</th>
-            <th>Last used</th>
-            <th>Status</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="apikey-rows"></tbody>
-      </table>
-      <div id="apikey-empty" class="hint">No API keys yet.</div>
-    </div>
+        <div class="submit-row" style="margin-bottom:1rem">
+          <button type="button" class="btn btn-accent" id="backup-now-local"><i class="icon-cloud-download"></i><span>Backup local</span></button>
+          <button type="button" class="btn btn-accent" id="backup-now-r2"><i class="icon-cloud-upload"></i><span>Backup to R2</span></button>
+          <button type="button" class="btn" id="backup-refresh"><i class="icon-refresh"></i><span>Refresh</span></button>
+        </div>
 
-    <div class="form-card">
-      <h2>Webhooks</h2>
-      <p class="lead">Outbound HTTP POST when internal events fire. Use this to push <code>blocklist_change</code> alerts to Telegram, Discord, your phone via Pushover, or your own automation. The payload envelope is <code>{event, ts, payload}</code>.</p>
-      <p class="hint">Valid events: <code>visit</code>, <code>login_attempt</code>, <code>blocklist_change</code>, <code>digest_ready</code>, <code>tunnel_health</code>, <code>anomaly_detected</code>, <code>rule_fired</code>. Best-effort, no retry queue. 5 second timeout.</p>
+        <div id="backup-alert" class="alert" style="display:none; margin-bottom:1rem"></div>
 
-      <div class="webhook-create">
-        <input type="text" id="wh-name" class="input" placeholder="Name (e.g. telegram-alerts)" maxlength="64">
-        <input type="text" id="wh-url" class="input" placeholder="https://example.com/hook" style="margin-top:.6rem">
-        <input type="text" id="wh-events" class="input" placeholder="Events, comma-separated (e.g. anomaly_detected,blocklist_change)" style="margin-top:.6rem">
-        <div class="submit-row" style="margin-top: .8rem">
-          <button type="button" class="btn btn-accent" id="wh-create-btn"><span>Create webhook</span><i class="icon-link"></i></button>
+        <div class="bk-grid">
+          <div class="bk-section">
+            <h3>Local <span id="bk-local-count" style="color:var(--text-3); font-weight:400; font-size:.72rem"></span></h3>
+            <table id="bk-local-table" class="table" style="font-size:.8rem">
+              <thead><tr><th>name</th><th style="text-align:right">size</th><th style="text-align:right">when</th></tr></thead>
+              <tbody id="bk-local-rows"></tbody>
+            </table>
+            <div id="bk-local-empty" class="hint">No local backups yet.</div>
+          </div>
+          <div class="bk-section">
+            <h3>Cloudflare R2 <span id="bk-r2-count" style="color:var(--text-3); font-weight:400; font-size:.72rem"></span></h3>
+            <table id="bk-r2-table" class="table" style="font-size:.8rem">
+              <thead><tr><th>name</th><th style="text-align:right">size</th></tr></thead>
+              <tbody id="bk-r2-rows"></tbody>
+            </table>
+            <div id="bk-r2-empty" class="hint">R2 not configured. Open <a href="/shell">Shell</a> and run <code>bash ~/r2-setup.sh</code>.</div>
+          </div>
         </div>
       </div>
 
-      <div id="wh-alert" class="alert" style="display:none; margin-top: 1rem"></div>
-
-      <table class="apikey-table" id="wh-table" style="display:none">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>URL</th>
-            <th>Events</th>
-            <th>Fires</th>
-            <th>Last status</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="wh-rows"></tbody>
-      </table>
-      <div id="wh-empty" class="hint">No webhooks yet.</div>
-    </div>
-
-    <div class="form-card">
-      <h2>System</h2>
-      <p class="lead">Manage the hp-server itself: see what's running, pull the latest code from GitHub, and validate that backups are restorable. No SSH required.</p>
-
-      <div id="sys-version" style="display:grid; gap:.6rem; grid-template-columns:1fr; padding:.9rem 1.1rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; margin-bottom:1rem; font-size:.85rem">
-        <div style="display:flex; justify-content:space-between; gap:1rem; align-items:baseline; flex-wrap:wrap">
-          <span style="color:var(--text-3); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600">Running</span>
-          <span style="font-family:ui-monospace,monospace" id="sv-local">--</span>
+      <!-- ===== OPERATOR RULES ===== -->
+      <div class="form-card">
+        <h2>Operator rules</h2>
+        <p class="lead">Define event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and actions (<code>block</code>, <code>log</code>, <code>increment</code>).</p>
+        <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
+        <textarea id="rules-json" class="input" style="height:260px; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.8rem; resize:vertical" spellcheck="false"></textarea>
+        <div class="submit-row" style="margin-top:.8rem">
+          <button type="button" class="btn btn-accent" id="rules-save"><i class="icon-check"></i><span>Save rules</span></button>
+          <button type="button" class="btn" id="rules-reload"><i class="icon-refresh"></i><span>Reload</span></button>
         </div>
-        <div style="display:flex; justify-content:space-between; gap:1rem; align-items:baseline; flex-wrap:wrap">
-          <span style="color:var(--text-3); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600">Latest on GitHub</span>
-          <span style="font-family:ui-monospace,monospace" id="sv-remote">--</span>
-        </div>
-        <div id="sv-uptodate" style="display:none; color:var(--success); font-size:.78rem; font-weight:500">Up to date</div>
-        <div id="sv-behind" style="display:none; color:var(--warning); font-size:.78rem; font-weight:500">Update available</div>
+        <div id="rules-alert" class="alert" style="display:none; margin-top:1rem"></div>
+        <div id="rules-counters" class="hint" style="margin-top:.8rem; font-family:ui-monospace,monospace"></div>
       </div>
 
-      <div style="display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem">
-        <button type="button" class="btn btn-accent" id="sys-update-btn"><i class="icon-cloud-download"></i><span>Pull latest and rebuild</span></button>
-        <button type="button" class="btn" id="sys-version-refresh"><i class="icon-refresh"></i><span>Refresh</span></button>
-        <button type="button" class="btn" id="sys-restore-test-btn"><i class="icon-shield"></i><span>Validate backup</span></button>
-      </div>
-
-      <div id="sys-alert" class="alert" style="display:none; margin-bottom:1rem"></div>
-      <div id="sys-update-output" style="display:none; font-family:ui-monospace,monospace; font-size:.78rem; padding:.8rem 1rem; background:#0a0a10; color:#d4d4d8; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto"></div>
-    </div>
-
-    <div class="form-card">
-      <h2>Backups</h2>
-      <p class="lead">Snapshot the irreplaceable bits (registry, project DBs, encrypted secrets vaults) into a tarball. Local copies are kept in <code>~/backups/</code>; if Cloudflare R2 is configured, a copy is also pushed offsite. Run <code>~/r2-setup.sh</code> from the Shell page once to wire R2 credentials.</p>
-
-      <div style="display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem">
-        <button type="button" class="btn btn-accent" id="backup-now-local"><i class="icon-cloud-download"></i><span>Backup local now</span></button>
-        <button type="button" class="btn btn-accent" id="backup-now-r2"><i class="icon-cloud-upload"></i><span>Backup to R2 now</span></button>
-        <button type="button" class="btn" id="backup-refresh"><i class="icon-refresh"></i><span>Refresh list</span></button>
-      </div>
-
-      <div id="backup-alert" class="alert" style="display:none; margin-bottom: 1rem"></div>
-
-      <div style="display:grid; gap: 1rem; grid-template-columns: 1fr;" id="backup-grid">
-        <div>
-          <h3 style="font-size:.85rem; margin: 0 0 .5rem; color: var(--text-2)">Local <span id="bk-local-count" style="color: var(--text-3); font-weight: 400; font-size: .76rem"></span></h3>
-          <table id="bk-local-table" class="table" style="font-size: .82rem">
-            <thead><tr><th>name</th><th style="text-align:right">size</th><th style="text-align:right">when</th></tr></thead>
-            <tbody id="bk-local-rows"></tbody>
-          </table>
-          <div id="bk-local-empty" class="hint">No local backups yet.</div>
-        </div>
-        <div>
-          <h3 style="font-size:.85rem; margin: 0 0 .5rem; color: var(--text-2)">Cloudflare R2 <span id="bk-r2-count" style="color: var(--text-3); font-weight: 400; font-size: .76rem"></span></h3>
-          <table id="bk-r2-table" class="table" style="font-size: .82rem">
-            <thead><tr><th>name</th><th style="text-align:right">size</th></tr></thead>
-            <tbody id="bk-r2-rows"></tbody>
-          </table>
-          <div id="bk-r2-empty" class="hint">R2 not configured yet. Open <a href="/shell">Shell</a> and run <code>bash ~/r2-setup.sh</code>.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="form-card">
-      <h2>Operator rules</h2>
-      <p class="lead">Define your own event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and a list of actions. Actions are limited to <code>block</code>, <code>log</code>, and <code>increment</code>. Single-user, no sandboxing nightmare. Stored in <code>~/.hp-server-rules.jsonl</code>.</p>
-      <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
-      <textarea id="rules-json" class="input" style="height: 280px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .82rem; resize: vertical" spellcheck="false"></textarea>
-      <div class="submit-row" style="margin-top: 1rem">
-        <button type="button" class="btn btn-accent" id="rules-save"><span>Save rules</span><i class="icon-arrow-right"></i></button>
-        <button type="button" class="btn" id="rules-reload"><span>Reload from server</span></button>
-      </div>
-      <div id="rules-alert" class="alert" style="display:none; margin-top: 1rem"></div>
-      <div id="rules-counters" class="hint" style="margin-top: 1rem; font-family: ui-monospace, 'SF Mono', Menlo, monospace"></div>
-    </div>
+    </div><!-- .content -->
   </main>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=32"></script>
-<script src="https://rofihosted.space/app.js?v=32"></script>
+
+<script src="https://rofihosted.space/theme.js?v=33"></script>
+<script src="https://rofihosted.space/app.js?v=33"></script>
 <script>
   (function () {
-    const params = new URLSearchParams(location.search);
-    const alertEl = document.getElementById('alert');
+    RH.loadCurrentUser();
+
+    var params = new URLSearchParams(location.search);
+    var alertEl = document.getElementById('alert');
     if (params.get('ok') === '1') {
       alertEl.className = 'alert success';
       alertEl.innerHTML = '<i class="icon-check"></i> Credentials updated. Your session is renewed.';
@@ -346,502 +383,238 @@
       alertEl.innerHTML = '<i class="icon-exclamation"></i> Current password incorrect, or new fields invalid.';
       alertEl.style.display = '';
     }
+
     fetch('/api/me').then(function (r) { return r.json(); }).then(function (j) {
-      document.getElementById('cur-user').textContent = j.username || 'unknown';
-      document.getElementById('cur-user-2').textContent = j.username || 'unknown';
+      var el = document.getElementById('cur-user-2');
+      if (el) el.textContent = j.username || 'unknown';
     }).catch(function () {});
 
-    // Geo-block load + save
-    const enabledEl = document.getElementById('geo-enabled');
-    const allowEl = document.getElementById('geo-allow');
-    const geoAlert = document.getElementById('geo-alert');
+    // ---- helpers ----
+    function fmtTs(t) {
+      if (!t) return '\u2014';
+      return new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+    }
+    function fmtAgo(ts) {
+      var ago = Math.floor(Date.now() / 1000 - ts);
+      if (ago < 60) return ago + 's ago';
+      if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
+      if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+      return Math.floor(ago / 86400) + 'd ago';
+    }
+    function fmtSize(b) {
+      if (b < 1024) return b + ' B';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+      return (b / 1048576).toFixed(1) + ' MB';
+    }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+      });
+    }
+    function showAlert(id, msg, kind) {
+      var a = document.getElementById(id);
+      a.className = 'alert ' + (kind || '');
+      a.innerHTML = '<i class="icon-' + (kind === 'success' ? 'check' : 'exclamation') + '"></i> ' + msg;
+      a.style.display = '';
+    }
+
+    // ---- geo-block ----
     fetch('/api/geoblock').then(function (r) { return r.json(); }).then(function (j) {
       if (!j.ok) return;
-      enabledEl.checked = !!j.enabled;
-      allowEl.value = (j.allow || []).join(', ');
+      document.getElementById('geo-enabled').checked = !!j.enabled;
+      document.getElementById('geo-allow').value = (j.allow || []).join(', ');
     }).catch(function () {});
 
     document.getElementById('geoblock-form').addEventListener('submit', function (e) {
       e.preventDefault();
-      const fd = new FormData();
-      fd.append('enabled', enabledEl.checked ? 'on' : 'off');
-      fd.append('allow', allowEl.value);
+      var fd = new FormData();
+      fd.append('enabled', document.getElementById('geo-enabled').checked ? 'on' : 'off');
+      fd.append('allow', document.getElementById('geo-allow').value);
       fetch('/api/geoblock/update', { method: 'POST', body: fd })
         .then(function (r) { return r.json(); })
         .then(function (j) {
-          if (j.ok) {
-            geoAlert.className = 'alert success';
-            geoAlert.innerHTML = '<i class="icon-check"></i> Geo policy saved.';
-          } else {
-            geoAlert.className = 'alert error';
-            geoAlert.innerHTML = '<i class="icon-exclamation"></i> Could not save (' + (j.err || 'unknown') + ').';
-          }
-          geoAlert.style.display = '';
-        })
-        .catch(function () {
-          geoAlert.className = 'alert error';
-          geoAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
-          geoAlert.style.display = '';
-        });
+          showAlert('geo-alert', j.ok ? 'Geo policy saved.' : 'Could not save: ' + (j.err || 'unknown'), j.ok ? 'success' : 'error');
+        }).catch(function () { showAlert('geo-alert', 'Network error.', 'error'); });
     });
 
-    // Honeypot toggle
-    const honeyEl = document.getElementById('honey-enabled');
-    const honeyAlert = document.getElementById('honey-alert');
-    const honeyStatus = document.getElementById('honey-status');
+    // ---- honeypot ----
     fetch('/api/honeypot').then(function (r) { return r.json(); }).then(function (j) {
       if (!j.ok) return;
-      honeyEl.checked = !!j.enabled;
-      honeyStatus.textContent = (j.cached_responses || 0) + ' decoy response(s) cached so far.';
+      document.getElementById('honey-enabled').checked = !!j.enabled;
+      document.getElementById('honey-status').textContent = (j.cached_responses || 0) + ' decoy response(s) cached.';
     }).catch(function () {});
 
     document.getElementById('honey-form').addEventListener('submit', function (e) {
       e.preventDefault();
-      const fd = new FormData();
-      fd.append('enabled', honeyEl.checked ? 'on' : 'off');
+      var fd = new FormData();
+      fd.append('enabled', document.getElementById('honey-enabled').checked ? 'on' : 'off');
       fetch('/api/honeypot/update', { method: 'POST', body: fd })
         .then(function (r) { return r.json(); })
         .then(function (j) {
-          if (j.ok) {
-            honeyAlert.className = 'alert success';
-            honeyAlert.innerHTML = '<i class="icon-check"></i> Honeypot setting saved.';
-          } else {
-            honeyAlert.className = 'alert error';
-            honeyAlert.innerHTML = '<i class="icon-exclamation"></i> Could not save (' + (j.err || 'unknown') + ').';
-          }
-          honeyAlert.style.display = '';
-        })
-        .catch(function () {
-          honeyAlert.className = 'alert error';
-          honeyAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
-          honeyAlert.style.display = '';
-        });
+          showAlert('honey-alert', j.ok ? 'Honeypot setting saved.' : 'Could not save: ' + (j.err || 'unknown'), j.ok ? 'success' : 'error');
+        }).catch(function () { showAlert('honey-alert', 'Network error.', 'error'); });
     });
 
-    // DB cache panel
-    const dbcAlert = document.getElementById('dbc-alert');
-    function fmtAgo(ts) {
-      if (!ts) return 'never';
-      const ago = Math.floor(Date.now() / 1000 - ts);
-      if (ago < 60) return ago + 's ago';
-      if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
-      if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
-      return Math.floor(ago / 86400) + 'd ago';
-    }
-    function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+    // ---- db cache ----
     function loadDbcStats() {
       fetch('/api/dbcache/stats').then(function (r) { return r.json(); }).then(function (j) {
         if (!j.ok) return;
-        setText('dbc-rows', (j.row_count || 0).toLocaleString());
-        setText('dbc-syncs', j.sync_count || 0);
-        setText('dbc-last', fmtAgo(j.last_sync_at || 0));
-        setText('dbc-dur', (j.last_sync_duration_ms || 0) + ' ms');
+        document.getElementById('dbc-rows').textContent = (j.row_count || 0).toLocaleString();
+        document.getElementById('dbc-syncs').textContent = j.sync_count || 0;
+        document.getElementById('dbc-last').textContent = fmtAgo(j.last_sync_at || 0);
+        document.getElementById('dbc-dur').textContent = (j.last_sync_duration_ms || 0) + ' ms';
       }).catch(function () {});
     }
     document.getElementById('dbc-sync-btn').addEventListener('click', function () {
-      const btn = document.getElementById('dbc-sync-btn');
-      btn.disabled = true;
-      dbcAlert.style.display = 'none';
+      var btn = this; btn.disabled = true;
       fetch('/api/dbcache/sync').then(function (r) { return r.json(); }).then(function (j) {
-        if (j.ok) {
-          dbcAlert.className = 'alert success';
-          dbcAlert.innerHTML = '<i class="icon-check"></i> Synced ' + (j.rows_synced || 0) + ' new row(s).';
-          loadDbcStats();
-        } else {
-          dbcAlert.className = 'alert error';
-          dbcAlert.innerHTML = '<i class="icon-exclamation"></i> Sync failed: ' + (j.err || 'unknown');
-        }
-        dbcAlert.style.display = '';
-      }).catch(function () {
-        dbcAlert.className = 'alert error';
-        dbcAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
-        dbcAlert.style.display = '';
-      }).finally(function () {
         btn.disabled = false;
-      });
+        showAlert('dbc-alert', j.ok ? 'Synced ' + (j.rows_synced || 0) + ' new row(s).' : 'Sync failed: ' + (j.err || 'unknown'), j.ok ? 'success' : 'error');
+        loadDbcStats();
+      }).catch(function () { btn.disabled = false; showAlert('dbc-alert', 'Network error.', 'error'); });
     });
     loadDbcStats();
     setInterval(loadDbcStats, 30000);
 
-    // API keys
-    const apikeyRows = document.getElementById('apikey-rows');
-    const apikeyTable = document.getElementById('apikey-table');
-    const apikeyEmpty = document.getElementById('apikey-empty');
-    const apikeyFresh = document.getElementById('apikey-fresh');
-    const apikeyName = document.getElementById('apikey-name');
-    const apikeyCreateBtn = document.getElementById('apikey-create-btn');
-    const apikeyScopeSql = document.getElementById('apikey-scope-sql');
-    const apikeyScopeAdmin = document.getElementById('apikey-scope-admin');
 
-    function fmtTs(t) {
-      if (!t) return '\u2014';
-      const d = new Date(t * 1000);
-      return d.toISOString().slice(0, 16).replace('T', ' ');
-    }
-    function escapeHtmlS(s) {
-      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-      });
-    }
-
+    // ---- API keys ----
     function renderApikeys(keys) {
-      apikeyRows.innerHTML = '';
-      if (!keys || keys.length === 0) {
-        apikeyTable.style.display = 'none';
-        apikeyEmpty.style.display = '';
-        return;
-      }
-      apikeyEmpty.style.display = 'none';
-      apikeyTable.style.display = '';
+      var rows = document.getElementById('apikey-rows');
+      var table = document.getElementById('apikey-table');
+      var empty = document.getElementById('apikey-empty');
+      rows.innerHTML = '';
+      if (!keys || !keys.length) { table.style.display = 'none'; empty.style.display = ''; return; }
+      empty.style.display = 'none'; table.style.display = '';
       keys.forEach(function (k) {
-        const tr = document.createElement('tr');
-        const scopeHtml = (k.scopes || []).map(function (s) { return '<span class="scope-pill">' + escapeHtmlS(s) + '</span>'; }).join('');
-        const statusHtml = k.revoked
-          ? '<span class="status-revoked">revoked</span>'
-          : '<span class="status-active">active</span>';
-        const action = k.revoked
-          ? ''
-          : '<button type="button" class="btn btn-sm" data-id="' + escapeHtmlS(k.id) + '">Revoke</button>';
-        tr.innerHTML = '<td>' + escapeHtmlS(k.name) + '</td>'
-          + '<td>' + scopeHtml + '</td>'
-          + '<td>' + fmtTs(k.created_at) + '</td>'
-          + '<td>' + (k.last_used ? fmtTs(k.last_used) : 'never') + '</td>'
-          + '<td>' + statusHtml + '</td>'
-          + '<td>' + action + '</td>';
-        const btn = tr.querySelector('button');
-        if (btn) {
-          btn.addEventListener('click', function () { revokeKey(k.id); });
-        }
-        apikeyRows.appendChild(tr);
+        var tr = document.createElement('tr');
+        var scopeHtml = (k.scopes || []).map(function (s) {
+          return '<span class="pill-sm ' + escHtml(s) + '">' + escHtml(s) + '</span>';
+        }).join('');
+        var statusHtml = k.revoked ? '<span class="badge-revoked">revoked</span>' : '<span class="badge-active">active</span>';
+        var action = k.revoked ? '' : '<button type="button" class="btn btn-sm" data-id="' + escHtml(k.id) + '">Revoke</button>';
+        tr.innerHTML = '<td>' + escHtml(k.name) + '</td><td>' + scopeHtml + '</td><td>' + fmtTs(k.created_at) + '</td><td>' + (k.last_used ? fmtTs(k.last_used) : 'never') + '</td><td>' + statusHtml + '</td><td>' + action + '</td>';
+        var btn = tr.querySelector('button');
+        if (btn) btn.addEventListener('click', function () { revokeKey(k.id); });
+        rows.appendChild(tr);
       });
     }
-
     function loadApikeys() {
-      fetch('/api/apikeys').then(function (r) { return r.json(); }).then(function (j) {
-        if (j.ok) renderApikeys(j.keys);
-      }).catch(function () {});
+      fetch('/api/apikeys').then(function (r) { return r.json(); }).then(function (j) { if (j.ok) renderApikeys(j.keys); }).catch(function () {});
     }
-
     function revokeKey(id) {
-      if (!confirm('Revoke this API key? It will stop working immediately.')) return;
-      const fd = new FormData();
-      fd.append('id', id);
-      fetch('/api/apikeys/revoke', { method: 'POST', body: fd })
-        .then(function (r) { return r.json(); })
-        .then(function () { loadApikeys(); });
+      var fd = new FormData(); fd.append('id', id);
+      fetch('/api/apikeys/revoke', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function () { loadApikeys(); });
     }
-
-    apikeyCreateBtn.addEventListener('click', function () {
-      const name = (apikeyName.value || '').trim();
-      if (!name) {
-        apikeyFresh.className = 'alert error';
-        apikeyFresh.innerHTML = '<i class="icon-exclamation"></i> Name is required.';
-        apikeyFresh.style.display = '';
-        return;
-      }
-      const scopes = [];
-      if (apikeyScopeSql.checked) scopes.push('sql');
-      if (apikeyScopeAdmin.checked) scopes.push('admin');
-      if (scopes.length === 0) {
-        apikeyFresh.className = 'alert error';
-        apikeyFresh.innerHTML = '<i class="icon-exclamation"></i> Pick at least one scope.';
-        apikeyFresh.style.display = '';
-        return;
-      }
-      apikeyCreateBtn.disabled = true;
-      const fd = new FormData();
-      fd.append('name', name);
-      fd.append('scopes', scopes.join(','));
-      fetch('/api/apikeys/create', { method: 'POST', body: fd })
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          apikeyCreateBtn.disabled = false;
-          if (!j.ok) {
-            apikeyFresh.className = 'alert error';
-            apikeyFresh.innerHTML = '<i class="icon-exclamation"></i> Create failed: ' + escapeHtmlS(j.err || 'unknown');
-            apikeyFresh.style.display = '';
-            return;
-          }
-          apikeyFresh.className = 'alert success';
-          apikeyFresh.innerHTML = '<i class="icon-check"></i> Key created. Copy it now, you will not see it again.'
-            + '<div class="apikey-fresh-key">' + escapeHtmlS(j.key) + '</div>';
-          apikeyFresh.style.display = '';
-          apikeyName.value = '';
-          loadApikeys();
-        });
+    document.getElementById('apikey-create-btn').addEventListener('click', function () {
+      var name = (document.getElementById('apikey-name').value || '').trim();
+      var fresh = document.getElementById('apikey-fresh');
+      if (!name) { showAlert('apikey-fresh', 'Name is required.', 'error'); return; }
+      var scopes = [];
+      if (document.getElementById('apikey-scope-sql').checked) scopes.push('sql');
+      if (document.getElementById('apikey-scope-admin').checked) scopes.push('admin');
+      if (!scopes.length) { showAlert('apikey-fresh', 'Pick at least one scope.', 'error'); return; }
+      this.disabled = true;
+      var fd = new FormData(); fd.append('name', name); fd.append('scopes', scopes.join(','));
+      fetch('/api/apikeys/create', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
+        document.getElementById('apikey-create-btn').disabled = false;
+        if (!j.ok) { showAlert('apikey-fresh', 'Create failed: ' + escHtml(j.err || 'unknown'), 'error'); return; }
+        fresh.className = 'alert success';
+        fresh.innerHTML = '<i class="icon-check"></i> Key created. Copy it now, you will not see it again.<div class="fresh-key">' + escHtml(j.key) + '</div>';
+        fresh.style.display = '';
+        document.getElementById('apikey-name').value = '';
+        loadApikeys();
+      });
     });
-
     loadApikeys();
 
-    // Webhooks
-    const whRows = document.getElementById('wh-rows');
-    const whTable = document.getElementById('wh-table');
-    const whEmpty = document.getElementById('wh-empty');
-    const whAlert = document.getElementById('wh-alert');
-    const whName = document.getElementById('wh-name');
-    const whUrl = document.getElementById('wh-url');
-    const whEvents = document.getElementById('wh-events');
-    const whCreateBtn = document.getElementById('wh-create-btn');
-
+    // ---- webhooks ----
     function renderWebhooks(hooks) {
-      whRows.innerHTML = '';
-      if (!hooks || hooks.length === 0) {
-        whTable.style.display = 'none';
-        whEmpty.style.display = '';
-        return;
-      }
-      whEmpty.style.display = 'none';
-      whTable.style.display = '';
+      var rows = document.getElementById('wh-rows');
+      var table = document.getElementById('wh-table');
+      var empty = document.getElementById('wh-empty');
+      rows.innerHTML = '';
+      if (!hooks || !hooks.length) { table.style.display = 'none'; empty.style.display = ''; return; }
+      empty.style.display = 'none'; table.style.display = '';
       hooks.forEach(function (h) {
-        const tr = document.createElement('tr');
-        const evHtml = (h.events || []).map(function (e) {
-          return '<span class="scope-pill">' + escapeHtmlS(e) + '</span>';
-        }).join('');
-        const status = h.last_status === 0 ? '\u2014' : (h.last_status >= 200 && h.last_status < 300
-          ? '<span class="status-active">' + h.last_status + '</span>'
-          : '<span class="status-revoked">' + h.last_status + '</span>');
-        tr.innerHTML = '<td>' + escapeHtmlS(h.name) + '</td>'
-          + '<td style="word-break:break-all">' + escapeHtmlS(h.url) + '</td>'
-          + '<td>' + evHtml + '</td>'
-          + '<td>' + h.fires + (h.failures ? '/' + h.failures + ' failed' : '') + '</td>'
-          + '<td>' + status + '</td>'
-          + '<td><button type="button" class="btn btn-sm" data-id="' + escapeHtmlS(h.id) + '">Delete</button></td>';
-        const btn = tr.querySelector('button');
-        if (btn) btn.addEventListener('click', function () { deleteHook(h.id); });
-        whRows.appendChild(tr);
+        var tr = document.createElement('tr');
+        var evHtml = (h.events || []).map(function (e) { return '<span class="pill-sm">' + escHtml(e) + '</span>'; }).join('');
+        var status = h.last_status === 0 ? '\u2014' : (h.last_status >= 200 && h.last_status < 300 ? '<span class="badge-active">' + h.last_status + '</span>' : '<span class="badge-revoked">' + h.last_status + '</span>');
+        tr.innerHTML = '<td>' + escHtml(h.name) + '</td><td style="word-break:break-all; max-width:180px">' + escHtml(h.url) + '</td><td>' + evHtml + '</td><td>' + h.fires + (h.failures ? '/' + h.failures + ' fail' : '') + '</td><td>' + status + '</td><td><button type="button" class="btn btn-sm" data-id="' + escHtml(h.id) + '">Delete</button></td>';
+        var btn = tr.querySelector('button');
+        if (btn) btn.addEventListener('click', function () {
+          var fd = new FormData(); fd.append('id', h.id);
+          fetch('/api/webhooks/delete', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function () { loadWebhooks(); });
+        });
+        rows.appendChild(tr);
       });
     }
-
     function loadWebhooks() {
-      fetch('/api/webhooks').then(function (r) { return r.json(); }).then(function (j) {
-        if (j.ok) renderWebhooks(j.hooks);
-      }).catch(function () {});
+      fetch('/api/webhooks').then(function (r) { return r.json(); }).then(function (j) { if (j.ok) renderWebhooks(j.hooks); }).catch(function () {});
     }
-
-    function deleteHook(id) {
-      if (!confirm('Delete this webhook?')) return;
-      const fd = new FormData();
-      fd.append('id', id);
-      fetch('/api/webhooks/delete', { method: 'POST', body: fd })
-        .then(function (r) { return r.json(); })
-        .then(function () { loadWebhooks(); });
-    }
-
-    whCreateBtn.addEventListener('click', function () {
-      const name = (whName.value || '').trim();
-      const url = (whUrl.value || '').trim();
-      const events = (whEvents.value || '').trim();
-      if (!name || !url || !events) {
-        whAlert.className = 'alert error';
-        whAlert.innerHTML = '<i class="icon-exclamation"></i> Name, URL, and events all required.';
-        whAlert.style.display = '';
-        return;
-      }
-      whCreateBtn.disabled = true;
-      const fd = new FormData();
-      fd.append('name', name);
-      fd.append('url', url);
-      fd.append('events', events);
-      fetch('/api/webhooks/create', { method: 'POST', body: fd })
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          whCreateBtn.disabled = false;
-          if (!j.ok) {
-            whAlert.className = 'alert error';
-            whAlert.innerHTML = '<i class="icon-exclamation"></i> Create failed: ' + escapeHtmlS(j.err || 'unknown');
-            whAlert.style.display = '';
-            return;
-          }
-          whAlert.className = 'alert success';
-          whAlert.innerHTML = '<i class="icon-check"></i> Webhook created.';
-          whAlert.style.display = '';
-          whName.value = '';
-          whUrl.value = '';
-          whEvents.value = '';
-          loadWebhooks();
-        });
+    document.getElementById('wh-create-btn').addEventListener('click', function () {
+      var name = (document.getElementById('wh-name').value || '').trim();
+      var url = (document.getElementById('wh-url').value || '').trim();
+      var events = (document.getElementById('wh-events').value || '').trim();
+      if (!name || !url || !events) { showAlert('wh-alert', 'Name, URL, and events all required.', 'error'); return; }
+      this.disabled = true;
+      var fd = new FormData(); fd.append('name', name); fd.append('url', url); fd.append('events', events);
+      fetch('/api/webhooks/create', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
+        document.getElementById('wh-create-btn').disabled = false;
+        if (!j.ok) { showAlert('wh-alert', 'Create failed: ' + escHtml(j.err || 'unknown'), 'error'); return; }
+        showAlert('wh-alert', 'Webhook created.', 'success');
+        document.getElementById('wh-name').value = '';
+        document.getElementById('wh-url').value = '';
+        document.getElementById('wh-events').value = '';
+        loadWebhooks();
+      });
     });
-
     loadWebhooks();
     setInterval(loadWebhooks, 30000);
 
-    // ---- Backups card ----
-    function fmtSize(bytes) {
-      if (bytes < 1024) return bytes + ' B';
-      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-      if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-      return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-    }
-    function fmtAgo(unix) {
-      var ago = Math.floor(Date.now() / 1000 - unix);
-      if (ago < 60) return ago + 's ago';
-      if (ago < 3600) return Math.floor(ago / 60) + 'm ago';
-      if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
-      return Math.floor(ago / 86400) + 'd ago';
-    }
-    function showBackupAlert(msg, kind) {
-      var a = document.getElementById('backup-alert');
-      a.className = 'alert ' + (kind || '');
-      a.innerHTML = '<i class="icon-' + (kind === 'success' ? 'check' : kind === 'error' ? 'exclamation' : 'info') + '"></i> ' + msg;
-      a.style.display = '';
-    }
-    function loadBackups() {
-      fetch('/api/system/backups').then(function (r) { return r.json(); }).then(function (j) {
-        if (!j.ok) return;
-        var localRows = document.getElementById('bk-local-rows');
-        var localEmpty = document.getElementById('bk-local-empty');
-        var localCount = document.getElementById('bk-local-count');
-        localRows.innerHTML = '';
-        if (j.local && j.local.length) {
-          j.local.sort(function (a, b) { return b.mtime - a.mtime; });
-          j.local.forEach(function (b) {
-            var tr = document.createElement('tr');
-            tr.innerHTML = '<td style="font-family:ui-monospace,monospace; font-size:.78rem">' + RH.escapeHtml(b.name) + '</td>'
-              + '<td style="text-align:right">' + fmtSize(b.size) + '</td>'
-              + '<td style="text-align:right; color: var(--text-3)">' + fmtAgo(b.mtime) + '</td>';
-            localRows.appendChild(tr);
-          });
-          localEmpty.style.display = 'none';
-          document.getElementById('bk-local-table').style.display = '';
-          localCount.textContent = '(' + j.local.length + ')';
-        } else {
-          localEmpty.style.display = '';
-          document.getElementById('bk-local-table').style.display = 'none';
-          localCount.textContent = '';
-        }
 
-        var r2Rows = document.getElementById('bk-r2-rows');
-        var r2Empty = document.getElementById('bk-r2-empty');
-        var r2Count = document.getElementById('bk-r2-count');
-        r2Rows.innerHTML = '';
-        if (j.remote && j.remote.length) {
-          j.remote.sort(function (a, b) { return a.name < b.name ? 1 : -1; });
-          j.remote.forEach(function (b) {
-            var tr = document.createElement('tr');
-            tr.innerHTML = '<td style="font-family:ui-monospace,monospace; font-size:.78rem">' + RH.escapeHtml(b.name) + '</td>'
-              + '<td style="text-align:right">' + fmtSize(b.size) + '</td>';
-            r2Rows.appendChild(tr);
-          });
-          r2Empty.style.display = 'none';
-          document.getElementById('bk-r2-table').style.display = '';
-          r2Count.textContent = '(' + j.remote.length + ')';
-        } else {
-          if (j.r2_configured) {
-            r2Empty.textContent = 'R2 configured but no backups uploaded yet. Click "Backup to R2 now".';
-          } else {
-            r2Empty.innerHTML = 'R2 not configured yet. Open <a href="/shell">Shell</a> and run <code>bash ~/r2-setup.sh</code>.';
-          }
-          r2Empty.style.display = '';
-          document.getElementById('bk-r2-table').style.display = 'none';
-          r2Count.textContent = '';
-        }
-      });
-    }
-    function runBackup(target) {
-      var btn = document.getElementById('backup-now-' + target);
-      btn.disabled = true;
-      var orig = btn.querySelector('span').textContent;
-      btn.querySelector('span').textContent = 'Running...';
-      fetch('/api/system/backup?target=' + target, { method: 'POST' })
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          btn.disabled = false;
-          btn.querySelector('span').textContent = orig;
-          if (j.ok) {
-            showBackupAlert('Backup complete (' + j.elapsed_ms + 'ms). Exit code ' + j.exit_code + '.', 'success');
-          } else {
-            var detail = j.stderr || j.stdout || j.err || 'unknown error';
-            showBackupAlert('Backup failed: ' + RH.escapeHtml(detail.slice ? detail.slice(0, 300) : detail), 'error');
-          }
-          loadBackups();
-        })
-        .catch(function (e) {
-          btn.disabled = false;
-          btn.querySelector('span').textContent = orig;
-          showBackupAlert('Network error: ' + e.message, 'error');
-        });
-    }
-    document.getElementById('backup-now-local').addEventListener('click', function () { runBackup('local'); });
-    document.getElementById('backup-now-r2').addEventListener('click', function () { runBackup('r2'); });
-    document.getElementById('backup-refresh').addEventListener('click', loadBackups);
-    loadBackups();
-
-    // ---- System card ----
+    // ---- system card ----
     function loadVersion() {
       fetch('/api/system/version').then(function (r) { return r.json(); }).then(function (j) {
         if (!j.ok) return;
-        document.getElementById('sv-local').textContent = j.local_sha
-          ? (j.local_sha + (j.local_subject ? ' \u2014 ' + j.local_subject : ''))
-          : '(not a git clone)';
-        document.getElementById('sv-remote').textContent = j.remote_sha
-          ? (j.remote_sha + (j.remote_subject ? ' \u2014 ' + j.remote_subject : ''))
-          : '(not fetched yet)';
+        document.getElementById('sv-local').textContent = j.local_sha ? (j.local_sha + (j.local_subject ? ' \u2014 ' + j.local_subject : '')) : '(not a git clone)';
+        document.getElementById('sv-remote').textContent = j.remote_sha ? (j.remote_sha + (j.remote_subject ? ' \u2014 ' + j.remote_subject : '')) : '(not fetched yet)';
         document.getElementById('sv-uptodate').style.display = j.up_to_date ? '' : 'none';
         document.getElementById('sv-behind').style.display = (!j.up_to_date && j.local_sha && j.remote_sha) ? '' : 'none';
       }).catch(function () {});
     }
-
-    function showSysAlert(msg, kind) {
-      var a = document.getElementById('sys-alert');
-      a.className = 'alert ' + (kind || '');
-      a.innerHTML = '<i class="icon-' + (kind === 'success' ? 'check' : kind === 'error' ? 'exclamation' : 'info') + '"></i> ' + msg;
-      a.style.display = '';
-    }
-    function showSysOutput(text) {
-      var el = document.getElementById('sys-update-output');
-      el.textContent = text;
-      el.style.display = text ? '' : 'none';
-    }
-
     document.getElementById('sys-update-btn').addEventListener('click', function () {
-      var btn = this;
-      btn.disabled = true;
-      var orig = btn.querySelector('span').textContent;
+      var btn = this; btn.disabled = true;
       btn.querySelector('span').textContent = 'Pulling and building...';
-      showSysOutput('Running git fetch + rsync + rebuild. This usually takes 30 to 90 seconds.');
-      // Long timeout because rebuild can be slow on the phone
+      var out = document.getElementById('sys-update-output');
+      out.textContent = 'Running git fetch + rsync + rebuild. Usually 30-90 seconds.';
+      out.style.display = '';
       var ctrl = new AbortController();
       setTimeout(function () { ctrl.abort(); }, 180000);
       fetch('/api/system/update', { method: 'POST', signal: ctrl.signal })
         .then(function (r) { return r.json(); })
         .then(function (j) {
-          btn.disabled = false;
-          btn.querySelector('span').textContent = orig;
+          btn.disabled = false; btn.querySelector('span').textContent = 'Pull latest and rebuild';
           if (j.ok) {
-            if (j.reason === 'already_up_to_date') {
-              showSysAlert('Already on latest commit (' + j.head + ').', 'success');
-            } else {
-              showSysAlert('Updated ' + j.before + ' &rarr; ' + j.after + '. hp-server is restarting; this page will reconnect in a few seconds.', 'success');
-              setTimeout(loadVersion, 8000);
-            }
-            showSysOutput(JSON.stringify(j, null, 2));
+            showAlert('sys-alert', j.reason === 'already_up_to_date' ? 'Already on latest commit (' + j.head + ').' : 'Updated ' + j.before + ' &rarr; ' + j.after + '. hp-server is restarting.', 'success');
+            if (j.reason !== 'already_up_to_date') setTimeout(loadVersion, 8000);
           } else {
-            showSysAlert('Update failed: ' + (j.err || 'unknown'), 'error');
-            showSysOutput(JSON.stringify(j, null, 2));
+            showAlert('sys-alert', 'Update failed: ' + (j.err || 'unknown'), 'error');
           }
+          out.textContent = JSON.stringify(j, null, 2);
         })
         .catch(function (e) {
-          btn.disabled = false;
-          btn.querySelector('span').textContent = orig;
+          btn.disabled = false; btn.querySelector('span').textContent = 'Pull latest and rebuild';
           if (e.name === 'AbortError') {
-            showSysAlert('Update timed out after 3 minutes. Check Shell page and tail ~/logs/self-update.log to see status.', 'error');
+            showAlert('sys-alert', 'Timed out after 3 minutes. Check Shell and tail ~/logs/self-update.log.', 'error');
           } else {
-            // hp-server restart will close the connection; that's actually a
-            // success signal, not a failure. Schedule a reload check.
-            showSysAlert('Connection dropped (likely the restart). Reconnecting...', 'success');
+            showAlert('sys-alert', 'Connection dropped (likely the restart). Reconnecting...', 'success');
             setTimeout(loadVersion, 8000);
           }
         });
     });
-
     document.getElementById('sys-version-refresh').addEventListener('click', loadVersion);
-
     document.getElementById('sys-restore-test-btn').addEventListener('click', function () {
-      var btn = this;
-      btn.disabled = true;
-      var orig = btn.querySelector('span').textContent;
-      btn.querySelector('span').textContent = 'Validating...';
-      // Try R2 first if configured, else local
+      var btn = this; btn.disabled = true; btn.querySelector('span').textContent = 'Validating...';
       fetch('/api/system/restore-test?source=r2', { method: 'POST' })
         .then(function (r) { return r.json(); })
         .then(function (j) {
@@ -851,101 +624,107 @@
           return j;
         })
         .then(function (j) {
-          btn.disabled = false;
-          btn.querySelector('span').textContent = orig;
+          btn.disabled = false; btn.querySelector('span').textContent = 'Validate backup';
           if (j.ok) {
-            showSysAlert('Backup is restorable: ' + j.tarball + ' (' + (j.size_bytes / 1024).toFixed(1) + ' KB), ' + j.registry_lines + ' projects, ' + j.db_count + ' DBs.', 'success');
+            showAlert('sys-alert', 'Backup is restorable: ' + j.tarball + ' (' + (j.size_bytes / 1024).toFixed(1) + ' KB), ' + j.registry_lines + ' projects, ' + j.db_count + ' DBs.', 'success');
           } else {
-            showSysAlert('Restore test failed: ' + (j.err || 'unknown'), 'error');
+            showAlert('sys-alert', 'Restore test failed: ' + (j.err || 'unknown'), 'error');
           }
-          showSysOutput(JSON.stringify(j, null, 2));
+          var out = document.getElementById('sys-update-output');
+          out.textContent = JSON.stringify(j, null, 2); out.style.display = '';
         })
-        .catch(function (e) {
-          btn.disabled = false;
-          btn.querySelector('span').textContent = orig;
-          showSysAlert('Network error: ' + e.message, 'error');
-        });
+        .catch(function (e) { btn.disabled = false; btn.querySelector('span').textContent = 'Validate backup'; showAlert('sys-alert', 'Network error: ' + e.message, 'error'); });
     });
-
     loadVersion();
     setInterval(loadVersion, 60000);
 
-    // Operator rules
-    const rulesText = document.getElementById('rules-json');
-    const rulesAlert = document.getElementById('rules-alert');
-    const rulesCounters = document.getElementById('rules-counters');
-
-    function escapeHtml(s) {
-      return (s || '').replace(/[<>&"']/g, function (c) {
-        return { '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c];
+    // ---- backups card ----
+    function loadBackups() {
+      fetch('/api/system/backups').then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) return;
+        var lr = document.getElementById('bk-local-rows');
+        var le = document.getElementById('bk-local-empty');
+        var lc = document.getElementById('bk-local-count');
+        lr.innerHTML = '';
+        if (j.local && j.local.length) {
+          j.local.sort(function (a, b) { return b.mtime - a.mtime; });
+          j.local.forEach(function (b) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td style="font-family:ui-monospace,monospace; font-size:.76rem">' + escHtml(b.name) + '</td><td style="text-align:right">' + fmtSize(b.size) + '</td><td style="text-align:right; color:var(--text-3)">' + fmtAgo(b.mtime) + '</td>';
+            lr.appendChild(tr);
+          });
+          le.style.display = 'none'; document.getElementById('bk-local-table').style.display = '';
+          lc.textContent = '(' + j.local.length + ')';
+        } else { le.style.display = ''; document.getElementById('bk-local-table').style.display = 'none'; lc.textContent = ''; }
+        var rr = document.getElementById('bk-r2-rows');
+        var re = document.getElementById('bk-r2-empty');
+        var rc = document.getElementById('bk-r2-count');
+        rr.innerHTML = '';
+        if (j.remote && j.remote.length) {
+          j.remote.sort(function (a, b) { return a.name < b.name ? 1 : -1; });
+          j.remote.forEach(function (b) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td style="font-family:ui-monospace,monospace; font-size:.76rem">' + escHtml(b.name) + '</td><td style="text-align:right">' + fmtSize(b.size) + '</td>';
+            rr.appendChild(tr);
+          });
+          re.style.display = 'none'; document.getElementById('bk-r2-table').style.display = '';
+          rc.textContent = '(' + j.remote.length + ')';
+        } else {
+          re.innerHTML = j.r2_configured ? 'R2 configured but no backups yet. Click "Backup to R2".' : 'R2 not configured. Open <a href="/shell">Shell</a> and run <code>bash ~/r2-setup.sh</code>.';
+          re.style.display = ''; document.getElementById('bk-r2-table').style.display = 'none'; rc.textContent = '';
+        }
       });
     }
+    function runBackup(target) {
+      var btn = document.getElementById('backup-now-' + target);
+      btn.disabled = true; var orig = btn.querySelector('span').textContent;
+      btn.querySelector('span').textContent = 'Running...';
+      fetch('/api/system/backup?target=' + target, { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          btn.disabled = false; btn.querySelector('span').textContent = orig;
+          if (j.ok) { showAlert('backup-alert', 'Backup complete (' + j.elapsed_ms + 'ms).', 'success'); }
+          else { showAlert('backup-alert', 'Backup failed: ' + escHtml((j.stderr || j.err || 'unknown').slice(0, 200)), 'error'); }
+          loadBackups();
+        })
+        .catch(function (e) { btn.disabled = false; btn.querySelector('span').textContent = orig; showAlert('backup-alert', 'Network error: ' + e.message, 'error'); });
+    }
+    document.getElementById('backup-now-local').addEventListener('click', function () { runBackup('local'); });
+    document.getElementById('backup-now-r2').addEventListener('click', function () { runBackup('r2'); });
+    document.getElementById('backup-refresh').addEventListener('click', loadBackups);
+    loadBackups();
 
+    // ---- operator rules ----
+    var rulesText = document.getElementById('rules-json');
+    var rulesCounters = document.getElementById('rules-counters');
     function loadRules() {
       fetch('/api/rules').then(function (r) { return r.json(); }).then(function (j) {
         if (!j.ok) return;
         rulesText.value = JSON.stringify(j.rules || [], null, 2);
-        if (j.counters && j.counters.length) {
-          rulesCounters.innerHTML = 'counters: ' + j.counters.map(function (c) {
-            return escapeHtml(c.name) + '=' + c.value;
-          }).join(' . ');
-        } else {
-          rulesCounters.textContent = 'counters: (none)';
-        }
+        rulesCounters.textContent = j.counters && j.counters.length ? 'counters: ' + j.counters.map(function (c) { return c.name + '=' + c.value; }).join(' . ') : 'counters: (none)';
       }).catch(function () {});
     }
-
     document.getElementById('rules-save').addEventListener('click', function () {
-      let parsed;
-      try {
-        parsed = JSON.parse(rulesText.value);
-      } catch (e) {
-        rulesAlert.className = 'alert error';
-        rulesAlert.innerHTML = '<i class="icon-exclamation"></i> Invalid JSON: ' + e.message;
-        rulesAlert.style.display = '';
-        return;
-      }
-      fetch('/api/rules/replace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed),
-      })
+      var parsed;
+      try { parsed = JSON.parse(rulesText.value); } catch (e) { showAlert('rules-alert', 'Invalid JSON: ' + e.message, 'error'); return; }
+      fetch('/api/rules/replace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parsed) })
         .then(function (r) { return r.json(); })
         .then(function (j) {
-          if (j.ok) {
-            rulesAlert.className = 'alert success';
-            rulesAlert.innerHTML = '<i class="icon-check"></i> Rules saved (' + (parsed.length || 0) + ' rule(s)).';
-            loadRules();
-          } else {
-            rulesAlert.className = 'alert error';
-            rulesAlert.innerHTML = '<i class="icon-exclamation"></i> Save failed: ' + (j.err || 'unknown');
-          }
-          rulesAlert.style.display = '';
-        })
-        .catch(function () {
-          rulesAlert.className = 'alert error';
-          rulesAlert.innerHTML = '<i class="icon-exclamation"></i> Network error.';
-          rulesAlert.style.display = '';
-        });
+          showAlert('rules-alert', j.ok ? 'Rules saved (' + (parsed.length || 0) + ' rule(s)).' : 'Save failed: ' + (j.err || 'unknown'), j.ok ? 'success' : 'error');
+          if (j.ok) loadRules();
+        }).catch(function () { showAlert('rules-alert', 'Network error.', 'error'); });
     });
-
     document.getElementById('rules-reload').addEventListener('click', function () {
-      loadRules();
-      rulesAlert.style.display = 'none';
+      loadRules(); document.getElementById('rules-alert').style.display = 'none';
     });
-
     loadRules();
     setInterval(function () {
-      // Update counters live, but don't clobber the textarea
       fetch('/api/rules').then(function (r) { return r.json(); }).then(function (j) {
         if (!j.ok) return;
-        if (j.counters && j.counters.length) {
-          rulesCounters.innerHTML = 'counters: ' + j.counters.map(function (c) {
-            return escapeHtml(c.name) + '=' + c.value;
-          }).join(' . ');
-        }
+        rulesCounters.textContent = j.counters && j.counters.length ? 'counters: ' + j.counters.map(function (c) { return c.name + '=' + c.value; }).join(' . ') : 'counters: (none)';
       }).catch(function () {});
     }, 5000);
+
   })();
 </script>
 </body>

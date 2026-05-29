@@ -282,6 +282,12 @@ pub const Blocklist = struct {
 pub const AutoBan = struct {
     mutex: std.Thread.Mutex,
     counts: std.StringHashMap(Counter),
+    /// IPs we've seen authenticate in the last TRUSTED_TTL seconds. These
+    /// are exempt from auto-ban: a successful login or valid admin API key
+    /// is proof of identity, not a spoof attempt. Without this, a single
+    /// concurrent test request hitting /.env from the operator's IP can
+    /// auto-ban the operator from their own dashboard.
+    trusted: std.StringHashMap(i64),
     allocator: std.mem.Allocator,
     blocklist: *Blocklist,
 
@@ -295,16 +301,48 @@ pub const AutoBan = struct {
     const SCANNER_THRESHOLD: u32 = 3;
     const SCANNER_WINDOW: i64 = 10 * 60;
     const SCANNER_BAN_TTL: i64 = 24 * 60 * 60;
+    /// Trusted-IP memory: an authenticated request from this IP within the
+    /// last 30 minutes prevents auto-ban (but scanner hits are still logged).
+    const TRUSTED_TTL: i64 = 30 * 60;
 
     pub fn init(allocator: std.mem.Allocator, bl: *Blocklist) !*AutoBan {
         const ab = try allocator.create(AutoBan);
         ab.* = .{
             .mutex = .{},
             .counts = std.StringHashMap(Counter).init(allocator),
+            .trusted = std.StringHashMap(i64).init(allocator),
             .allocator = allocator,
             .blocklist = bl,
         };
         return ab;
+    }
+
+    /// Mark an IP as recently authenticated. Cheap, called on every .self
+    /// request. Refreshes TTL on each call so an active session keeps the
+    /// IP trusted indefinitely.
+    pub fn markAuthenticated(self: *AutoBan, ip: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const now = std.time.timestamp();
+        if (self.trusted.getEntry(ip)) |e| {
+            e.value_ptr.* = now;
+            return;
+        }
+        const dup = self.allocator.dupe(u8, ip) catch return;
+        self.trusted.put(dup, now) catch {
+            self.allocator.free(dup);
+        };
+    }
+
+    fn isTrustedLocked(self: *AutoBan, ip: []const u8, now: i64) bool {
+        if (self.trusted.get(ip)) |last| {
+            if (now - last <= TRUSTED_TTL) return true;
+            // Expired - clean up best-effort.
+            if (self.trusted.fetchRemove(ip)) |kv| {
+                self.allocator.free(kv.key);
+            }
+        }
+        return false;
     }
 
     pub fn recordScannerHit(self: *AutoBan, ip: []const u8) bool {
@@ -312,6 +350,11 @@ pub const AutoBan = struct {
         defer self.mutex.unlock();
 
         const now = std.time.timestamp();
+
+        // Trusted IPs (recently authenticated as operator) are exempt from
+        // auto-ban. Counter is still incremented for visibility but never
+        // reaches the threshold-triggered block call.
+        const trusted = self.isTrustedLocked(ip, now);
 
         const gop = self.counts.getOrPut(ip) catch return false;
         if (!gop.found_existing) {
@@ -333,6 +376,11 @@ pub const AutoBan = struct {
         gop.value_ptr.last_hit = now;
 
         if (gop.value_ptr.scanner_hits >= SCANNER_THRESHOLD) {
+            if (trusted) {
+                // Operator IP - log but don't ban. Reset to avoid spam.
+                gop.value_ptr.scanner_hits = 0;
+                return false;
+            }
             // Ban
             self.blocklist.block(
                 ip,

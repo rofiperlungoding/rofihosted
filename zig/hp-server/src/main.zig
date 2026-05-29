@@ -317,6 +317,14 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     const is_authed = is_authed_cookie or (is_v1 and has_apikey_header) or has_admin_key;
     const blocklisted = !is_local and !has_admin_key and app.blocklist.isBlocked(ip);
 
+    // Trust memory: any authenticated request from this IP exempts it from
+    // auto-ban for the next TRUSTED_TTL seconds. Prevents the operator's IP
+    // from getting auto-banned because a parallel test request from the same
+    // IP hit a scanner path (e.g. /.env in the smoke test).
+    if (is_authed and !is_local) {
+        app.autoban.markAuthenticated(ip);
+    }
+
     const cls = security.classify(.{
         .ua = ua,
         .path = path,
