@@ -6,6 +6,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Fixed: operator IP no longer auto-bans itself when running smoke tests
+
+- `src/security.zig`: `AutoBan` now keeps a per-IP "trusted" map. Any request that authenticates (cookie session or admin API key) marks the source IP as trusted for 30 minutes. While trusted, scanner hits are still counted for visibility but never trigger the blocklist.
+- `hostRouter` calls `app.autoban.markAuthenticated(ip)` on every authenticated request. The TTL refreshes on each call so an active session keeps the IP trusted indefinitely.
+- Closes a real bug: running `~/test-everything.sh` from the operator's IP would intentionally hit scanner paths (`/.env`, `/wp-admin`, `.php` URLs) for honeypot coverage. Even though those requests came from `cls=.self`, parallel anonymous scanner-classified requests from the same IP could trip the 3-strikes auto-ban and lock the operator out of their own dashboard mid-test.
+
+### Fixed: self-update.sh adopted new binaries reliably
+
+- `scripts/self-update.sh`: the file-change detector compared `git diff --name-only "$BEFORE" "$AFTER"`, but `$AFTER` was never set (the variable holding origin/main is `$REMOTE`). The diff returned empty, every legitimate code update was misclassified as `no_restart_needed`, and rebuilt binaries waited around until something else SIGTERM-ed hp-server. Single-character fix: `$AFTER` -> `$REMOTE`.
+
+### Changed: settings page redesign
+
+- `src/templates/app-settings.html`: full rewrite into the same `.layout > .sidebar > .main > .content` shell every other dashboard page uses. New CSS primitives: `.scope-chips` pill toggle (replaces native checkbox the operator complained about), `.stat-grid`, `.info-grid`/`.info-row`, `.ver-row`, `.bk-grid`, `.fresh-key`, `.code-out`. Sections reordered: Credentials, Geo-block, Honeypot, DB cache, API keys, Webhooks, System, Backups, Operator rules.
+- `src/templates/app.css`: dropped `max-width: 540px` from `.form-card` so cards span the same fluid width as `.summary-grid` / `.section-head` on every other page. Added `margin-bottom: 1.5rem` directly to `.form-card` so cards still space cleanly without relying on outer flex gap. `.submit-row` gets `flex-wrap: wrap` so the button group never overflows on narrow viewports.
+- All HTML templates bumped from `?v=33` to `?v=34` for cache invalidation.
+
+### Changed: smoke test reliability
+
+- `scripts/test-everything.sh`: `R2_CONFIGURED=$(grep -c X || echo 0)` produced multi-line `0\n0` when grep found nothing, breaking `[ "$VAR" -gt 0 ]`. Drop the `|| echo 0` fallback - `grep -c` always emits a single integer. Bumped backup-listing curl timeouts from 5s -> 15s and 60s for the R2 upload step. Test suite now hits 96/96 green.
+
 ### Added: Projects (the kingdom-of-one PaaS, all in one phone)
 
 This is the centerpiece. The phone now behaves as Netlify + Vercel + Supabase + Railway combined: paste a repo link, pick a subdomain, click Deploy, and a fullstack app runs 24/7 with built-in database + auth + secrets + scheduled tasks. Five phases of work:

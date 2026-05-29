@@ -70,7 +70,7 @@ The full pattern lists live in `security.zig` constants `SCANNER_PATH_FRAGMENTS`
 ### Auto-ban
 Two trackers in `security.zig`, both with TTL'd ban entries:
 
-- `AutoBan`: 3 scanner hits from the same IP within 10 minutes triggers a 24-hour ban with reason `auto: scanner attempts exceeded threshold`.
+- `AutoBan`: 3 scanner hits from the same IP within 10 minutes triggers a 24-hour ban with reason `auto: scanner attempts exceeded threshold`. **Trusted-IP exemption**: any IP that has sent at least one authenticated request (cookie session or admin API key) in the last 30 minutes is exempt from this trigger. Scanner hits from a trusted IP are still counted for visibility but never reach the blocklist. This prevents the operator's IP from being self-banned by parallel anonymous scans (e.g. running `~/test-everything.sh` which intentionally probes scanner paths). The TTL refreshes on each authenticated request, so an active session keeps the IP trusted indefinitely.
 - `LoginTracker`: 5 failed login attempts from the same IP within 15 minutes triggers a 1-hour ban with reason `auto: login brute force`.
 
 Bans persist to disk (`~/.hp-server-blocklist.txt`, mode 600) so they survive restarts. The file format is TSV: `ip<TAB>blocked_at<TAB>expires_at<TAB>reason`. Expired entries are evicted lazily on read.
