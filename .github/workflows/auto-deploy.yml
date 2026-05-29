@@ -35,7 +35,7 @@ jobs:
             -H "X-API-Key: $API_KEY" \
             --max-time 240 \
             -w '\nHTTP_STATUS:%{http_code}' \
-            https://app.rofihosted.space/v1/system/update)
+            https://app.rofihosted.space/v1/system/update || true)
 
           status=$(echo "$response" | tail -1 | cut -d: -f2)
           body=$(echo "$response" | sed '$d')
@@ -43,25 +43,26 @@ jobs:
           echo "HTTP $status"
           echo "$body"
 
-          # Some clients see the connection close mid-response when hp-server
-          # is killed for restart. That's actually a success signal. We treat
-          # 200, 502, and curl exit 28 (timeout) as 'probably succeeded' and
-          # verify by hitting /v1/system/version a few seconds later.
+          # Cloudflare's tunnel proxy times out at 100s, returning 524.
+          # The phone keeps building in the background, so 524 is not a
+          # failure - we verify by polling /v1/system/version in the next
+          # step. Treat 200 (full success), 524 (CF gave up but phone
+          # working), or empty (connection severed during restart) as
+          # "probably succeeded".
           case "$status" in
             200)
-              echo "Deploy returned 200. Parsing body..."
               if echo "$body" | grep -q '"ok":true'; then
-                echo "::notice::Deploy succeeded"
+                echo "::notice::Deploy returned 200 ok"
               else
                 echo "::error::Deploy returned ok:false"
                 exit 1
               fi
               ;;
-            "")
-              echo "::warning::No HTTP status (likely connection severed during restart). Verifying..."
+            524|"")
+              echo "::notice::Cloudflare 524 / connection severed - normal during long rebuilds. Verifying..."
               ;;
             *)
-              echo "::warning::Unexpected status $status, verifying..."
+              echo "::warning::Unexpected status $status, verifying anyway..."
               ;;
           esac
 

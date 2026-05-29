@@ -128,7 +128,7 @@ async function cmdStatus({ base, apiKey }) {
 
 async function cmdUpdate({ base, apiKey }) {
   console.log(`Triggering /v1/system/update on ${base}...`);
-  console.log(`(this can take 30-90s for full rebuilds)`);
+  console.log(`(this can take 30-90s for full rebuilds; Cloudflare may 524 mid-build but the phone keeps working)`);
   try {
     const j = await api(base, apiKey, '/v1/system/update', { method: 'POST', signal: AbortSignal.timeout(240000) });
     if (j.reason === 'already_up_to_date') {
@@ -141,17 +141,40 @@ async function cmdUpdate({ base, apiKey }) {
       fail(j.err || 'update failed');
     }
   } catch (e) {
-    if (e.message.includes('terminated') || e.message.includes('aborted')) {
-      console.log(`Connection dropped (likely the restart). Verifying...`);
-      // Poll for new version
-      for (let i = 0; i < 24; i++) {
+    // Cloudflare 524 (origin timeout) and aborted/closed connections are
+    // common when rebuild takes >100s. The phone keeps working in the
+    // background, so verify by polling /v1/system/version until either
+    // (a) version moves forward, or (b) we time out at 4 minutes.
+    const isTimeout = e.message.includes('524') ||
+                      e.message.includes('terminated') ||
+                      e.message.includes('aborted') ||
+                      e.message.includes('TimeoutError') ||
+                      e.message.includes('UND_ERR');
+    if (isTimeout) {
+      console.log(`Connection lost mid-build (this is normal). Polling for new version...`);
+      // Read the starting version once for comparison
+      let startSha = '';
+      try {
+        const v = await api(base, apiKey, '/v1/system/version');
+        startSha = v.local_sha || '';
+      } catch {}
+      for (let i = 0; i < 48; i++) {  // 4 minutes
         await new Promise(r => setTimeout(r, 5000));
         try {
           const v = await api(base, apiKey, '/v1/system/version');
-          if (v.ok) { ok(`hp-server back up at ${v.local_sha}`); return; }
+          if (v.ok && v.local_sha && v.local_sha !== startSha) {
+            ok(`updated to ${v.local_sha}: ${v.local_subject}`);
+            return;
+          }
+          // Also accept if the binary mtime is fresh (within last 3 min)
+          const ageS = Math.floor(Date.now() / 1000) - (v.binary_built_unix || 0);
+          if (v.ok && ageS < 180) {
+            ok(`updated, binary built ${ageS}s ago at ${v.local_sha}`);
+            return;
+          }
         } catch {}
       }
-      fail('hp-server did not come back within 2 minutes');
+      fail('hp-server did not advance within 4 minutes');
     } else {
       fail(e.message);
     }
