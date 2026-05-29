@@ -599,9 +599,42 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
 
     // Internal API for the console (consumed by JS)
     if (std.mem.eql(u8, path, "/api/me")) {
-        const user = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "";
-        try res.json(.{ .username = user }, .{});
+        // Multi-tenant aware: return role + status so the dashboard JS can
+        // hide admin-only nav for tenants. Falls back gracefully to legacy
+        // operator if no user record exists.
+        if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
+            try res.json(.{
+                .username = ident.username,
+                .user_id = ident.user_id,
+                .role = ident.role.label(),
+                .status = ident.status.label(),
+                .legacy = ident.legacy,
+            }, .{});
+        } else {
+            try res.json(.{ .username = "" }, .{});
+        }
         return;
+    }
+
+    // Admin-only dashboard pages: gate at the route level so non-admins
+    // get an immediate 403 instead of seeing a half-rendered page.
+    if (std.mem.startsWith(u8, path, "/admin/") or
+        std.mem.eql(u8, path, "/api/users") or
+        std.mem.startsWith(u8, path, "/api/users/") or
+        std.mem.eql(u8, path, "/api/invites") or
+        std.mem.startsWith(u8, path, "/api/invites/"))
+    {
+        const ident = auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req) orelse {
+            res.status = 401;
+            res.body = "unauthenticated";
+            return;
+        };
+        if (ident.role != .admin) {
+            res.status = 403;
+            res.content_type = .HTML;
+            res.body = "<!doctype html><meta charset=utf-8><title>Forbidden</title><div style='font-family:system-ui;padding:3rem;text-align:center'><h1>403 Forbidden</h1><p>This area is for the platform operator. <a href='/'>Back to dashboard</a></p></div>";
+            return;
+        }
     }
     if (std.mem.eql(u8, path, "/api/stream")) return apiStream(app, req, res);
     if (std.mem.eql(u8, path, "/api/stats")) return apiStats(app, req, res);

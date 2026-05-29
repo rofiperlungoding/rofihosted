@@ -406,3 +406,33 @@ a.btn [class^="icon-"], a.btn svg, button.btn [class^="icon-"], button.btn svg {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: .8rem;
 }
+
+
+/* === Multi-tenant: hide admin-only sections from tenants ===
+ * loadCurrentUser() in app.js sets body.role-admin or body.role-tenant.
+ * Anything tagged data-admin-only is hidden from tenants and visible to
+ * admins. We also hide a few sections that don't make sense for tenants
+ * (Security, Status, system Settings). Tenants land on Projects + Files +
+ * API + Shell + their own Settings (account-scoped).
+ */
+body.role-tenant [data-admin-only] {
+  display: none !important;
+}
+/* Tenants don't see global infra panes. */
+body.role-tenant a[href="/security"],
+body.role-tenant a[href="/shell"] {
+  display: none !important;
+}
+/* Pending-count badge on the Users nav link (admin sees it on every
+ * page so they don't miss approval requests). */
+.ws-badge[id="pending-count-nav"] {
+  background: rgba(245, 158, 11, .12);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, .3);
+  font-weight: 600;
+  padding: .1rem .4rem;
+  font-size: .68rem;
+}
+.ws-badge[id="pending-count-nav"] .ws-dot {
+  display: none;
+}

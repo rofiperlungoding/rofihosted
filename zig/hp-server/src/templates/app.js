@@ -176,6 +176,36 @@ window.RH = (function () {
       const j = await (await fetch('/api/me')).json();
       const el = document.getElementById('cur-user');
       if (el) el.textContent = j.username || 'unknown';
+
+      // Multi-tenant: drop role classes on <body> so CSS can hide nav links
+      // tenants shouldn't see (Admin section, Security, system Settings).
+      // Also reveal admin-only links that ship hidden in HTML.
+      const role = j.role || 'admin'; // legacy operator => admin
+      document.body.classList.add('role-' + role);
+      if (role === 'admin') {
+        document.querySelectorAll('[data-admin-only]').forEach(function (el) {
+          el.style.display = '';
+        });
+      } else {
+        // Tenant: hide admin-only nav explicitly (they may have been
+        // server-rendered visible by a page that doesn't know yet).
+        document.querySelectorAll('[data-admin-only]').forEach(function (el) {
+          el.style.display = 'none';
+        });
+      }
+      // Pending count (admin sidebar badge), best-effort.
+      if (role === 'admin') {
+        fetch('/api/users').then(function (r) { return r.json(); }).then(function (u) {
+          if (!u.ok) return;
+          const pending = (u.users || []).filter(function (x) { return x.status === 'pending'; }).length;
+          const badge = document.getElementById('pending-count-nav');
+          if (badge && pending > 0) {
+            badge.style.display = '';
+            badge.textContent = pending;
+            badge.title = pending + ' user' + (pending === 1 ? '' : 's') + ' awaiting approval';
+          }
+        }).catch(function () {});
+      }
     } catch (e) {}
   }
 
