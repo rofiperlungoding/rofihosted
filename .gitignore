@@ -64,3 +64,4 @@ msg.txt
 unblock.sh
 gen-key.sh
 diag-*.sh
+rebuild-tenancy.sh

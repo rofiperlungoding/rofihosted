@@ -424,3 +424,8 @@ pub fn issueUserCookie(cfg: *Config, user: users.User, res: *httpz.Response) !vo
         .same_site = .lax,
     });
 }
+
+/// Issue the legacy v1 cookie. Caller has already verified credentials.
+pub fn issueLegacyCookie(cfg: *Config, res: *httpz.Response) !void {
+    try issueAndSetCookie(cfg, res);
+}

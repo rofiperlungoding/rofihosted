@@ -839,23 +839,31 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
         return;
     }
 
-    // Pull username for logging (before login() consumes form)
+    // Pull form fields once (httpz consumes body on first parse).
+    const form = req.formData() catch null;
     var attempted_user: []const u8 = "";
-    if (req.formData()) |form| {
-        if (form.get("username")) |u| attempted_user = u;
-    } else |_| {}
+    var attempted_pass: []const u8 = "";
+    if (form) |f| {
+        if (f.get("username")) |u| attempted_user = u;
+        if (f.get("password")) |p| attempted_pass = p;
+    }
 
     // Try multi-user login first; fall back to legacy operator credentials.
     var ok: bool = false;
     var pending: bool = false;
-    if (app.users.findByUsername(attempted_user)) |_| {
-        if (try auth.loginUser(app.auth_cfg, app.users, req, res)) |user| {
+    if (attempted_user.len > 0 and attempted_pass.len > 0) {
+        if (app.users.verify(attempted_user, attempted_pass)) |user| {
+            try auth.issueUserCookie(app.auth_cfg, user, res);
             ok = true;
             pending = (user.status == .pending);
+        } else |_| {
+            // Multi-user verify failed; try legacy operator path.
+            const snap = app.auth_cfg.snapshot();
+            if (std.mem.eql(u8, attempted_user, snap.user) and std.mem.eql(u8, attempted_pass, snap.pass)) {
+                try auth.issueLegacyCookie(app.auth_cfg, res);
+                ok = true;
+            }
         }
-    }
-    if (!ok) {
-        ok = try auth.login(app.auth_cfg, req, res);
     }
 
     // Track outcome (rate-limit failed attempts -> auto-ban after 5 fails / 15min)
@@ -878,11 +886,11 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
     });
 
     var next: []const u8 = default_next;
-    if (req.formData()) |form| {
-        if (form.get("next")) |n| {
+    if (form) |f| {
+        if (f.get("next")) |n| {
             if (n.len > 0 and n[0] == '/') next = n;
         }
-    } else |_| {}
+    }
 
     if (!ok) {
         const target = try std.fmt.allocPrint(res.arena, "https://app.rofihosted.space/login?error=1&next={s}", .{next});
