@@ -92,7 +92,7 @@ pub const Config = struct {
 
     /// Snapshot current creds. Caller frees nothing (returned as slices into Config).
     /// Use only briefly while holding the lock you wrap around it.
-    fn snapshot(self: *Config) struct { user: []const u8, pass: []const u8, secret: [32]u8 } {
+    pub fn snapshot(self: *Config) struct { user: []const u8, pass: []const u8, secret: [32]u8 } {
         self.mutex.lock();
         defer self.mutex.unlock();
         return .{ .user = self.user, .pass = self.pass, .secret = self.secret };
