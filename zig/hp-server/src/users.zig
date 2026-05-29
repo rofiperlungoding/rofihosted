@@ -539,7 +539,7 @@ fn writeJsonString(w: anytype, s: []const u8) !void {
         '\n' => try w.writeAll("\\n"),
         '\r' => try w.writeAll("\\r"),
         '\t' => try w.writeAll("\\t"),
-        0x00...0x1f => try w.print("\\u{x:0>4}", .{c}),
+        0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => try w.print("\\u{x:0>4}", .{c}),
         else => try w.writeByte(c),
     };
     try w.writeByte('"');

@@ -4746,7 +4746,7 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         .target = user.id,
         .detail = if (consumed_invite) |c| c else "",
         .ok = true,
-    }) catch {};
+    });
 
     app.bus.publish(.anomaly_detected, .{
         .timestamp = std.time.timestamp(),
@@ -4847,7 +4847,7 @@ fn apiUsersApprove(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .target = id,
         .detail = "",
         .ok = true,
-    }) catch {};
+    });
     try res.json(.{ .ok = true }, .{});
 }
 
@@ -4877,7 +4877,7 @@ fn apiUsersReject(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .target = id,
         .detail = reason,
         .ok = true,
-    }) catch {};
+    });
     try res.json(.{ .ok = true }, .{});
 }
 
@@ -4911,7 +4911,7 @@ fn apiUsersSuspend(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .target = id,
         .detail = "",
         .ok = true,
-    }) catch {};
+    });
     try res.json(.{ .ok = true }, .{});
 }
 
@@ -4940,7 +4940,7 @@ fn apiUsersUnsuspend(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .target = id,
         .detail = "",
         .ok = true,
-    }) catch {};
+    });
     try res.json(.{ .ok = true }, .{});
 }
 
@@ -5010,7 +5010,7 @@ fn apiInvitesCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         .target = inv.code,
         .detail = note,
         .ok = true,
-    }) catch {};
+    });
     try res.json(.{ .ok = true, .code = inv.code, .max_uses = inv.max_uses, .expires_at = inv.expires_at }, .{});
 }
 
@@ -5039,7 +5039,7 @@ fn apiInvitesRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         .target = code,
         .detail = "",
         .ok = true,
-    }) catch {};
+    });
     try res.json(.{ .ok = true }, .{});
 }
 
@@ -5052,7 +5052,7 @@ fn writeJsonStr(w: anytype, s: []const u8) !void {
         '\n' => try w.writeAll("\\n"),
         '\r' => try w.writeAll("\\r"),
         '\t' => try w.writeAll("\\t"),
-        0x00...0x1f => try w.print("\\u{x:0>4}", .{c}),
+        0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => try w.print("\\u{x:0>4}", .{c}),
         else => try w.writeByte(c),
     };
     try w.writeByte('"');
