@@ -6,6 +6,33 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: Zero-config DATABASE_URL + Resources tab (Phase 2.9 - dev experience)
+
+Tenants no longer need to know about hp-server's storage layout to use it. Wizard creates a project, pick the runtime, click deploy - it just works.
+
+**Auto-injected env vars (every project, every spawn):**
+- `DATABASE_URL=file:<path>` - per-project SQLite. Picked up automatically by Drizzle, Prisma, Knex, SQLAlchemy, Sequelize, and most ORMs.
+- `ROFI_DB_PATH=<path>` - raw path for libraries that want it (better-sqlite3 etc).
+- `ROFI_PUBLIC_URL=https://<sub>.rofihosted.space` - so server-side code can build absolute links.
+- `ROFI_AUTH_BASE=/auth` - the auth-as-a-service mount point.
+- Plus the existing `PORT`, `HOST=127.0.0.1`, `NODE_ENV=production`, `ROFI_PROJECT_ID`, `ROFI_SUBDOMAIN`.
+
+A user-set `DATABASE_URL` via the secrets vault overrides the auto-injected one - useful if you'd rather use Supabase/Turso/Neon Postgres.
+
+**Resources tab on the project detail page:**
+- Per-project DB path, code snippets for Node (better-sqlite3, Drizzle), Python (sqlite3, SQLAlchemy).
+- Auth endpoints (signup/login/verify) with frontend snippet.
+- Full env var reference.
+- Cron pointer.
+- "Want Postgres?" section pointing to Supabase, Turso, Neon, Upstash free tiers.
+
+**Wizard step 3 (env vars):**
+- Now leads with a callout listing every auto-injected var so devs don't accidentally re-add them.
+
+Phone hardware reality: 6 GB RAM, multi-tenant. Cannot host Postgres locally. SQLite is the right choice for typical project workloads (1-10k req/day, &lt;1 GB data). Hosted Postgres via secrets is the escape hatch for anything bigger.
+
+Cache busters bumped v=38 -> v=39.
+
 ### Added: Tenant API keys + MCP per-user scoping + project transfer + RAM budget (Phase 2.5 - 2.8)
 
 The platform is now fully ready to host multiple developers safely.
