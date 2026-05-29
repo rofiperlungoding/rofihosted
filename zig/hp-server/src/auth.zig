@@ -29,6 +29,10 @@ pub const Config = struct {
     secret: [32]u8,
     pepper: [32]u8,
     allocator: std.mem.Allocator,
+    /// Set after init by main(). Lets currentUser() / isAuthenticated()
+    /// transparently handle v2 cookies without needing the manager passed
+    /// to every call site.
+    users_mgr: ?*users.Manager = null,
 
     pub fn init(allocator: std.mem.Allocator, pepper: [32]u8) !*Config {
         const cfg = try allocator.create(Config);
@@ -194,17 +198,49 @@ fn issueAndSetCookie(cfg: *Config, res: *httpz.Response) !void {
     });
 }
 
+/// Returns true if the request has either a valid legacy v1 cookie OR
+/// a valid v2 user cookie.
 pub fn isAuthenticated(cfg: *Config, allocator: std.mem.Allocator, req: *httpz.Request) bool {
     const cookie = req.cookies().get(COOKIE_NAME) orelse return false;
+    if (std.mem.startsWith(u8, cookie, "v2.")) {
+        if (cfg.users_mgr) |mgr| {
+            const uid_owned = parseUserIdFromToken(allocator, cookie) orelse return false;
+            defer allocator.free(uid_owned);
+            const user = mgr.findById(uid_owned) orelse return false;
+            return verifyUserToken(allocator, cookie, user.id, user.password_hash, &cfg.pepper);
+        }
+        return false;
+    }
     const snap = cfg.snapshot();
     return verifyTokenWithSecret(allocator, snap.secret, cookie);
 }
 
-/// Returns the username if authenticated, else null.
+/// Returns the username if authenticated, else null. Handles both v1 and
+/// v2 cookies (v2 needs cfg.users_mgr to be wired).
 pub fn currentUser(cfg: *Config, allocator: std.mem.Allocator, req: *httpz.Request) ?[]const u8 {
-    if (!isAuthenticated(cfg, allocator, req)) return null;
+    const cookie = req.cookies().get(COOKIE_NAME) orelse return null;
+    if (std.mem.startsWith(u8, cookie, "v2.")) {
+        const mgr = cfg.users_mgr orelse return null;
+        const uid_owned = parseUserIdFromToken(allocator, cookie) orelse return null;
+        defer allocator.free(uid_owned);
+        const user = mgr.findById(uid_owned) orelse return null;
+        if (!verifyUserToken(allocator, cookie, user.id, user.password_hash, &cfg.pepper)) return null;
+        return user.username;
+    }
     const snap = cfg.snapshot();
+    if (!verifyTokenWithSecret(allocator, snap.secret, cookie)) return null;
     return snap.user;
+}
+
+/// Same as isAuthenticated but explicitly named for callers who want
+/// to be obvious about the multi-user check.
+pub fn isAuthenticatedFull(cfg: *Config, _: *users.Manager, allocator: std.mem.Allocator, req: *httpz.Request) bool {
+    return isAuthenticated(cfg, allocator, req);
+}
+
+/// Multi-user-aware username lookup (legacy alias).
+pub fn currentUserFull(cfg: *Config, _: *users.Manager, allocator: std.mem.Allocator, req: *httpz.Request) ?[]const u8 {
+    return currentUser(cfg, allocator, req);
 }
 
 pub fn login(cfg: *Config, req: *httpz.Request, res: *httpz.Response) !bool {

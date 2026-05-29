@@ -156,6 +156,8 @@ pub fn main() !void {
     powermon_inst.* = powermon.PowerMon.init(allocator, tg_cfg, bus);
     const users_mgr = try users.Manager.init(allocator, pepper_slice);
     const invites_mgr = try invites.Manager.init(allocator);
+    // Wire so auth.zig can validate v2 cookies transparently.
+    auth_cfg.users_mgr = users_mgr;
     // First-boot: copy the legacy operator into users.zig as u_admin so the
     // multi-user pages have someone to point at as the admin.
     users_mgr.migrateLegacyOperator(auth_cfg.user, auth_cfg.pass) catch {};
@@ -771,7 +773,9 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
 // Also accepts admin-scoped API keys for /api/system/* and /api/projects/*
 // so the rh CLI and Kiro can hit these endpoints without a session cookie.
 fn guard(app: *App, req: *httpz.Request, res: *httpz.Response, return_to: []const u8) !bool {
-    if (auth.isAuthenticated(app.auth_cfg, app.allocator, req)) return true;
+    // Multi-user-aware: this validates v1 cookies AND v2 cookies (the
+    // latter requires the users.Manager).
+    if (auth.isAuthenticatedFull(app.auth_cfg, app.users, app.allocator, req)) return true;
 
     // Allow admin API key to bypass cookie auth for system + project endpoints.
     // This lets the rh CLI and Kiro access /api/system/exec, /api/system/info,
