@@ -6,6 +6,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: Role-aware UI + Telegram alerts + CLI signup (Phase 2.2 + 2.3)
+
+Tenants and admins now see different dashboards from the same console.
+
+- `/api/me` returns role + status + user_id (was just username). The dashboard JS uses this to set `body.role-{admin|tenant}` so CSS can hide / reveal sections per role.
+- `/admin/*`, `/api/users/*`, `/api/invites/*`: hard-gated server-side. 401 if unauthenticated, friendly 403 HTML if a tenant tries to peek.
+- `src/templates/app.js loadCurrentUser()`: drops body classes, fetches pending-user count for admins, badges it on the Users nav so the operator never misses an approval request.
+- `src/templates/app.css`: tenants don't see Security or Shell (operator-scoped); `[data-admin-only]` toggling for the Admin nav section.
+- All 8 dashboard pages got a hidden Admin nav block (Users + Invites). Visible to admins, hidden from tenants by CSS + JS.
+- Cache busters bumped v=35 -> v=36.
+
+### Added: Telegram alerts on pending signup
+- `handleSignupSubmit`: when a self-signup goes pending, the operator gets a Telegram message with username, email, reason, and an `/admin/users` link. No-op when Telegram is unconfigured.
+
+### Added: rh signup CLI
+- `cli/rh.mjs`: new `rh signup` interactive flow. Walks through username/email/password (with optional invite code). Prints next steps depending on instant approval (invite) or pending review (self).
+
 ### Added: Per-project ownership + tenant isolation (Phase 2.1)
 
 Tenants can now create and manage their own projects without seeing or touching anyone else's. Admins continue to see everything.
