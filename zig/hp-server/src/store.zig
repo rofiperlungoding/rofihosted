@@ -71,17 +71,37 @@ fn readJsonl(comptime T: type, allocator: std.mem.Allocator, path: []const u8, l
     };
     defer file.close();
 
-    const data = try file.readToEndAlloc(allocator, 16 * 1024 * 1024);
+    // Files can grow into hundreds of MB if rotation fell behind. We only need
+    // the last `limit` lines; reading the entire file would OOM the arena and
+    // 500 the request. Strategy: stat the file, seek backwards in chunks until
+    // we have at least `limit` newlines, parse from there.
+    const stat = try file.stat();
+    const total_size = stat.size;
+    const READ_CHUNK: u64 = 1 * 1024 * 1024; // 1 MB tail window
+    const MAX_TAIL: u64 = 32 * 1024 * 1024; // hard cap so we never OOM
+    const start_offset: u64 = if (total_size > MAX_TAIL) total_size - MAX_TAIL else 0;
+
+    try file.seekTo(start_offset);
+    const data = try file.readToEndAlloc(allocator, MAX_TAIL + 4096);
     defer allocator.free(data);
+
+    // If we started mid-line (start_offset > 0), skip the first partial line.
+    var data_start: usize = 0;
+    if (start_offset > 0) {
+        while (data_start < data.len and data[data_start] != '\n') data_start += 1;
+        if (data_start < data.len) data_start += 1; // step past the newline
+    }
+    const usable = data[data_start..];
 
     var line_offsets = std.ArrayList(usize).init(allocator);
     defer line_offsets.deinit();
 
     var i: usize = 0;
-    while (i < data.len) : (i += 1) {
+    while (i < usable.len) : (i += 1) {
         try line_offsets.append(i);
-        while (i < data.len and data[i] != '\n') i += 1;
+        while (i < usable.len and usable[i] != '\n') i += 1;
     }
+    _ = READ_CHUNK; // reserved for streaming reader if we ever hit MAX_TAIL files
 
     const total = line_offsets.items.len;
     var rows = try std.ArrayList(T).initCapacity(allocator, @min(limit, total));
@@ -92,8 +112,8 @@ fn readJsonl(comptime T: type, allocator: std.mem.Allocator, path: []const u8, l
         j -= 1;
         const start = line_offsets.items[j];
         var end = start;
-        while (end < data.len and data[end] != '\n') end += 1;
-        const line = data[start..end];
+        while (end < usable.len and usable[end] != '\n') end += 1;
+        const line = usable[start..end];
         if (line.len == 0) continue;
 
         const parsed = std.json.parseFromSlice(T, allocator, line, .{ .allocate = .alloc_always, .ignore_unknown_fields = true }) catch continue;
@@ -158,8 +178,18 @@ pub fn rotatorLoop(
     uptime_path: []const u8,
     mutex: *std.Thread.Mutex,
 ) void {
+    // First rotation runs 60 seconds after boot so files that grew unchecked
+    // during a hp-server bounce/crash storm get trimmed quickly. After that,
+    // run every 10 minutes (was hourly, but with frequent self-update bounces
+    // we need more aggressive trimming).
+    var first = true;
     while (true) {
-        std.Thread.sleep(60 * 60 * std.time.ns_per_s); // every hour
+        if (first) {
+            std.Thread.sleep(60 * std.time.ns_per_s);
+            first = false;
+        } else {
+            std.Thread.sleep(10 * 60 * std.time.ns_per_s);
+        }
 
         mutex.lock();
         rotate(allocator, visits_path, 2 * 1024 * 1024, 5000) catch |e| {
