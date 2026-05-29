@@ -373,9 +373,9 @@ fi
 R2_CONFIGURED=$(echo "$R" | grep -c '"r2_configured":true')
 if [ "$R2_CONFIGURED" -gt 0 ]; then
     pass "R2 configured"
-    R=$(curl -sm 60 -b "$CJ" -X POST "$BASE/api/system/backup?target=r2")
+    R=$(curl -sm 90 -b "$CJ" -X POST "$BASE/api/system/backup?target=r2")
     if echo "$R" | grep -q '"ok":true'; then pass "R2 backup upload"; else fail "R2 backup upload" "$R"; fi
-    REMOTE_COUNT=$(curl -sm 5 -b "$CJ" "$BASE/api/system/backups" | grep -o '"name":"rofihosted-' | wc -l | tr -d ' ')
+    REMOTE_COUNT=$(curl -sm 15 -b "$CJ" "$BASE/api/system/backups" | grep -o '"name":"rofihosted-' | wc -l | tr -d ' ')
     [ "$REMOTE_COUNT" -gt 0 ] && pass "R2 backup visible (count=$REMOTE_COUNT)" || fail "R2 backup visible"
 else
     warn "R2 not configured (skip remote backup tests)"
