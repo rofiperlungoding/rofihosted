@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Users / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=35">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=35">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=35">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  .users-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .users-table th { text-align: left; font-size: .72rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; padding: .55rem .7rem; border-bottom: 1px solid var(--border-soft); }
+  .users-table td { padding: .65rem .7rem; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  .users-table tr:hover td { background: var(--surface-2); }
+  .badge-status { display: inline-block; padding: .15rem .55rem; border-radius: 5px; font-size: .72rem; font-weight: 600; }
+  .badge-status.pending { background: rgba(245,158,11,.12); color: #f59e0b; border: 1px solid rgba(245,158,11,.3); }
+  .badge-status.active  { background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.3); }
+  .badge-status.suspended { background: rgba(239,68,68,.12); color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
+  .badge-status.rejected { background: rgba(115,115,115,.12); color: var(--text-3); border: 1px solid var(--border-soft); }
+  .badge-role { display: inline-block; padding: .1rem .45rem; border-radius: 4px; font-size: .7rem; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border-soft); color: var(--text-2); }
+  .badge-role.admin { background: rgba(167,139,250,.12); color: var(--accent); border-color: rgba(167,139,250,.4); }
+  .reason-cell { max-width: 280px; color: var(--text-3); font-size: .78rem; line-height: 1.45; }
+  .row-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .row-actions button { padding: .3rem .65rem; font-size: .76rem; }
+  .row-actions .btn-approve { background: rgba(16,185,129,.12); border-color: rgba(16,185,129,.3); color: #10b981; }
+  .row-actions .btn-reject { background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.3); color: #ef4444; }
+  .filter-row { display: flex; gap: .55rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .filter-pill { padding: .35rem .8rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: .8rem; color: var(--text-2); }
+  .filter-pill.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
+    <a class="nav-link" href="/projects"><i class="icon-rocket"></i>Projects</a>
+    <a class="nav-link" href="/shell"><i class="icon-screen-desktop"></i>Shell</a>
+    <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-section">Admin</div>
+    <a class="nav-link active" href="/admin/users"><i class="icon-people"></i>Users <span id="pending-count" class="ws-badge" style="display:none; margin-left:auto"></span></a>
+    <a class="nav-link" href="/admin/invites"><i class="icon-link"></i>Invites</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Users</h1>
+          <p class="page-subtitle">Approve, reject, suspend tenants. Self-signups need approval before they can deploy.</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span class="ws-badge"><span class="ws-dot"></span>live</span>
+        <button class="theme-toggle" data-action="theme-toggle" aria-label="Toggle theme">
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="form-card">
+        <div class="filter-row">
+          <button class="filter-pill" data-filter="all">All</button>
+          <button class="filter-pill active" data-filter="pending">Pending <span id="cnt-pending"></span></button>
+          <button class="filter-pill" data-filter="active">Active</button>
+          <button class="filter-pill" data-filter="suspended">Suspended</button>
+          <button class="filter-pill" data-filter="rejected">Rejected</button>
+        </div>
+        <table class="users-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Status</th>
+              <th>Method</th>
+              <th>Reason / Invite</th>
+              <th>Joined</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="users-rows">
+            <tr><td colspan="6" style="text-align:center; color:var(--text-3); padding:2rem">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=35"></script>
+<script src="https://rofihosted.space/app.js?v=35"></script>
+<script>
+(function(){
+  RH.loadCurrentUser();
+
+  var allUsers = [];
+  var currentFilter = 'pending';
+
+  function fmtTs(t) {
+    if (!t) return '\u2014';
+    return new Date(t * 1000).toLocaleString();
+  }
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function render() {
+    var rows = document.getElementById('users-rows');
+    rows.innerHTML = '';
+    var filtered = currentFilter === 'all' ? allUsers : allUsers.filter(function(u){ return u.status === currentFilter; });
+    if (filtered.length === 0) {
+      rows.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-3); padding:2rem">No ' + currentFilter + ' users.</td></tr>';
+      return;
+    }
+    filtered.forEach(function(u){
+      var tr = document.createElement('tr');
+      var actions = '';
+      if (u.status === 'pending') {
+        actions = '<button class="btn btn-approve" data-act="approve" data-id="' + escHtml(u.id) + '"><i class="icon-check"></i><span>Approve</span></button>'
+                + '<button class="btn btn-reject" data-act="reject" data-id="' + escHtml(u.id) + '"><i class="icon-close"></i><span>Reject</span></button>';
+      } else if (u.status === 'active' && u.role !== 'admin') {
+        actions = '<button class="btn btn-reject" data-act="suspend" data-id="' + escHtml(u.id) + '"><i class="icon-ban"></i><span>Suspend</span></button>';
+      } else if (u.status === 'suspended') {
+        actions = '<button class="btn btn-approve" data-act="unsuspend" data-id="' + escHtml(u.id) + '"><i class="icon-check"></i><span>Unsuspend</span></button>';
+      }
+
+      tr.innerHTML = ''
+        + '<td><div style="font-weight:500">' + escHtml(u.username) + ' <span class="badge-role ' + escHtml(u.role) + '">' + escHtml(u.role) + '</span></div><div style="color:var(--text-3); font-size:.78rem">' + escHtml(u.email) + '</div></td>'
+        + '<td><span class="badge-status ' + escHtml(u.status) + '">' + escHtml(u.status) + '</span></td>'
+        + '<td>' + escHtml(u.signup_method) + '</td>'
+        + '<td class="reason-cell">' + (u.signup_method === 'invite' ? '<code>' + escHtml(u.invite_code || '') + '</code>' : escHtml(u.signup_reason || '')) + '</td>'
+        + '<td style="font-size:.78rem; color:var(--text-3)">' + fmtTs(u.created_at) + '</td>'
+        + '<td><div class="row-actions">' + actions + '</div></td>';
+      tr.querySelectorAll('button').forEach(function(b){
+        b.addEventListener('click', function(){ handleAction(b.dataset.act, b.dataset.id); });
+      });
+      rows.appendChild(tr);
+    });
+  }
+
+  function load() {
+    fetch('/api/users').then(function(r){return r.json();}).then(function(j){
+      if (!j.ok) {
+        document.getElementById('users-rows').innerHTML = '<tr><td colspan="6" style="color:var(--error); padding:1rem">' + (j.err || 'load failed') + '</td></tr>';
+        return;
+      }
+      allUsers = j.users || [];
+      var pending = allUsers.filter(function(u){ return u.status === 'pending'; }).length;
+      var cnt = document.getElementById('cnt-pending');
+      cnt.textContent = pending > 0 ? '(' + pending + ')' : '';
+      var sidebarCnt = document.getElementById('pending-count');
+      if (pending > 0) {
+        sidebarCnt.style.display = '';
+        sidebarCnt.innerHTML = '<span class="ws-dot"></span>' + pending;
+      }
+      render();
+    });
+  }
+
+  function handleAction(act, id) {
+    var fd = new FormData();
+    fd.append('id', id);
+    var endpoint = '/api/users/' + act;
+    if (act === 'reject') {
+      var reason = prompt('Reason for rejection (optional):') || '';
+      fd.append('reason', reason);
+    }
+    fetch(endpoint, { method: 'POST', body: new URLSearchParams(fd) })
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if (j.ok) load();
+        else alert('Failed: ' + (j.err || 'unknown'));
+      });
+  }
+
+  document.querySelectorAll('.filter-pill').forEach(function(p){
+    p.addEventListener('click', function(){
+      document.querySelectorAll('.filter-pill').forEach(function(x){ x.classList.remove('active'); });
+      p.classList.add('active');
+      currentFilter = p.dataset.filter;
+      render();
+    });
+  });
+
+  load();
+  setInterval(load, 15000);
+})();
+</script>
+</body>
+</html>

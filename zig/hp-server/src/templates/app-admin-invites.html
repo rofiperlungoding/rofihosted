@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Invites / rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=35">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=35">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=35">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  .invites-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .invites-table th { text-align: left; font-size: .72rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; padding: .55rem .7rem; border-bottom: 1px solid var(--border-soft); }
+  .invites-table td { padding: .65rem .7rem; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  .invites-table .code { font-family: ui-monospace, monospace; font-size: .85rem; font-weight: 600; }
+  .badge-state { display: inline-block; padding: .15rem .55rem; border-radius: 5px; font-size: .72rem; font-weight: 600; }
+  .badge-state.usable { background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.3); }
+  .badge-state.used { background: rgba(115,115,115,.12); color: var(--text-3); border: 1px solid var(--border-soft); }
+  .form-row.inline { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: .55rem; align-items: end; }
+  @media (max-width: 700px) { .form-row.inline { grid-template-columns: 1fr; } }
+  .fresh-link {
+    display: flex; align-items: center; gap: .55rem; padding: .8rem 1rem;
+    background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.3);
+    border-radius: 8px; font-family: ui-monospace, monospace;
+    font-size: .85rem; color: #10b981; user-select: text;
+  }
+  .fresh-link button { margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-drawer>
+    <a href="/" class="brand"><span class="brand-mark">r</span><span class="brand-text">rofihosted</span></a>
+    <div class="nav-section">Workspace</div>
+    <a class="nav-link" href="/"><i class="icon-grid"></i>Overview</a>
+    <a class="nav-link" href="/status"><i class="icon-chart"></i>Status</a>
+    <a class="nav-link" href="/files"><i class="icon-folder"></i>Files</a>
+    <a class="nav-link" href="/api"><i class="icon-energy"></i>API</a>
+    <a class="nav-link" href="/projects"><i class="icon-rocket"></i>Projects</a>
+    <a class="nav-link" href="/shell"><i class="icon-screen-desktop"></i>Shell</a>
+    <a class="nav-link" href="/security"><i class="icon-shield"></i>Security</a>
+    <div class="nav-section">Admin</div>
+    <a class="nav-link" href="/admin/users"><i class="icon-people"></i>Users</a>
+    <a class="nav-link active" href="/admin/invites"><i class="icon-link"></i>Invites</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-section">Account</div>
+    <div class="nav-user"><i class="icon-user"></i><span id="cur-user">loading</span></div>
+    <a class="nav-link" href="/settings"><i class="icon-settings"></i>Settings</a>
+    <a class="nav-link" href="/logout"><i class="icon-logout"></i>Sign out</a>
+  </aside>
+  <div class="backdrop" data-drawer-backdrop></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn-icon menu-btn" data-action="toggle-drawer" aria-label="Open menu"><i class="icon-menu"></i></button>
+        <div class="topbar-text">
+          <h1 class="page-title">Invites</h1>
+          <p class="page-subtitle">Generate codes that let invited users skip the approval queue.</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span class="ws-badge"><span class="ws-dot"></span>live</span>
+        <button class="theme-toggle" data-action="theme-toggle" aria-label="Toggle theme">
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="form-card">
+        <h2>Create invite</h2>
+        <p class="lead">Generate a code, share it with someone, they sign up at <code>https://rofihosted.space/signup?invite=&lt;code&gt;</code> and skip the approval queue.</p>
+        <div class="form-row inline">
+          <div>
+            <label class="input-label" for="i-note">Note (private)</label>
+            <input id="i-note" class="input" type="text" placeholder="e.g. for Alice">
+          </div>
+          <div>
+            <label class="input-label" for="i-uses">Max uses</label>
+            <input id="i-uses" class="input" type="number" value="1" min="1" max="50">
+          </div>
+          <div>
+            <label class="input-label" for="i-days">Expires in (days)</label>
+            <input id="i-days" class="input" type="number" value="0" min="0" max="365">
+          </div>
+          <button type="button" class="btn btn-accent" id="i-create"><i class="icon-plus"></i><span>Create</span></button>
+        </div>
+        <div id="fresh" style="display:none; margin-top:1rem"></div>
+        <div id="alert" class="alert" style="display:none; margin-top:1rem"></div>
+      </div>
+
+      <div class="form-card">
+        <h2>All invites</h2>
+        <table class="invites-table">
+          <thead>
+            <tr><th>Code</th><th>Note</th><th>Uses</th><th>Expires</th><th>Created</th><th>State</th><th></th></tr>
+          </thead>
+          <tbody id="i-rows">
+            <tr><td colspan="7" style="text-align:center; color:var(--text-3); padding:2rem">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://rofihosted.space/theme.js?v=35"></script>
+<script src="https://rofihosted.space/app.js?v=35"></script>
+<script>
+(function(){
+  RH.loadCurrentUser();
+  function fmtTs(t){ return t ? new Date(t * 1000).toLocaleDateString() : '\u2014'; }
+  function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+  function load() {
+    fetch('/api/invites').then(function(r){return r.json();}).then(function(j){
+      var rows = document.getElementById('i-rows');
+      if (!j.ok) { rows.innerHTML = '<tr><td colspan="7" style="color:var(--error)">'+(j.err||'load failed')+'</td></tr>'; return; }
+      var list = j.invites || [];
+      if (list.length === 0) { rows.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-3); padding:2rem">No invites yet.</td></tr>'; return; }
+      rows.innerHTML = '';
+      list.forEach(function(inv){
+        var tr = document.createElement('tr');
+        var url = 'https://rofihosted.space/signup?invite=' + encodeURIComponent(inv.code);
+        tr.innerHTML = ''
+          + '<td><span class="code">' + escHtml(inv.code) + '</span></td>'
+          + '<td>' + escHtml(inv.note || '') + '</td>'
+          + '<td>' + inv.uses + ' / ' + inv.max_uses + '</td>'
+          + '<td>' + fmtTs(inv.expires_at) + '</td>'
+          + '<td style="font-size:.78rem; color:var(--text-3)">' + fmtTs(inv.created_at) + '</td>'
+          + '<td><span class="badge-state ' + (inv.usable ? 'usable' : 'used') + '">' + (inv.usable ? 'usable' : 'used') + '</span></td>'
+          + '<td><button class="btn" data-copy="' + escHtml(url) + '" style="padding:.3rem .6rem"><i class="icon-link"></i><span>Copy link</span></button>'
+          + ' <button class="btn" data-revoke="' + escHtml(inv.code) + '" style="padding:.3rem .6rem"><i class="icon-trash"></i></button></td>';
+        tr.querySelector('[data-copy]').addEventListener('click', function(){
+          navigator.clipboard.writeText(this.dataset.copy);
+          this.querySelector('span').textContent = 'Copied!';
+          setTimeout(function(b){ b.querySelector('span').textContent = 'Copy link'; }.bind(null, this), 1500);
+        });
+        tr.querySelector('[data-revoke]').addEventListener('click', function(){
+          if (!confirm('Revoke ' + this.dataset.revoke + '?')) return;
+          var fd = new FormData(); fd.append('code', this.dataset.revoke);
+          fetch('/api/invites/revoke', { method: 'POST', body: new URLSearchParams(fd) }).then(load);
+        });
+        rows.appendChild(tr);
+      });
+    });
+  }
+
+  document.getElementById('i-create').addEventListener('click', function(){
+    var fd = new FormData();
+    fd.append('note', document.getElementById('i-note').value);
+    fd.append('max_uses', document.getElementById('i-uses').value || '1');
+    fd.append('expires_in_days', document.getElementById('i-days').value || '0');
+    fetch('/api/invites/create', { method: 'POST', body: new URLSearchParams(fd) })
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if (!j.ok) {
+          var a = document.getElementById('alert'); a.className = 'alert error'; a.textContent = j.err || 'create failed'; a.style.display = '';
+          return;
+        }
+        var url = 'https://rofihosted.space/signup?invite=' + encodeURIComponent(j.code);
+        var f = document.getElementById('fresh');
+        f.innerHTML = '<div class="fresh-link"><i class="icon-check"></i><div><div style="font-weight:600">' + escHtml(j.code) + '</div><div style="color:var(--text-3); font-size:.78rem">' + escHtml(url) + '</div></div><button class="btn" data-copy>Copy link</button></div>';
+        f.style.display = '';
+        f.querySelector('[data-copy]').addEventListener('click', function(){
+          navigator.clipboard.writeText(url);
+          this.textContent = 'Copied!';
+        });
+        document.getElementById('i-note').value = '';
+        load();
+      });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

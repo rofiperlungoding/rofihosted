@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<title>Sign up - rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=35">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=35">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; padding: 2rem 1.2rem; }
+  .signup-card {
+    width: 100%; max-width: 460px;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 14px; padding: 2.2rem 2rem; box-shadow: var(--shadow);
+  }
+  .brand-row { display: flex; align-items: center; gap: .65rem; margin-bottom: 1.6rem; }
+  .brand-row .mark { width: 36px; height: 36px; border-radius: 8px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-weight: 700; font-size: 1.05rem; }
+  .brand-row .brand-text { font-weight: 700; font-size: 1.08rem; letter-spacing: -.012em; color: var(--text); }
+  h1 { font-size: 1.45rem; font-weight: 700; margin: 0 0 .3rem; letter-spacing: -.022em; }
+  .lead { color: var(--text-2); font-size: .9rem; margin: 0 0 1.6rem; line-height: 1.55; }
+
+  .invite-status {
+    display: flex; align-items: center; gap: .55rem;
+    padding: .65rem .9rem; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    font-size: .82rem; margin-bottom: 1.4rem;
+  }
+  .invite-status .pill { font-family: ui-monospace, monospace; font-size: .78rem; }
+  .invite-status.ok { background: rgba(16,185,129,.08); border-color: rgba(16,185,129,.3); color: #10b981; }
+  .invite-status.err { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.3); color: #ef4444; }
+
+  .form-row { display: flex; flex-direction: column; gap: .35rem; margin-bottom: 1rem; }
+  .form-row label { font-size: .78rem; font-weight: 500; color: var(--text-2); }
+  .form-row input, .form-row textarea {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: .65rem .85rem;
+    color: var(--text); font: inherit; font-size: .9rem;
+    transition: border-color .15s, background .15s;
+  }
+  .form-row input:focus, .form-row textarea:focus {
+    outline: none; border-color: var(--accent); background: var(--surface);
+  }
+  .form-row .hint { font-size: .73rem; color: var(--text-3); margin-top: .15rem; }
+  .form-row textarea { resize: vertical; min-height: 70px; font-family: inherit; }
+
+  .submit-row {
+    display: flex; flex-direction: column; gap: .6rem; margin-top: 1.6rem;
+  }
+  .submit-row button.btn-accent {
+    text-decoration: none; display: inline-flex; align-items: center; justify-content: center;
+    gap: .5rem; height: 44px; padding: 0 1.3rem;
+    background: var(--accent); border: 1px solid var(--accent); color: var(--accent-fg);
+    border-radius: 8px; font-size: .92rem; font-weight: 600; cursor: pointer;
+    transition: background .15s;
+  }
+  .submit-row button.btn-accent:hover { background: var(--accent-2); border-color: var(--accent-2); }
+  .submit-row button.btn-accent:disabled { opacity: .55; cursor: not-allowed; }
+  .submit-row a, .submit-row a:link, .submit-row a:visited {
+    text-decoration: none !important; text-align: center; font-size: .82rem;
+    color: var(--text-3);
+  }
+  .submit-row a:hover { color: var(--text); }
+
+  .alert {
+    padding: .7rem 1rem; border-radius: 8px; font-size: .82rem;
+    margin-bottom: 1rem;
+  }
+  .alert.error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); color: #ef4444; }
+  .alert.success { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.3); color: #10b981; }
+</style>
+</head>
+<body>
+<div class="signup-card">
+  <div class="brand-row">
+    <span class="mark">r</span>
+    <span class="brand-text">rofihosted</span>
+  </div>
+  <h1>Create your account</h1>
+  <p class="lead">Sign up to deploy your projects on a phone-based PaaS. With an invite code you're in instantly. Without one, the operator approves manually.</p>
+
+  <div id="invite-status" class="invite-status" style="display:none"></div>
+  <div id="form-alert" class="alert error" style="display:none"></div>
+
+  <form id="signup-form" autocomplete="off">
+    <div class="form-row">
+      <label for="invite_code">Invite code <span style="color:var(--text-3); font-weight:400">(optional)</span></label>
+      <input id="invite_code" name="invite_code" type="text" placeholder="RH-XXXX-XXXX" autocomplete="off" maxlength="14" style="font-family:ui-monospace,monospace; letter-spacing:.04em; text-transform:uppercase">
+      <p class="hint">Got one from the operator? Paste it here for instant approval.</p>
+    </div>
+    <div class="form-row">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" required pattern="[a-zA-Z][a-zA-Z0-9_-]{2,31}" minlength="3" maxlength="32">
+      <p class="hint">3-32 chars, alphanumeric plus _ and -. This is your subdomain prefix and login name.</p>
+    </div>
+    <div class="form-row">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required>
+      <p class="hint">For account recovery and approval notifications.</p>
+    </div>
+    <div class="form-row">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password">
+      <p class="hint">8+ characters. Use a passphrase or password manager.</p>
+    </div>
+    <div class="form-row" id="reason-row" style="display:none">
+      <label for="signup_reason">Why do you want to use rofihosted?</label>
+      <textarea id="signup_reason" name="signup_reason" placeholder="Building a side project. Tinkering. Experimenting with self-hosting..."></textarea>
+      <p class="hint">Helps the operator decide. A sentence or two is enough.</p>
+    </div>
+
+    <div class="submit-row">
+      <button type="submit" class="btn-accent" id="submit-btn">
+        <i class="icon-rocket"></i><span id="submit-label">Sign up</span>
+      </button>
+      <a href="https://app.rofihosted.space/login">Already have an account? Sign in</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  var inviteInput = document.getElementById('invite_code');
+  var inviteStatus = document.getElementById('invite-status');
+  var reasonRow = document.getElementById('reason-row');
+  var submitLabel = document.getElementById('submit-label');
+  var submitBtn = document.getElementById('submit-btn');
+  var alertEl = document.getElementById('form-alert');
+  var form = document.getElementById('signup-form');
+
+  // Pre-fill invite code from query string.
+  var params = new URLSearchParams(location.search);
+  var fromQuery = params.get('invite');
+  if (fromQuery) {
+    inviteInput.value = fromQuery.toUpperCase();
+    setTimeout(checkInvite, 100);
+  }
+
+  inviteInput.addEventListener('input', function(){ inviteInput.value = inviteInput.value.toUpperCase(); });
+  inviteInput.addEventListener('blur', checkInvite);
+
+  function showInviteStatus(cls, html) {
+    inviteStatus.className = 'invite-status ' + cls;
+    inviteStatus.innerHTML = html;
+    inviteStatus.style.display = '';
+  }
+  function hideInviteStatus() { inviteStatus.style.display = 'none'; }
+
+  function setMode(hasInvite) {
+    if (hasInvite) {
+      reasonRow.style.display = 'none';
+      submitLabel.textContent = 'Create account';
+    } else {
+      reasonRow.style.display = '';
+      submitLabel.textContent = 'Request approval';
+    }
+  }
+  setMode(false);
+
+  function checkInvite() {
+    var code = inviteInput.value.trim();
+    if (!code) {
+      hideInviteStatus();
+      setMode(false);
+      return;
+    }
+    fetch('/signup/check-invite?code=' + encodeURIComponent(code))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j.ok) {
+          showInviteStatus('ok', '<i class="icon-check"></i> Valid invite. <span class="pill">' + escHtml(code) + '</span>');
+          setMode(true);
+        } else {
+          showInviteStatus('err', '<i class="icon-exclamation"></i> ' + (j.err === 'not_found' ? 'Unknown invite code.' : j.err === 'already_used' ? 'This invite has already been used or expired.' : 'Could not validate.'));
+          setMode(false);
+        }
+      })
+      .catch(function(){ hideInviteStatus(); setMode(false); });
+  }
+
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    alertEl.style.display = 'none';
+    submitBtn.disabled = true;
+    var fd = new URLSearchParams();
+    fd.set('username', form.username.value.trim());
+    fd.set('email', form.email.value.trim());
+    fd.set('password', form.password.value);
+    if (form.invite_code.value.trim()) fd.set('invite_code', form.invite_code.value.trim());
+    if (reasonRow.style.display !== 'none') fd.set('signup_reason', form.signup_reason.value.trim());
+
+    fetch('/signup/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: fd.toString(),
+    }).then(function(r){ return r.json(); }).then(function(j){
+      submitBtn.disabled = false;
+      if (j.ok) {
+        // Redirect: invite -> dashboard, self -> pending page.
+        if (j.status === 'active') {
+          location.href = 'https://app.rofihosted.space/';
+        } else {
+          location.href = '/signup/pending';
+        }
+      } else {
+        var msg = j.err || 'signup failed';
+        if (msg === 'username_taken') msg = 'That username is already taken.';
+        else if (msg === 'email_taken') msg = 'That email is already registered.';
+        else if (msg === 'invalid_username') msg = 'Username must be 3-32 chars, alphanumeric, _ or -.';
+        else if (msg === 'weak_password') msg = 'Password must be at least 8 characters.';
+        else if (msg === 'invite_used') msg = 'That invite code has already been used.';
+        else if (msg === 'invite_invalid') msg = 'Invite code is invalid.';
+        else if (msg === 'invalid_email') msg = 'Please enter a valid email.';
+        alertEl.textContent = msg;
+        alertEl.className = 'alert error';
+        alertEl.style.display = '';
+      }
+    }).catch(function(e){
+      submitBtn.disabled = false;
+      alertEl.textContent = 'Network error: ' + e.message;
+      alertEl.style.display = '';
+    });
+  });
+})();
+</script>
+<script src="https://rofihosted.space/theme.js?v=35"></script>
+</body>
+</html>

@@ -37,6 +37,8 @@ const projauth = @import("projauth.zig");
 const cron = @import("cron.zig");
 const detect = @import("detect.zig");
 const mcp = @import("mcp.zig");
+const users = @import("users.zig");
+const invites = @import("invites.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -73,6 +75,8 @@ const App = struct {
     supervisor: *supervisor.Supervisor,
     cron: *cron.Manager,
     powermon: *powermon.PowerMon,
+    users: *users.Manager,
+    invites: *invites.Manager,
     pepper: []const u8,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
@@ -150,6 +154,11 @@ pub fn main() !void {
     const cron_mgr = try cron.Manager.init(allocator, pepper_slice, projects_mgr);
     const powermon_inst = try allocator.create(powermon.PowerMon);
     powermon_inst.* = powermon.PowerMon.init(allocator, tg_cfg, bus);
+    const users_mgr = try users.Manager.init(allocator, pepper_slice);
+    const invites_mgr = try invites.Manager.init(allocator);
+    // First-boot: copy the legacy operator into users.zig as u_admin so the
+    // multi-user pages have someone to point at as the admin.
+    users_mgr.migrateLegacyOperator(auth_cfg.user, auth_cfg.pass) catch {};
     // Wire bus -> webhook fan-out so any event published also fires matching
     // webhooks (operator-configured outbound HTTP, optional, opt-in per hook).
     bus.pub_callback = webhookFanOut;
@@ -185,6 +194,8 @@ pub fn main() !void {
         .supervisor = supervisor_mgr,
         .cron = cron_mgr,
         .powermon = powermon_inst,
+        .users = users_mgr,
+        .invites = invites_mgr,
         .pepper = pepper_slice,
     };
     g_app = &app;
@@ -494,7 +505,7 @@ fn redirectAbs(res: *httpz.Response, base: []const u8, suffix: []const u8) !void
 // =================================================================
 // PUBLIC SITE - rofihosted.space
 // =================================================================
-fn handleRoot(_: *App, _: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
+fn handleRoot(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
     if (std.mem.eql(u8, path, "/health")) {
         res.content_type = .TEXT;
         res.body = "ok\n";
@@ -546,6 +557,22 @@ fn handleRoot(_: *App, _: *httpz.Request, res: *httpz.Response, path: []const u8
     if (std.mem.eql(u8, path, "/")) {
         res.content_type = .HTML;
         res.body = @embedFile("templates/public.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/signup")) {
+        res.content_type = .HTML;
+        res.body = @embedFile("templates/signup.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/signup/submit")) {
+        return handleSignupSubmit(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/signup/check-invite")) {
+        return handleCheckInvite(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/signup/pending")) {
+        res.content_type = .HTML;
+        res.body = @embedFile("templates/signup-pending.html");
         return;
     }
     return notFound(res);
@@ -640,6 +667,16 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/hosted/refresh")) return apiHostedRefresh(app, req, res);
     if (std.mem.eql(u8, path, "/api/ai/scrub")) return apiAiScrub(app, req, res);
     if (std.mem.eql(u8, path, "/api/audit")) return apiAudit(app, res);
+
+    // Multi-tenancy: user + invite management (admin-only)
+    if (std.mem.eql(u8, path, "/api/users")) return apiUsersList(app, req, res);
+    if (std.mem.eql(u8, path, "/api/users/approve")) return apiUsersApprove(app, req, res);
+    if (std.mem.eql(u8, path, "/api/users/reject")) return apiUsersReject(app, req, res);
+    if (std.mem.eql(u8, path, "/api/users/suspend")) return apiUsersSuspend(app, req, res);
+    if (std.mem.eql(u8, path, "/api/users/unsuspend")) return apiUsersUnsuspend(app, req, res);
+    if (std.mem.eql(u8, path, "/api/invites")) return apiInvitesList(app, req, res);
+    if (std.mem.eql(u8, path, "/api/invites/create")) return apiInvitesCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/invites/revoke")) return apiInvitesRevoke(app, req, res);
     if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock/update")) return apiGeoblockUpdate(app, req, res);
@@ -713,6 +750,18 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
         res.content_type = .HTML;
         res.header("Cache-Control", "no-store, must-revalidate");
         res.body = @embedFile("templates/app-shell.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/admin/users")) {
+        res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
+        res.body = @embedFile("templates/app-admin-users.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/admin/invites")) {
+        res.content_type = .HTML;
+        res.header("Cache-Control", "no-store, must-revalidate");
+        res.body = @embedFile("templates/app-admin-invites.html");
         return;
     }
     return notFound(res);
@@ -796,7 +845,18 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
         if (form.get("username")) |u| attempted_user = u;
     } else |_| {}
 
-    const ok = try auth.login(app.auth_cfg, req, res);
+    // Try multi-user login first; fall back to legacy operator credentials.
+    var ok: bool = false;
+    var pending: bool = false;
+    if (app.users.findByUsername(attempted_user)) |_| {
+        if (try auth.loginUser(app.auth_cfg, app.users, req, res)) |user| {
+            ok = true;
+            pending = (user.status == .pending);
+        }
+    }
+    if (!ok) {
+        ok = try auth.login(app.auth_cfg, req, res);
+    }
 
     // Track outcome (rate-limit failed attempts -> auto-ban after 5 fails / 15min)
     app.login_tracker.record(ip, ua, attempted_user, ok);
@@ -828,6 +888,14 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
         const target = try std.fmt.allocPrint(res.arena, "https://app.rofihosted.space/login?error=1&next={s}", .{next});
         res.status = 302;
         res.header("Location", target);
+        res.body = "";
+        return;
+    }
+
+    // Pending users go to a holding page instead of the dashboard.
+    if (pending) {
+        res.status = 302;
+        res.header("Location", "https://rofihosted.space/signup/pending");
         res.body = "";
         return;
     }
@@ -4561,6 +4629,433 @@ fn mcpToolTriggerBackup(app: *App, res: *httpz.Response, id_json: []const u8, ar
         else => false,
     };
     try mcpJsonToolText(res, id_json, out.items, !ok);
+}
+
+// =================================================================
+// SIGNUP + USER MANAGEMENT (multi-tenancy)
+// =================================================================
+
+fn handleCheckInvite(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    res.content_type = .JSON;
+    res.header("Cache-Control", "no-store");
+    const code_qs = req.url.query;
+    var code: []const u8 = "";
+    var iter = std.mem.splitScalar(u8, code_qs, '&');
+    while (iter.next()) |pair| {
+        if (std.mem.startsWith(u8, pair, "code=")) {
+            code = pair[5..];
+            break;
+        }
+    }
+    // URL-decode minimal (we expect just RH-XXXX-XXXX which has no special chars)
+    if (code.len == 0) {
+        try res.json(.{ .ok = false, .err = "missing_code" }, .{});
+        return;
+    }
+
+    // Don't actually consume - just probe. We have to walk the list since
+    // there's no findByCode helper yet. Read via list().
+    const all = try app.invites.list(res.arena);
+    for (all) |inv| {
+        if (std.mem.eql(u8, inv.code, code)) {
+            if (!inv.isUsable()) {
+                try res.json(.{ .ok = false, .err = "already_used" }, .{});
+                return;
+            }
+            try res.json(.{ .ok = true, .note = inv.note }, .{});
+            return;
+        }
+    }
+    try res.json(.{ .ok = false, .err = "not_found" }, .{});
+}
+
+fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    res.content_type = .JSON;
+    res.header("Cache-Control", "no-store");
+
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const username = std.mem.trim(u8, form.get("username") orelse "", " \t");
+    const email = std.mem.trim(u8, form.get("email") orelse "", " \t");
+    const password = form.get("password") orelse "";
+    const invite_code_raw = std.mem.trim(u8, form.get("invite_code") orelse "", " \t");
+    const reason = std.mem.trim(u8, form.get("signup_reason") orelse "", " \t");
+
+    if (username.len == 0 or password.len == 0 or email.len == 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_field" }, .{});
+        return;
+    }
+    if (std.mem.indexOfScalar(u8, email, '@') == null or email.len < 5) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_email" }, .{});
+        return;
+    }
+
+    var input = users.SignupInput{
+        .username = username,
+        .email = email,
+        .password = password,
+        .signup_reason = reason,
+    };
+
+    var initial_status: users.Status = .pending;
+    var method: users.SignupMethod = .self;
+    var consumed_invite: ?[]const u8 = null;
+
+    if (invite_code_raw.len > 0) {
+        // Validate + consume invite atomically
+        const inv = app.invites.consume(invite_code_raw, username) catch |e| {
+            res.status = 400;
+            const msg = switch (e) {
+                error.NotFound => "invite_invalid",
+                error.AlreadyUsed => "invite_used",
+                else => "invite_error",
+            };
+            try res.json(.{ .ok = false, .err = msg }, .{});
+            return;
+        };
+        method = .invite;
+        initial_status = .active;
+        input.invite_code = inv.code;
+        consumed_invite = inv.code;
+    }
+
+    const user = app.users.create(input, method, initial_status, null) catch |e| {
+        res.status = 400;
+        const msg = switch (e) {
+            error.UsernameTaken => "username_taken",
+            error.EmailTaken => "email_taken",
+            error.InvalidUsername => "invalid_username",
+            error.InvalidEmail => "invalid_email",
+            error.WeakPassword => "weak_password",
+            else => "server_error",
+        };
+        try res.json(.{ .ok = false, .err = msg }, .{});
+        return;
+    };
+
+    // Audit + bus event
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = "self",
+        .action = if (method == .invite) "user_signup_invite" else "user_signup_self",
+        .target = user.id,
+        .detail = if (consumed_invite) |c| c else "",
+        .ok = true,
+    }) catch {};
+
+    app.bus.publish(.anomaly_detected, .{
+        .timestamp = std.time.timestamp(),
+        .kind = if (initial_status == .pending) "user_signup_pending" else "user_signup_active",
+        .detail = user.username,
+    });
+
+    // Issue a session cookie so they don't have to log in again
+    auth.issueUserCookie(app.auth_cfg, user, res) catch {};
+
+    try res.json(.{
+        .ok = true,
+        .id = user.id,
+        .username = user.username,
+        .status = user.status.label(),
+    }, .{});
+}
+
+// ---- admin user management API ----
+
+fn requireAdmin(app: *App, req: *httpz.Request, res: *httpz.Response) !?auth.Identity {
+    const ident = auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req) orelse {
+        res.status = 401;
+        try res.json(.{ .ok = false, .err = "not_authenticated" }, .{});
+        return null;
+    };
+    if (ident.role != .admin) {
+        res.status = 403;
+        try res.json(.{ .ok = false, .err = "admin_required" }, .{});
+        return null;
+    }
+    return ident;
+}
+
+fn apiUsersList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    _ = ident;
+    const list = try app.users.list(res.arena);
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    try w.writeAll("{\"ok\":true,\"users\":[");
+    for (list, 0..) |u, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.writeAll("{\"id\":");
+        try writeJsonStr(w, u.id);
+        try w.writeAll(",\"username\":");
+        try writeJsonStr(w, u.username);
+        try w.writeAll(",\"email\":");
+        try writeJsonStr(w, u.email);
+        try w.print(",\"role\":\"{s}\",\"status\":\"{s}\",\"signup_method\":\"{s}\"", .{
+            u.role.label(), u.status.label(), u.signup_method.label(),
+        });
+        if (u.signup_reason.len > 0) {
+            try w.writeAll(",\"signup_reason\":");
+            try writeJsonStr(w, u.signup_reason);
+        }
+        if (u.invite_code) |c| {
+            try w.writeAll(",\"invite_code\":");
+            try writeJsonStr(w, c);
+        }
+        try w.print(",\"created_at\":{d},\"approved_at\":{d},\"last_login\":{d}", .{
+            u.created_at, u.approved_at, u.last_login,
+        });
+        try w.writeByte('}');
+    }
+    try w.writeAll("]}");
+    res.content_type = .JSON;
+    res.body = try buf.toOwnedSlice();
+}
+
+fn apiUsersApprove(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    app.users.approve(id, ident.user_id) catch |e| {
+        res.status = 400;
+        const msg = switch (e) {
+            error.NotFound => "not_found",
+            error.NotPending => "not_pending",
+            else => "error",
+        };
+        try res.json(.{ .ok = false, .err = msg }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "user_approve",
+        .target = id,
+        .detail = "",
+        .ok = true,
+    }) catch {};
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiUsersReject(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    const reason = form.get("reason") orelse "";
+    app.users.reject(id, ident.user_id, reason) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "error" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "user_reject",
+        .target = id,
+        .detail = reason,
+        .ok = true,
+    }) catch {};
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiUsersSuspend(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    app.users.suspend_(id) catch |e| {
+        res.status = 400;
+        const msg = switch (e) {
+            error.NotFound => "not_found",
+            error.CannotSuspendAdmin => "cannot_suspend_admin",
+            else => "error",
+        };
+        try res.json(.{ .ok = false, .err = msg }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "user_suspend",
+        .target = id,
+        .detail = "",
+        .ok = true,
+    }) catch {};
+    try res.json(.{ .ok = true }, .{});
+}
+
+fn apiUsersUnsuspend(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const id = form.get("id") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_id" }, .{});
+        return;
+    };
+    app.users.unsuspend(id) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "error" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "user_unsuspend",
+        .target = id,
+        .detail = "",
+        .ok = true,
+    }) catch {};
+    try res.json(.{ .ok = true }, .{});
+}
+
+// ---- invites ----
+
+fn apiInvitesList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    _ = ident;
+    const list = try app.invites.list(res.arena);
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    try w.writeAll("{\"ok\":true,\"invites\":[");
+    for (list, 0..) |inv, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.writeAll("{\"code\":");
+        try writeJsonStr(w, inv.code);
+        try w.writeAll(",\"created_by\":");
+        try writeJsonStr(w, inv.created_by);
+        try w.print(",\"created_at\":{d},\"expires_at\":{d},\"max_uses\":{d},\"uses\":{d}", .{
+            inv.created_at, inv.expires_at, inv.max_uses, inv.uses,
+        });
+        if (inv.note.len > 0) {
+            try w.writeAll(",\"note\":");
+            try writeJsonStr(w, inv.note);
+        }
+        if (inv.last_used_by) |x| {
+            try w.writeAll(",\"last_used_by\":");
+            try writeJsonStr(w, x);
+        }
+        try w.print(",\"last_used_at\":{d}", .{inv.last_used_at});
+        try w.print(",\"usable\":{s}", .{if (inv.isUsable()) "true" else "false"});
+        try w.writeByte('}');
+    }
+    try w.writeAll("]}");
+    res.content_type = .JSON;
+    res.body = try buf.toOwnedSlice();
+}
+
+fn apiInvitesCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const note = form.get("note") orelse "";
+    var max_uses: u32 = 1;
+    if (form.get("max_uses")) |s| {
+        if (std.fmt.parseInt(u32, s, 10) catch null) |n| max_uses = n;
+    }
+    var expires_at: i64 = 0;
+    if (form.get("expires_in_days")) |s| {
+        if (std.fmt.parseInt(i64, s, 10) catch null) |days| {
+            if (days > 0) expires_at = std.time.timestamp() + days * 86400;
+        }
+    }
+    const inv = app.invites.create(ident.username, note, expires_at, max_uses) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "create_failed" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "invite_create",
+        .target = inv.code,
+        .detail = note,
+        .ok = true,
+    }) catch {};
+    try res.json(.{ .ok = true, .code = inv.code, .max_uses = inv.max_uses, .expires_at = inv.expires_at }, .{});
+}
+
+fn apiInvitesRevoke(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireAdmin(app, req, res)) orelse return;
+    res.content_type = .JSON;
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const code = form.get("code") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_code" }, .{});
+        return;
+    };
+    app.invites.revoke(code) catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "not_found" }, .{});
+        return;
+    };
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = ident.username,
+        .action = "invite_revoke",
+        .target = code,
+        .detail = "",
+        .ok = true,
+    }) catch {};
+    try res.json(.{ .ok = true }, .{});
+}
+
+// JSON string writer used by the user/invite list endpoints.
+fn writeJsonStr(w: anytype, s: []const u8) !void {
+    try w.writeByte('"');
+    for (s) |c| switch (c) {
+        '\\' => try w.writeAll("\\\\"),
+        '"' => try w.writeAll("\\\""),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
+        '\t' => try w.writeAll("\\t"),
+        0x00...0x1f => try w.print("\\u{x:0>4}", .{c}),
+        else => try w.writeByte(c),
+    };
+    try w.writeByte('"');
 }
 
 fn v1PublicStats(app: *App, res: *httpz.Response) !void {
