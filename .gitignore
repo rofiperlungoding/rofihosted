@@ -57,3 +57,10 @@ zig/hp-server/zig-pkg/
 # Local commit message scratch file (created by my workflow, not source)
 msg.txt
 .commit-msg.tmp
+
+# Local PowerShell helper scripts (Kiro session scratch, never source of truth)
+*.ps1
+!cli/*.ps1
+unblock.sh
+gen-key.sh
+diag-*.sh

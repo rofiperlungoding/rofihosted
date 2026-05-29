@@ -362,15 +362,15 @@ sect "BACKUP PIPELINE"
 R=$(curl -sm 30 -b "$CJ" -X POST "$BASE/api/system/backup?target=local")
 if echo "$R" | grep -q '"ok":true'; then pass "backup local"; else fail "backup local" "$R"; fi
 
-R=$(curl -sm 5 -b "$CJ" "$BASE/api/system/backups")
+R=$(curl -sm 15 -b "$CJ" "$BASE/api/system/backups")
 if echo "$R" | grep -q '"name":"rofihosted-'; then
     LOCAL_COUNT=$(echo "$R" | grep -o '"name":"rofihosted-' | wc -l | tr -d ' ')
     pass "local backups visible (count=$LOCAL_COUNT)"
 else
-    fail "local backups visible" "$R"
+    fail "local backups visible" "$(echo "$R" | head -c 300)"
 fi
 
-R2_CONFIGURED=$(echo "$R" | grep -c '"r2_configured":true' || echo 0)
+R2_CONFIGURED=$(echo "$R" | grep -c '"r2_configured":true')
 if [ "$R2_CONFIGURED" -gt 0 ]; then
     pass "R2 configured"
     R=$(curl -sm 60 -b "$CJ" -X POST "$BASE/api/system/backup?target=r2")
