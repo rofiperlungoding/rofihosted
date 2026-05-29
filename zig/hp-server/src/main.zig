@@ -36,6 +36,7 @@ const proxy = @import("proxy.zig");
 const projauth = @import("projauth.zig");
 const cron = @import("cron.zig");
 const detect = @import("detect.zig");
+const mcp = @import("mcp.zig");
 
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
@@ -442,6 +443,20 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     // Available on api.rofihosted.space AND app.rofihosted.space.
     if (std.mem.startsWith(u8, path, "/v1/")) {
         try handleV1(app, req, res, path);
+        logVisitFull(app, req, ip, ua, host, method, res.status, cls);
+        return;
+    }
+
+    // MCP (Model Context Protocol) endpoint. JSON-RPC 2.0 over a single
+    // POST /mcp. Auth via Authorization: Bearer <api_key> with admin scope.
+    // Stateless mode - no session ID, no SSE streaming.
+    if (std.mem.eql(u8, path, "/mcp")) {
+        try handleMcp(app, req, res);
+        logVisitFull(app, req, ip, ua, host, method, res.status, cls);
+        return;
+    }
+    if (std.mem.eql(u8, path, "/.well-known/mcp.json")) {
+        try handleMcpDiscovery(app, res);
         logVisitFull(app, req, ip, ua, host, method, res.status, cls);
         return;
     }
@@ -3701,6 +3716,870 @@ fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const 
 
     res.status = 404;
     try res.json(.{ .ok = false, .err = "unknown_endpoint" }, .{});
+}
+
+// =================================================================
+// MCP (Model Context Protocol) - JSON-RPC 2.0 over POST /mcp
+// =================================================================
+
+fn handleMcpDiscovery(_: *App, res: *httpz.Response) !void {
+    // Public discovery doc so Claude Desktop / Kiro / cursor can auto-config.
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Cache-Control", "public, max-age=3600");
+    try res.json(.{
+        .name = "rofihosted-mcp",
+        .version = mcp.SERVER_VERSION,
+        .protocolVersion = mcp.PROTOCOL_VERSION,
+        .description = "Manage a self-hosted PaaS running on a phone. Tools for projects, deploys, secrets, databases, security, backups.",
+        .transport = "streamable-http",
+        .endpoint = "https://app.rofihosted.space/mcp",
+        .auth = .{
+            .type = "bearer",
+            .scope = "admin",
+            .docs = "Create an admin API key at /settings, then send Authorization: Bearer <key> on every POST /mcp request.",
+        },
+    }, .{});
+}
+
+fn handleMcp(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    // Permissive CORS so browser-based MCP clients can connect.
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS, DELETE");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
+
+    if (req.method == .OPTIONS) {
+        res.status = 204;
+        return;
+    }
+    if (req.method == .DELETE) {
+        // Stateless server, but reply 200 for politeness so clients with
+        // session-cleanup logic don't error out.
+        res.status = 200;
+        try res.json(.{ .ok = true }, .{});
+        return;
+    }
+    if (req.method != .POST) {
+        res.status = 405;
+        try res.json(.{ .ok = false, .err = "method_not_allowed" }, .{});
+        return;
+    }
+
+    // Auth: Authorization: Bearer <key>, admin scope.
+    const auth_hdr = req.header("authorization") orelse req.header("Authorization") orelse "";
+    var key: []const u8 = "";
+    if (std.mem.startsWith(u8, auth_hdr, "Bearer ")) {
+        key = auth_hdr["Bearer ".len..];
+    } else if (auth_hdr.len > 0) {
+        // Tolerate raw key without the Bearer prefix.
+        key = auth_hdr;
+    } else {
+        // Fallback to X-API-Key for clients that prefer that header.
+        key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
+    }
+
+    if (key.len == 0) {
+        res.status = 401;
+        try mcpJsonError(res, "null", -32001, "missing authorization (send Bearer <key>)");
+        return;
+    }
+    const rec = app.apikey.verify(key) orelse {
+        res.status = 401;
+        try mcpJsonError(res, "null", -32002, "invalid api key");
+        return;
+    };
+    if (!rec.hasScope(.admin)) {
+        res.status = 403;
+        try mcpJsonError(res, "null", -32003, "admin scope required");
+        return;
+    }
+
+    const body_raw = req.body() orelse {
+        res.status = 400;
+        try mcpJsonError(res, "null", -32700, "missing body");
+        return;
+    };
+
+    // Stash request id so we can echo it in errors. Default to "null".
+    const id_json = extractRpcId(res.arena, body_raw) catch "null";
+
+    // Minimal JSON parse: just pluck "method".
+    const Req = struct {
+        jsonrpc: ?[]const u8 = null,
+        method: ?[]const u8 = null,
+        params: ?std.json.Value = null,
+        id: ?std.json.Value = null,
+    };
+    const parsed = std.json.parseFromSlice(Req, res.arena, body_raw, .{ .ignore_unknown_fields = true }) catch {
+        res.status = 200; // JSON-RPC errors are 200 with error envelope
+        try mcpJsonError(res, id_json, -32700, "parse error");
+        return;
+    };
+    const method = parsed.value.method orelse {
+        res.status = 200;
+        try mcpJsonError(res, id_json, -32600, "missing method");
+        return;
+    };
+
+    // ---- dispatch ----
+    if (std.mem.eql(u8, method, "initialize")) {
+        var buf = std.ArrayList(u8).init(res.arena);
+        try mcp.writeInitializeResult(buf.writer());
+        try mcpJsonResult(res, id_json, buf.items);
+        return;
+    }
+    if (std.mem.eql(u8, method, "notifications/initialized")) {
+        // Per spec: notifications get 202 with no body.
+        res.status = 202;
+        return;
+    }
+    if (std.mem.eql(u8, method, "ping")) {
+        try mcpJsonResult(res, id_json, "{}");
+        return;
+    }
+    if (std.mem.eql(u8, method, "tools/list")) {
+        var buf = std.ArrayList(u8).init(res.arena);
+        try mcp.writeToolsList(buf.writer());
+        try mcpJsonResult(res, id_json, buf.items);
+        return;
+    }
+    if (std.mem.eql(u8, method, "tools/call")) {
+        return handleMcpToolCall(app, req, res, id_json, parsed.value.params);
+    }
+
+    // Unknown method
+    try mcpJsonError(res, id_json, -32601, "method not found");
+}
+
+fn extractRpcId(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
+    // Find "id":<value>, return the raw value string. Handles numbers,
+    // strings (returned with quotes), and null. Falls back to "null".
+    const idx = std.mem.indexOf(u8, body, "\"id\"") orelse return "null";
+    var i: usize = idx + 4;
+    while (i < body.len and (body[i] == ' ' or body[i] == ':' or body[i] == '\t')) i += 1;
+    if (i >= body.len) return "null";
+    const start = i;
+    if (body[i] == '"') {
+        // String id - find closing quote, accounting for escaped quotes.
+        i += 1;
+        while (i < body.len and body[i] != '"') {
+            if (body[i] == '\\' and i + 1 < body.len) i += 2 else i += 1;
+        }
+        if (i >= body.len) return "null";
+        return arena.dupe(u8, body[start .. i + 1]);
+    }
+    // Number or null - find next non-digit/letter.
+    while (i < body.len and body[i] != ',' and body[i] != '}' and body[i] != ' ' and body[i] != '\n' and body[i] != '\r' and body[i] != '\t') i += 1;
+    return arena.dupe(u8, body[start..i]);
+}
+
+fn mcpJsonError(res: *httpz.Response, id_json: []const u8, code: i32, message: []const u8) !void {
+    res.content_type = .JSON;
+    var buf = std.ArrayList(u8).init(res.arena);
+    try mcp.writeError(buf.writer(), id_json, code, message);
+    res.body = try buf.toOwnedSlice();
+}
+
+fn mcpJsonResult(res: *httpz.Response, id_json: []const u8, result_json: []const u8) !void {
+    res.content_type = .JSON;
+    var buf = std.ArrayList(u8).init(res.arena);
+    try mcp.writeResult(buf.writer(), id_json, result_json);
+    res.body = try buf.toOwnedSlice();
+}
+
+fn mcpJsonToolText(res: *httpz.Response, id_json: []const u8, text: []const u8, is_error: bool) !void {
+    res.content_type = .JSON;
+    var buf = std.ArrayList(u8).init(res.arena);
+    try mcp.writeToolResultText(buf.writer(), id_json, text, is_error);
+    res.body = try buf.toOwnedSlice();
+}
+
+fn handleMcpToolCall(app: *App, req: *httpz.Request, res: *httpz.Response, id_json: []const u8, params_v: ?std.json.Value) !void {
+    _ = req;
+    const params = params_v orelse {
+        try mcpJsonError(res, id_json, -32602, "missing params");
+        return;
+    };
+    if (params != .object) {
+        try mcpJsonError(res, id_json, -32602, "params must be an object");
+        return;
+    }
+    const name_v = params.object.get("name") orelse {
+        try mcpJsonError(res, id_json, -32602, "params.name required");
+        return;
+    };
+    if (name_v != .string) {
+        try mcpJsonError(res, id_json, -32602, "params.name must be a string");
+        return;
+    }
+    const tool_name = name_v.string;
+    const args_v = params.object.get("arguments");
+    const args = if (args_v) |a| (if (a == .object) a.object else std.json.ObjectMap.init(res.arena)) else std.json.ObjectMap.init(res.arena);
+
+    // Dispatch
+    if (std.mem.eql(u8, tool_name, "get_system_info")) return mcpToolGetSystemInfo(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "get_version")) return mcpToolGetVersion(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "trigger_update")) return mcpToolTriggerUpdate(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "exec_shell")) return mcpToolExecShell(app, res, id_json, args);
+
+    if (std.mem.eql(u8, tool_name, "list_projects")) return mcpToolListProjects(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "get_project_status")) return mcpToolProjectStatus(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "start_project")) return mcpToolProjectAction(app, res, id_json, args, .start);
+    if (std.mem.eql(u8, tool_name, "stop_project")) return mcpToolProjectAction(app, res, id_json, args, .stop);
+    if (std.mem.eql(u8, tool_name, "restart_project")) return mcpToolProjectAction(app, res, id_json, args, .restart);
+    if (std.mem.eql(u8, tool_name, "deploy_project")) return mcpToolProjectAction(app, res, id_json, args, .deploy);
+    if (std.mem.eql(u8, tool_name, "read_build_log")) return mcpToolReadProjectLog(app, res, id_json, args, "build.log");
+    if (std.mem.eql(u8, tool_name, "read_runtime_log")) return mcpToolReadProjectLog(app, res, id_json, args, "runtime.log");
+
+    if (std.mem.eql(u8, tool_name, "list_secrets")) return mcpToolListSecrets(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "set_secret")) return mcpToolSetSecret(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "delete_secret")) return mcpToolDeleteSecret(app, res, id_json, args);
+
+    if (std.mem.eql(u8, tool_name, "query_db")) return mcpToolDbQuery(app, res, id_json, args, true);
+    if (std.mem.eql(u8, tool_name, "exec_db")) return mcpToolDbQuery(app, res, id_json, args, false);
+    if (std.mem.eql(u8, tool_name, "list_tables")) return mcpToolDbListTables(app, res, id_json, args);
+
+    if (std.mem.eql(u8, tool_name, "list_blocked_ips")) return mcpToolListBlockedIps(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "block_ip")) return mcpToolBlockIp(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "unblock_ip")) return mcpToolUnblockIp(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "search_audit")) return mcpToolSearchAudit(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "list_recent_visits")) return mcpToolRecentVisits(app, res, id_json, args);
+
+    if (std.mem.eql(u8, tool_name, "list_backups")) return mcpToolListBackups(app, res, id_json);
+    if (std.mem.eql(u8, tool_name, "trigger_backup")) return mcpToolTriggerBackup(app, res, id_json, args);
+
+    try mcpJsonError(res, id_json, -32602, "unknown tool");
+}
+
+// ===== MCP TOOL IMPLEMENTATIONS =====
+// Each tool is a thin adapter: reads args, delegates to existing manager
+// or shell, formats the response as a text block.
+
+fn mcpToolGetSystemInfo(app: *App, res: *httpz.Response, id_json: []const u8) !void {
+    const reading = app.powermon.snapshot();
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    try w.print("Battery: {d}%, status: {s}\n", .{ reading.percentage, reading.status.label() });
+    try w.print("Plugged in: {s}\n", .{if (reading.status.isPlugged()) "yes" else "no (DANGER - phone bootloops without charger)"});
+    try w.print("Uptime: {d}s\n", .{std.time.timestamp() - app.started_at});
+
+    // Shell out for /proc info (mem + disk) - cheap and self-contained.
+    const cmd = "free -m | awk '/^Mem:/ {print \"mem_total_mb=\"$2\" mem_avail_mb=\"$7}'; df -h /data/data/com.termux/files/home | awk 'NR==2 {print \"disk_used=\"$3\" disk_avail=\"$4\" disk_pct=\"$5}'";
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, app.allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        try mcpJsonToolText(res, id_json, buf.items, false);
+        return;
+    };
+    if (child.stdout) |stdout| {
+        const data = stdout.readToEndAlloc(app.allocator, 8 * 1024) catch "";
+        defer app.allocator.free(data);
+        try w.writeAll(data);
+    }
+    _ = child.wait() catch {};
+    try mcpJsonToolText(res, id_json, buf.items, false);
+}
+
+fn mcpToolGetVersion(app: *App, res: *httpz.Response, id_json: []const u8) !void {
+    _ = app;
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    // Read git HEAD from src repo
+    const cmd = "cd ~/rofihosted-src && echo \"local_sha=$(git rev-parse --short HEAD)\" && echo \"local_subject=$(git log -1 --format=%s)\" && git fetch --quiet origin main 2>/dev/null && echo \"remote_sha=$(git rev-parse --short origin/main)\" && echo \"binary_built=$(stat -c %Y ~/zig/hp-server/zig-out/bin/hp-server 2>/dev/null)\"";
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        try mcpJsonToolText(res, id_json, "version probe failed", true);
+        return;
+    };
+    if (child.stdout) |stdout| {
+        const data = stdout.readToEndAlloc(res.arena, 4 * 1024) catch "";
+        try w.writeAll(data);
+    }
+    _ = child.wait() catch {};
+    try mcpJsonToolText(res, id_json, buf.items, false);
+}
+
+fn mcpToolTriggerUpdate(app: *App, res: *httpz.Response, id_json: []const u8) !void {
+    _ = app;
+    // Detached so we don't block the response
+    var argv = [_][]const u8{ "sh", "-c", "nohup ~/self-update.sh > /tmp/mcp-update.out 2>&1 &" };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        try mcpJsonToolText(res, id_json, "failed to spawn self-update.sh", true);
+        return;
+    };
+    _ = child.wait() catch {};
+    try mcpJsonToolText(res, id_json, "Update triggered. The phone will be unreachable for ~10s while the watchdog respawns the new binary. Check version after with get_version.", false);
+}
+
+fn mcpToolExecShell(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    _ = app;
+    const cmd_v = args.get("cmd") orelse {
+        try mcpJsonError(res, id_json, -32602, "cmd required");
+        return;
+    };
+    if (cmd_v != .string) {
+        try mcpJsonError(res, id_json, -32602, "cmd must be string");
+        return;
+    }
+    const cmd = cmd_v.string;
+    if (cmd.len == 0 or cmd.len > 8192) {
+        try mcpJsonError(res, id_json, -32602, "cmd empty or too long");
+        return;
+    }
+    const timeout_ms: u32 = blk: {
+        if (args.get("timeout_ms")) |t| {
+            if (t == .integer) break :blk @min(@as(u32, @intCast(@max(t.integer, 1000))), 300_000);
+        }
+        break :blk 60_000;
+    };
+    const cwd_opt: ?[]const u8 = blk: {
+        if (args.get("cwd")) |c| {
+            if (c == .string and c.string.len > 0) break :blk c.string;
+        }
+        break :blk null;
+    };
+
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    if (cwd_opt) |c| child.cwd = c;
+    child.spawn() catch {
+        try mcpJsonToolText(res, id_json, "spawn failed", true);
+        return;
+    };
+
+    // Watchdog thread: SIGTERM after timeout_ms.
+    const Killer = struct {
+        pid: std.posix.pid_t,
+        timeout_ms: u32,
+        fired: *std.atomic.Value(bool),
+        fn run(self: @This()) void {
+            std.Thread.sleep(@as(u64, self.timeout_ms) * std.time.ns_per_ms);
+            if (self.fired.load(.seq_cst)) return;
+            std.posix.kill(self.pid, std.posix.SIG.TERM) catch {};
+        }
+    };
+    var fired = std.atomic.Value(bool).init(false);
+    const watcher = std.Thread.spawn(.{}, Killer.run, .{Killer{ .pid = child.id, .timeout_ms = timeout_ms, .fired = &fired }}) catch null;
+
+    var stdout_buf = std.ArrayList(u8).init(res.arena);
+    var stderr_buf = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |s| {
+        const d = s.readToEndAlloc(res.arena, 256 * 1024) catch "";
+        try stdout_buf.appendSlice(d);
+    }
+    if (child.stderr) |s| {
+        const d = s.readToEndAlloc(res.arena, 256 * 1024) catch "";
+        try stderr_buf.appendSlice(d);
+    }
+    const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+    fired.store(true, .seq_cst);
+    if (watcher) |t| t.join();
+
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| c,
+        .Signal => |s| -@as(i32, @intCast(s)),
+        else => -1,
+    };
+    try w.print("exit={d}\n", .{exit_code});
+    if (stdout_buf.items.len > 0) {
+        try w.writeAll("--- stdout ---\n");
+        try w.writeAll(stdout_buf.items);
+        if (!std.mem.endsWith(u8, stdout_buf.items, "\n")) try w.writeByte('\n');
+    }
+    if (stderr_buf.items.len > 0) {
+        try w.writeAll("--- stderr ---\n");
+        try w.writeAll(stderr_buf.items);
+    }
+    try mcpJsonToolText(res, id_json, out.items, exit_code != 0);
+}
+
+// ===== project tools =====
+
+fn mcpToolListProjects(app: *App, res: *httpz.Response, id_json: []const u8) !void {
+    const json_blob = try app.projects.listJson(res.arena);
+    var out = std.ArrayList(u8).init(res.arena);
+    try out.writer().print("Project registry (raw JSON):\n{s}", .{json_blob});
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpArgString(args: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = args.get(key) orelse return null;
+    if (v != .string) return null;
+    return v.string;
+}
+
+fn mcpArgInt(args: std.json.ObjectMap, key: []const u8) ?i64 {
+    const v = args.get(key) orelse return null;
+    if (v != .integer) return null;
+    return v.integer;
+}
+
+fn mcpToolProjectStatus(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const id = mcpArgString(args, "id") orelse {
+        try mcpJsonError(res, id_json, -32602, "id required");
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        try mcpJsonToolText(res, id_json, "invalid project id", true);
+        return;
+    }
+    const proj_opt = app.projects.getById(id);
+    const proj = proj_opt orelse {
+        try mcpJsonToolText(res, id_json, "project not found", true);
+        return;
+    };
+    const sup = app.supervisor.statusOf(id);
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    try w.print("id: {s}\nname: {s}\nsubdomain: {s}\nruntime: {s}\nstatus: {s}\nport: {d}\nrss_limit_mb: {d}\n", .{
+        proj.id, proj.name, proj.subdomain, @tagName(proj.runtime), @tagName(proj.status), proj.port, proj.rss_limit_mb,
+    });
+    try w.print("supervisor_state: {s}\n", .{@tagName(sup.state)});
+    if (sup.pid) |p| try w.print("pid: {d}\n", .{p});
+    try w.print("rss_kb: {d}\nstarted_at: {d}\ncrash_count: {d}\nlast_exit: {d}\nlast_kill_reason: {s}\n", .{
+        sup.rss_kb, sup.started_at, sup.crash_count, sup.last_exit, @tagName(sup.last_kill_reason),
+    });
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+const ProjectAction = enum { start, stop, restart, deploy };
+
+fn mcpToolProjectAction(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap, action: ProjectAction) !void {
+    const id = mcpArgString(args, "id") orelse {
+        try mcpJsonError(res, id_json, -32602, "id required");
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        try mcpJsonToolText(res, id_json, "invalid project id", true);
+        return;
+    }
+    const proj_opt = app.projects.getById(id);
+    const proj = proj_opt orelse {
+        try mcpJsonToolText(res, id_json, "project not found", true);
+        return;
+    };
+    var msg_buf: [256]u8 = undefined;
+    switch (action) {
+        .start => {
+            if (proj.runtime == .static) {
+                _ = app.projects.update(id, .{ .status = .running }) catch {};
+                try mcpJsonToolText(res, id_json, "static project marked running", false);
+            } else {
+                app.supervisor.start(id) catch |e| {
+                    const m = std.fmt.bufPrint(&msg_buf, "start failed: {s}", .{@errorName(e)}) catch "start failed";
+                    try mcpJsonToolText(res, id_json, m, true);
+                    return;
+                };
+                try mcpJsonToolText(res, id_json, "started", false);
+            }
+        },
+        .stop => {
+            if (proj.runtime == .static) {
+                _ = app.projects.update(id, .{ .status = .stopped }) catch {};
+                try mcpJsonToolText(res, id_json, "static project marked stopped", false);
+            } else {
+                app.supervisor.stop(id) catch {};
+                try mcpJsonToolText(res, id_json, "SIGTERM sent (5s grace then SIGKILL)", false);
+            }
+        },
+        .restart => {
+            if (proj.runtime == .static) {
+                _ = app.projects.update(id, .{ .status = .stopped }) catch {};
+                std.Thread.sleep(1500 * std.time.ns_per_ms);
+                _ = app.projects.update(id, .{ .status = .running }) catch {};
+                try mcpJsonToolText(res, id_json, "static project bounced", false);
+            } else {
+                app.supervisor.restart(id) catch {};
+                try mcpJsonToolText(res, id_json, "restarted", false);
+            }
+        },
+        .deploy => {
+            app.builder.deployAsync(id) catch |e| {
+                const m = std.fmt.bufPrint(&msg_buf, "deploy spawn failed: {s}", .{@errorName(e)}) catch "deploy failed";
+                try mcpJsonToolText(res, id_json, m, true);
+                return;
+            };
+            try mcpJsonToolText(res, id_json, "deploy started in background. Use read_build_log to tail.", false);
+        },
+    }
+}
+
+fn mcpToolReadProjectLog(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap, log_name: []const u8) !void {
+    _ = app;
+    const id = mcpArgString(args, "id") orelse {
+        try mcpJsonError(res, id_json, -32602, "id required");
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        try mcpJsonToolText(res, id_json, "invalid project id", true);
+        return;
+    }
+    var n: usize = 200;
+    if (mcpArgInt(args, "lines")) |v| n = @min(@as(usize, @intCast(@max(v, 1))), 2000);
+
+    const path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/{s}", .{ id, log_name });
+    const file = std.fs.openFileAbsolute(path, .{}) catch {
+        try mcpJsonToolText(res, id_json, "log not found", true);
+        return;
+    };
+    defer file.close();
+    const stat = file.stat() catch {
+        try mcpJsonToolText(res, id_json, "stat failed", true);
+        return;
+    };
+    const max_read: u64 = @min(stat.size, 2 * 1024 * 1024);
+    if (stat.size > max_read) {
+        file.seekFromEnd(-@as(i64, @intCast(max_read))) catch {};
+    }
+    const data = try file.readToEndAlloc(res.arena, @intCast(max_read));
+
+    // Take last n lines
+    var lines = std.ArrayList([]const u8).init(res.arena);
+    var iter = std.mem.splitScalar(u8, data, '\n');
+    while (iter.next()) |line| try lines.append(line);
+    const start = if (lines.items.len > n) lines.items.len - n else 0;
+
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    try w.print("=== {s} (last {d} lines of {d}) ===\n", .{ log_name, lines.items.len - start, lines.items.len });
+    for (lines.items[start..]) |line| {
+        try w.writeAll(line);
+        try w.writeByte('\n');
+    }
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+// ===== secret tools =====
+
+fn mcpToolListSecrets(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    const keys = projsecrets.listKeys(res.arena, app.pepper, pid) catch {
+        try mcpJsonToolText(res, id_json, "(no secrets vault yet)", false);
+        return;
+    };
+    var out = std.ArrayList(u8).init(res.arena);
+    if (keys.len == 0) {
+        try out.appendSlice("(empty)");
+    } else {
+        try out.writer().print("Keys ({d}):\n", .{keys.len});
+        for (keys) |k| {
+            try out.writer().print("  - {s}\n", .{k});
+        }
+    }
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpToolSetSecret(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    const key = mcpArgString(args, "key") orelse {
+        try mcpJsonError(res, id_json, -32602, "key required");
+        return;
+    };
+    const value = mcpArgString(args, "value") orelse {
+        try mcpJsonError(res, id_json, -32602, "value required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    if (value.len == 0) {
+        try mcpJsonToolText(res, id_json, "value must be non-empty (use delete_secret to remove)", true);
+        return;
+    }
+    projsecrets.setOne(res.arena, app.pepper, pid, key, value) catch |e| {
+        var m: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&m, "set failed: {s}", .{@errorName(e)}) catch "set failed";
+        try mcpJsonToolText(res, id_json, msg, true);
+        return;
+    };
+    try mcpJsonToolText(res, id_json, "secret set. Restart project for env to take effect.", false);
+}
+
+fn mcpToolDeleteSecret(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    const key = mcpArgString(args, "key") orelse {
+        try mcpJsonError(res, id_json, -32602, "key required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    // setOne with empty value deletes the key.
+    projsecrets.setOne(res.arena, app.pepper, pid, key, "") catch |e| {
+        var m: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&m, "delete failed: {s}", .{@errorName(e)}) catch "delete failed";
+        try mcpJsonToolText(res, id_json, msg, true);
+        return;
+    };
+    try mcpJsonToolText(res, id_json, "secret deleted", false);
+}
+
+// ===== database tools =====
+
+fn mcpToolDbQuery(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap, read_only: bool) !void {
+    _ = app;
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    const sql = mcpArgString(args, "sql") orelse {
+        try mcpJsonError(res, id_json, -32602, "sql required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    if (read_only) {
+        // Cheap read-only sanity check: trim, must start with SELECT/WITH/PRAGMA/EXPLAIN.
+        const trimmed = std.mem.trim(u8, sql, " \t\n\r;");
+        const lower_first_word_buf = res.arena.alloc(u8, @min(trimmed.len, 16)) catch return;
+        for (trimmed[0..@min(trimmed.len, 16)], 0..) |c, i| lower_first_word_buf[i] = std.ascii.toLower(c);
+        const head = lower_first_word_buf;
+        if (!(std.mem.startsWith(u8, head, "select") or std.mem.startsWith(u8, head, "with") or std.mem.startsWith(u8, head, "pragma") or std.mem.startsWith(u8, head, "explain"))) {
+            try mcpJsonToolText(res, id_json, "query_db only accepts SELECT/WITH/PRAGMA/EXPLAIN. Use exec_db for writes.", true);
+            return;
+        }
+    }
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, pid });
+    const out = try runSqliteQuery(res.arena, db_path, sql);
+    try mcpJsonToolText(res, id_json, out, false);
+}
+
+fn mcpToolDbListTables(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    _ = app;
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, pid });
+    const sql = "SELECT name, (SELECT COUNT(*) FROM pragma_table_info(m.name)) AS col_count FROM sqlite_master m WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
+    const out = try runSqliteQuery(res.arena, db_path, sql);
+    try mcpJsonToolText(res, id_json, out, false);
+}
+
+fn runSqliteQuery(arena: std.mem.Allocator, db_path: []const u8, sql: []const u8) ![]const u8 {
+    // Spawn `sqlite3 -box <db>` with sql piped on stdin so the table view is human-friendly.
+    var argv = [_][]const u8{ "sqlite3", "-box", db_path };
+    var child = std.process.Child.init(&argv, arena);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
+    if (child.stdin) |stdin| {
+        stdin.writeAll(sql) catch {};
+        stdin.writeAll("\n") catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+    var stdout_buf = std.ArrayList(u8).init(arena);
+    var stderr_buf = std.ArrayList(u8).init(arena);
+    if (child.stdout) |s| {
+        const d = s.readToEndAlloc(arena, 1024 * 1024) catch "";
+        try stdout_buf.appendSlice(d);
+    }
+    if (child.stderr) |s| {
+        const d = s.readToEndAlloc(arena, 64 * 1024) catch "";
+        try stderr_buf.appendSlice(d);
+    }
+    _ = child.wait() catch {};
+    var out = std.ArrayList(u8).init(arena);
+    if (stderr_buf.items.len > 0) {
+        try out.appendSlice("--- stderr ---\n");
+        try out.appendSlice(stderr_buf.items);
+        if (!std.mem.endsWith(u8, stderr_buf.items, "\n")) try out.append('\n');
+    }
+    if (stdout_buf.items.len > 0) {
+        try out.appendSlice(stdout_buf.items);
+    } else if (stderr_buf.items.len == 0) {
+        try out.appendSlice("(no rows)");
+    }
+    return out.toOwnedSlice();
+}
+
+// ===== security & observability tools =====
+
+fn mcpToolListBlockedIps(app: *App, res: *httpz.Response, id_json: []const u8) !void {
+    const list = try app.blocklist.snapshot(res.arena);
+    var out = std.ArrayList(u8).init(res.arena);
+    if (list.len == 0) {
+        try out.appendSlice("(blocklist empty)");
+    } else {
+        try out.writer().print("{d} blocked IP(s):\n", .{list.len});
+        for (list) |e| {
+            const ttl = if (e.expires_at == 0) -1 else e.expires_at - std.time.timestamp();
+            try out.writer().print("  {s}  blocked_at={d}  expires_in={d}s  reason={s}\n", .{ e.ip, e.blocked_at, ttl, e.reason });
+        }
+    }
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpToolBlockIp(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const ip = mcpArgString(args, "ip") orelse {
+        try mcpJsonError(res, id_json, -32602, "ip required");
+        return;
+    };
+    const reason = mcpArgString(args, "reason") orelse "manual: via mcp";
+    const ttl: i64 = if (mcpArgInt(args, "ttl_seconds")) |v| v else 0;
+    app.blocklist.block(ip, reason, ttl) catch |e| {
+        var m: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&m, "block failed: {s}", .{@errorName(e)}) catch "block failed";
+        try mcpJsonToolText(res, id_json, msg, true);
+        return;
+    };
+    try mcpJsonToolText(res, id_json, "ip blocked", false);
+}
+
+fn mcpToolUnblockIp(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const ip = mcpArgString(args, "ip") orelse {
+        try mcpJsonError(res, id_json, -32602, "ip required");
+        return;
+    };
+    app.blocklist.unblock(ip) catch {};
+    try mcpJsonToolText(res, id_json, "ip unblocked (if it existed)", false);
+}
+
+fn mcpToolSearchAudit(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    _ = app;
+    var n: usize = 50;
+    if (mcpArgInt(args, "limit")) |v| n = @min(@as(usize, @intCast(@max(v, 1))), 500);
+    const filter = mcpArgString(args, "action_contains");
+
+    const path = "/data/data/com.termux/files/home/data/audit.jsonl";
+    const file = std.fs.openFileAbsolute(path, .{}) catch {
+        try mcpJsonToolText(res, id_json, "(no audit log yet)", false);
+        return;
+    };
+    defer file.close();
+    const stat = file.stat() catch return;
+    const max: u64 = @min(stat.size, 4 * 1024 * 1024);
+    if (stat.size > max) file.seekFromEnd(-@as(i64, @intCast(max))) catch {};
+    const data = try file.readToEndAlloc(res.arena, @intCast(max));
+
+    var lines = std.ArrayList([]const u8).init(res.arena);
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, line, f) == null) continue;
+        }
+        try lines.append(line);
+    }
+    const start = if (lines.items.len > n) lines.items.len - n else 0;
+    var out = std.ArrayList(u8).init(res.arena);
+    try out.writer().print("Audit entries ({d} matching, last {d}):\n", .{ lines.items.len, lines.items.len - start });
+    for (lines.items[start..]) |line| {
+        try out.writer().writeAll(line);
+        try out.writer().writeByte('\n');
+    }
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpToolRecentVisits(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    var n: i64 = 50;
+    if (mcpArgInt(args, "limit")) |v| n = @min(@max(v, 1), 500);
+    const cls_filter = mcpArgString(args, "classification");
+
+    var sql_buf = std.ArrayList(u8).init(res.arena);
+    try sql_buf.writer().writeAll(".mode column\n.headers on\nSELECT visited_at, ip, country, classification, status, path FROM visits");
+    if (cls_filter) |f| {
+        try sql_buf.writer().print(" WHERE classification='{s}'", .{f});
+    }
+    try sql_buf.writer().print(" ORDER BY visited_at DESC LIMIT {d};\n", .{n});
+
+    const out = runSqliteQuery(res.arena, dbcache.PATH, sql_buf.items) catch "(query failed)";
+    _ = app;
+    try mcpJsonToolText(res, id_json, out, false);
+}
+
+// ===== backup tools =====
+
+fn mcpToolListBackups(app: *App, res: *httpz.Response, id_json: []const u8) !void {
+    _ = app;
+    const cmd =
+        \\echo "=== local (~/backups/) ==="
+        \\ls -la ~/backups/ 2>/dev/null | tail -n +4
+        \\echo ""
+        \\echo "=== remote (R2) ==="
+        \\command -v rclone >/dev/null && rclone lsl r2:rofihosted 2>/dev/null | tail -50 || echo "(rclone not configured)"
+    ;
+    var argv = [_][]const u8{ "sh", "-c", cmd };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        try mcpJsonToolText(res, id_json, "spawn failed", true);
+        return;
+    };
+    var out = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |s| {
+        const d = s.readToEndAlloc(res.arena, 64 * 1024) catch "";
+        try out.appendSlice(d);
+    }
+    _ = child.wait() catch {};
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpToolTriggerBackup(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    _ = app;
+    const target = mcpArgString(args, "target") orelse "local";
+    const script = if (std.mem.eql(u8, target, "r2")) "~/backup-r2.sh" else "~/backup-quick.sh";
+    var argv = [_][]const u8{ "sh", "-c", script };
+    var child = std.process.Child.init(&argv, res.arena);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.spawn() catch {
+        try mcpJsonToolText(res, id_json, "spawn failed", true);
+        return;
+    };
+    var out = std.ArrayList(u8).init(res.arena);
+    if (child.stdout) |s| {
+        const d = s.readToEndAlloc(res.arena, 64 * 1024) catch "";
+        try out.appendSlice(d);
+    }
+    if (child.stderr) |s| {
+        const d = s.readToEndAlloc(res.arena, 16 * 1024) catch "";
+        if (d.len > 0) {
+            try out.appendSlice("--- stderr ---\n");
+            try out.appendSlice(d);
+        }
+    }
+    const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+    const ok = switch (term) {
+        .Exited => |c| c == 0,
+        else => false,
+    };
+    try mcpJsonToolText(res, id_json, out.items, !ok);
 }
 
 fn v1PublicStats(app: *App, res: *httpz.Response) !void {
