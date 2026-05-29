@@ -4033,12 +4033,6 @@ fn mcpToolExecShell(app: *App, res: *httpz.Response, id_json: []const u8, args: 
         try mcpJsonError(res, id_json, -32602, "cmd empty or too long");
         return;
     }
-    const timeout_ms: u32 = blk: {
-        if (args.get("timeout_ms")) |t| {
-            if (t == .integer) break :blk @min(@as(u32, @intCast(@max(t.integer, 1000))), 300_000);
-        }
-        break :blk 60_000;
-    };
     const cwd_opt: ?[]const u8 = blk: {
         if (args.get("cwd")) |c| {
             if (c == .string and c.string.len > 0) break :blk c.string;
@@ -4046,8 +4040,11 @@ fn mcpToolExecShell(app: *App, res: *httpz.Response, id_json: []const u8, args: 
         break :blk null;
     };
 
+    // Spawn the shell command. We rely on the LLM to not send rm -rf /;
+    // the admin scope is already a strong gate.
     var argv = [_][]const u8{ "sh", "-c", cmd };
     var child = std.process.Child.init(&argv, res.arena);
+    child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     if (cwd_opt) |c| child.cwd = c;
@@ -4055,20 +4052,6 @@ fn mcpToolExecShell(app: *App, res: *httpz.Response, id_json: []const u8, args: 
         try mcpJsonToolText(res, id_json, "spawn failed", true);
         return;
     };
-
-    // Watchdog thread: SIGTERM after timeout_ms.
-    const Killer = struct {
-        pid: std.posix.pid_t,
-        timeout_ms: u32,
-        fired: *std.atomic.Value(bool),
-        fn run(self: @This()) void {
-            std.Thread.sleep(@as(u64, self.timeout_ms) * std.time.ns_per_ms);
-            if (self.fired.load(.seq_cst)) return;
-            std.posix.kill(self.pid, std.posix.SIG.TERM) catch {};
-        }
-    };
-    var fired = std.atomic.Value(bool).init(false);
-    const watcher = std.Thread.spawn(.{}, Killer.run, .{Killer{ .pid = child.id, .timeout_ms = timeout_ms, .fired = &fired }}) catch null;
 
     var stdout_buf = std.ArrayList(u8).init(res.arena);
     var stderr_buf = std.ArrayList(u8).init(res.arena);
@@ -4081,13 +4064,11 @@ fn mcpToolExecShell(app: *App, res: *httpz.Response, id_json: []const u8, args: 
         try stderr_buf.appendSlice(d);
     }
     const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
-    fired.store(true, .seq_cst);
-    if (watcher) |t| t.join();
 
     var out = std.ArrayList(u8).init(res.arena);
     const w = out.writer();
     const exit_code: i32 = switch (term) {
-        .Exited => |c| c,
+        .Exited => |c| @as(i32, @intCast(c)),
         .Signal => |s| -@as(i32, @intCast(s)),
         else => -1,
     };
