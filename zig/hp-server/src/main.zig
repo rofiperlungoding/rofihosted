@@ -301,8 +301,21 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     // Real key validation happens inside handleV1.
     const has_apikey_header = (req.header("x-api-key") orelse req.header("X-Api-Key") orelse "").len > 0;
     const is_v1 = std.mem.startsWith(u8, path, "/v1/");
-    const is_authed = is_authed_cookie or (is_v1 and has_apikey_header);
-    const blocklisted = !is_local and app.blocklist.isBlocked(ip);
+
+    // Admin API key holders bypass the blocklist entirely. A valid admin key
+    // is proof of identity; blocking them defeats the purpose of the key.
+    // We verify the key here (not just check presence) to prevent spoofing.
+    const has_admin_key = blk: {
+        const raw = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
+        if (raw.len == 0) break :blk false;
+        if (app.apikey.verify(raw)) |rec| {
+            break :blk rec.hasScope(.admin);
+        }
+        break :blk false;
+    };
+
+    const is_authed = is_authed_cookie or (is_v1 and has_apikey_header) or has_admin_key;
+    const blocklisted = !is_local and !has_admin_key and app.blocklist.isBlocked(ip);
 
     const cls = security.classify(.{
         .ua = ua,
@@ -683,8 +696,50 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
 }
 
 // Authentication guard. Redirects unauthenticated users to /login?next=...
+// Also accepts admin-scoped API keys for /api/system/* and /api/projects/*
+// so the rh CLI and Kiro can hit these endpoints without a session cookie.
 fn guard(app: *App, req: *httpz.Request, res: *httpz.Response, return_to: []const u8) !bool {
     if (auth.isAuthenticated(app.auth_cfg, app.allocator, req)) return true;
+
+    // Allow admin API key to bypass cookie auth for system + project endpoints.
+    // This lets the rh CLI and Kiro access /api/system/exec, /api/system/info,
+    // /api/projects/*, etc without a browser session.
+    const raw_key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
+    if (raw_key.len > 0) {
+        if (app.apikey.verify(raw_key)) |rec| {
+            if (rec.hasScope(.admin)) {
+                // Admin key: allow access to /api/system/* and /api/projects/*
+                if (std.mem.startsWith(u8, return_to, "/api/system") or
+                    std.mem.startsWith(u8, return_to, "/api/projects") or
+                    std.mem.startsWith(u8, return_to, "/api/apikeys") or
+                    std.mem.startsWith(u8, return_to, "/api/audit") or
+                    std.mem.startsWith(u8, return_to, "/api/security") or
+                    std.mem.startsWith(u8, return_to, "/api/me") or
+                    std.mem.startsWith(u8, return_to, "/api/visits") or
+                    std.mem.startsWith(u8, return_to, "/api/stats") or
+                    std.mem.startsWith(u8, return_to, "/api/hosted") or
+                    std.mem.startsWith(u8, return_to, "/api/webhooks") or
+                    std.mem.startsWith(u8, return_to, "/api/rules") or
+                    std.mem.startsWith(u8, return_to, "/api/dbcache") or
+                    std.mem.startsWith(u8, return_to, "/api/dbpool") or
+                    std.mem.startsWith(u8, return_to, "/api/geoblock") or
+                    std.mem.startsWith(u8, return_to, "/api/honeypot") or
+                    std.mem.startsWith(u8, return_to, "/api/uptime") or
+                    std.mem.startsWith(u8, return_to, "/api/tunnel") or
+                    std.mem.startsWith(u8, return_to, "/api/host") or
+                    std.mem.startsWith(u8, return_to, "/api/files") or
+                    std.mem.startsWith(u8, return_to, "/api/ai") or
+                    std.mem.startsWith(u8, return_to, "/api/embeddings") or
+                    std.mem.startsWith(u8, return_to, "/shell") or
+                    std.mem.startsWith(u8, return_to, "/projects") or
+                    std.mem.startsWith(u8, return_to, "/settings") or
+                    std.mem.startsWith(u8, return_to, "/security"))
+                {
+                    return true;
+                }
+            }
+        }
+    }
     const target = try std.fmt.allocPrint(res.arena, "https://app.rofihosted.space/login?next={s}", .{return_to});
     res.status = 302;
     res.header("Location", target);
