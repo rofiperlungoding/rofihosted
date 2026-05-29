@@ -6,6 +6,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: Multi-tenant signup, invites, admin approval
+
+This is the foundation for letting other developers use rofihosted. Phase 1 covers user storage, signup flows, and admin approval. Per-user project ownership and resource quotas come in Phase 2.
+
+- `src/users.zig`: per-user records with role (admin/tenant), status (pending/active/suspended/rejected), per-user salt + HMAC password hash. Persists to `~/.hp-server-users.jsonl`. The legacy operator from `~/.hp-server-creds.txt` is auto-migrated as the first admin on boot so existing logins keep working.
+- `src/invites.zig`: single-use (or N-use) invite codes, format `RH-XXXX-XXXX`, optional expiry. Persists to `~/.hp-server-invites.jsonl`.
+- `src/auth.zig`: new v2 cookie format `v2.<payload>.<sig>` with per-user HMAC keys derived from `password_hash + pepper`. Changing a user's password instantly invalidates their other sessions. The existing v1 cookie format (legacy operator) is still recognized side-by-side. `currentUser()` and `isAuthenticated()` transparently handle both.
+- New routes:
+  - `GET /signup`, `POST /signup/submit`, `GET /signup/check-invite`, `GET /signup/pending` (public, no auth).
+  - `GET /admin/users`, `GET /admin/invites` (admin-only dashboard pages).
+  - `GET /api/users`, `POST /api/users/{approve,reject,suspend,unsuspend}` (admin-scoped JSON).
+  - `GET /api/invites`, `POST /api/invites/{create,revoke}` (admin-scoped JSON).
+- New templates:
+  - `signup.html`: live invite-code validation, two-mode form (instant approval with code, manual approval without).
+  - `signup-pending.html`: holding page for self-signups awaiting approval.
+  - `app-admin-users.html`: filterable user list with approve/reject/suspend/unsuspend buttons. Auto-polls every 15s.
+  - `app-admin-invites.html`: invite generator + table with copy-link buttons.
+  - `public.html`: 'Sign up' CTA in the marketing nav.
+
+### Changed: cache busters bumped v=34 to v=35.
+
 ### Fixed: operator IP no longer auto-bans itself when running smoke tests
 
 - `src/security.zig`: `AutoBan` now keeps a per-IP "trusted" map. Any request that authenticates (cookie session or admin API key) marks the source IP as trusted for 30 minutes. While trusted, scanner hits are still counted for visibility but never trigger the blocklist.
