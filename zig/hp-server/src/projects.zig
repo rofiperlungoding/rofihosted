@@ -85,6 +85,10 @@ pub const Project = struct {
     webhook_secret: []const u8, // hex string used to HMAC-verify GitHub push webhooks
     port: u16, // 0 for static
     status: Status,
+    /// Who owns this project. Either a user id (`u_<hex16>`) or empty
+    /// string for legacy projects created before multi-tenancy. Tenants
+    /// can only see + manage projects they own; admins see everything.
+    owner_id: []const u8 = "",
     /// Maximum resident memory (MB) allowed for this project's process. The
     /// supervisor polls /proc/<pid>/status and SIGTERMs the child if it
     /// exceeds this for two consecutive samples. 0 = no limit.
@@ -159,6 +163,7 @@ pub const Manager = struct {
                 webhook_secret: []const u8 = "",
                 port: u16 = 0,
                 status: []const u8 = "created",
+                owner_id: []const u8 = "",
                 created_at: i64 = 0,
                 updated_at: i64 = 0,
                 last_deploy_at: i64 = 0,
@@ -188,6 +193,7 @@ pub const Manager = struct {
                 .webhook_secret = try arena.dupe(u8, w.webhook_secret),
                 .port = w.port,
                 .status = st,
+                .owner_id = try arena.dupe(u8, w.owner_id),
                 .rss_limit_mb = w.rss_limit_mb,
                 .created_at = w.created_at,
                 .updated_at = w.updated_at,
@@ -237,6 +243,7 @@ pub const Manager = struct {
         start_cmd: []const u8 = "",
         publish_dir: []const u8 = "",
         rss_limit_mb: u32 = 0,
+        owner_id: []const u8 = "",
     };
 
     pub fn create(self: *Manager, input: CreateInput) !Project {
@@ -288,6 +295,7 @@ pub const Manager = struct {
             .webhook_secret = try arena.dupe(u8, &secret_hex),
             .port = port,
             .status = .created,
+            .owner_id = try arena.dupe(u8, input.owner_id),
             .rss_limit_mb = input.rss_limit_mb,
             .created_at = now,
             .updated_at = now,
@@ -392,10 +400,24 @@ pub const Manager = struct {
         return out.toOwnedSlice();
     }
 
+    /// Snapshot the current project list for callers that need to filter
+    /// or process them in code rather than dumping JSON.
+    pub fn listSnapshot(self: *Manager, allocator: std.mem.Allocator) ![]Project {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return allocator.dupe(Project, self.projects.items);
+    }
+
     pub fn workingDir(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
         return std.fmt.allocPrint(allocator, "{s}/{s}", .{ PROJECTS_DIR, id });
     }
 };
+
+/// Public alias of writeProject for callers in main.zig that need to
+/// emit a single project's JSON body (e.g. filtered list responses).
+pub fn writeProjectJson(w: anytype, p: Project) !void {
+    return writeProject(w, p);
+}
 
 fn writeProject(w: anytype, p: Project) !void {
     try w.writeAll("{\"id\":\"");
@@ -421,6 +443,8 @@ fn writeProject(w: anytype, p: Project) !void {
     try writeJsonStr(w, p.publish_dir);
     try w.writeAll(",\"webhook_secret\":\"");
     try writeJsonStr(w, p.webhook_secret);
+    try w.writeAll(",\"owner_id\":\"");
+    try writeJsonStr(w, p.owner_id);
     try w.print(
         ",\"port\":{d},\"status\":\"{s}\",\"created_at\":{d},\"updated_at\":{d},\"last_deploy_at\":{d},\"rss_limit_mb\":{d}}}",
         .{ p.port, p.status.toString(), p.created_at, p.updated_at, p.last_deploy_at, p.rss_limit_mb },

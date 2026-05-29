@@ -636,8 +636,19 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/webhooks")) return apiWebhooksList(app, res);
     if (std.mem.eql(u8, path, "/api/webhooks/create")) return apiWebhooksCreate(app, req, res);
     if (std.mem.eql(u8, path, "/api/webhooks/delete")) return apiWebhooksDelete(app, req, res);
-    if (std.mem.eql(u8, path, "/api/projects")) return apiProjectsList(app, res);
+    if (std.mem.eql(u8, path, "/api/projects")) return apiProjectsList(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/create")) return apiProjectsCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/preview-repo")) return apiProjectsPreviewRepo(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/analyze")) return apiProjectsAnalyze(app, req, res);
+
+    // All remaining /api/projects/* endpoints operate on a single project.
+    // They each pull ?id=... or form id=... and act on it. We gate ALL of
+    // them through a centralized ownership check so tenants can't manage
+    // projects they don't own. Admins always pass through.
+    if (std.mem.startsWith(u8, path, "/api/projects/")) {
+        if (!try guardProjectOwnership(app, req, res)) return;
+    }
+
     if (std.mem.eql(u8, path, "/api/projects/update")) return apiProjectsUpdate(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/delete")) return apiProjectsDelete(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/secrets/list")) return apiProjectSecretsList(app, req, res);
@@ -3743,7 +3754,15 @@ fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const 
             try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
             return;
         }
-        return apiProjectsList(app, res);
+        // Admin-scoped API key sees all projects.
+        const json_body = app.projects.listJson(res.arena) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+            return;
+        };
+        res.content_type = .JSON;
+        res.body = json_body;
+        return;
     }
     if (std.mem.eql(u8, path, "/v1/projects/deploy")) {
         if (!rec.hasScope(.admin)) {
@@ -5677,18 +5696,202 @@ fn projectMimeFromPath(p: []const u8) []const u8 {
     return "application/octet-stream";
 }
 
-fn apiProjectsList(app: *App, res: *httpz.Response) !void {
-    const json_body = app.projects.listJson(res.arena) catch {
+// Helper that resolves the caller's identity for a project-management
+// endpoint. Returns the Identity on success; on missing or invalid auth
+// it writes an error response and returns null. Use the .role/.user_id
+// to authorize per-resource checks.
+fn requireUser(app: *App, req: *httpz.Request, res: *httpz.Response) !?auth.Identity {
+    if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
+        if (ident.status == .pending) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "pending_approval" }, .{});
+            return null;
+        }
+        if (ident.status == .suspended or ident.status == .rejected) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "account_disabled" }, .{});
+            return null;
+        }
+        return ident;
+    }
+    res.status = 401;
+    try res.json(.{ .ok = false, .err = "not_authenticated" }, .{});
+    return null;
+}
+
+// True if the caller can manage this project. Admins always can. Tenants
+// only if owner_id matches. Pre-multi-tenant projects (owner_id == "")
+// are admin-only by default - tenants can't claim them.
+fn canManageProject(ident: auth.Identity, project: projects.Project) bool {
+    if (ident.role == .admin) return true;
+    if (project.owner_id.len == 0) return false;
+    return std.mem.eql(u8, project.owner_id, ident.user_id);
+}
+
+// Centralized ownership gate for /api/projects/* endpoints. Pulls the
+// project id from query string (?id=...) or form (id=...), looks up the
+// project, and verifies the caller can manage it. Returns true to let
+// the caller fall through to the actual handler, false (with the right
+// error response already written) to short-circuit.
+//
+// Admin-scoped API key holders bypass this check via the same mechanism
+// that lets them bypass cookie auth in guard() - they're already through
+// at this point.
+//
+// Endpoints that don't take an id (/api/projects, /api/projects/create,
+// /api/projects/preview-repo, /api/projects/analyze) are handled
+// separately by their own auth.
+fn guardProjectOwnership(app: *App, req: *httpz.Request, res: *httpz.Response) !bool {
+    // Admin API keys already passed guard(); detect them and skip.
+    const raw_key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
+    if (raw_key.len > 0) {
+        if (app.apikey.verify(raw_key)) |rec| {
+            if (rec.hasScope(.admin)) return true;
+        }
+    }
+
+    const ident = auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req) orelse {
+        res.status = 401;
+        try res.json(.{ .ok = false, .err = "not_authenticated" }, .{});
+        return false;
+    };
+    if (ident.role == .admin) return true;
+    if (ident.status != .active) {
+        res.status = 403;
+        try res.json(.{ .ok = false, .err = "account_disabled" }, .{});
+        return false;
+    }
+
+    // Find id - try query first (logs/status/runtime-logs/releases use GET),
+    // then form (most POSTs).
+    var id_buf: ?[]const u8 = null;
+    if (req.query()) |q| {
+        if (q.get("id")) |v| id_buf = v;
+        if (id_buf == null) {
+            if (q.get("project_id")) |v| id_buf = v;
+        }
+    } else |_| {}
+
+    if (id_buf == null) {
+        if (req.formData()) |form| {
+            if (form.get("id")) |v| id_buf = v;
+            if (id_buf == null) {
+                if (form.get("project_id")) |v| id_buf = v;
+            }
+        } else |_| {}
+    }
+    // Some endpoints accept JSON body
+    if (id_buf == null) {
+        if (req.body()) |body| {
+            if (body.len > 0 and body[0] == '{') {
+                const Probe = struct {
+                    project_id: ?[]const u8 = null,
+                    id: ?[]const u8 = null,
+                };
+                if (std.json.parseFromSlice(Probe, res.arena, body, .{ .ignore_unknown_fields = true })) |parsed| {
+                    if (parsed.value.project_id) |v| id_buf = v;
+                    if (id_buf == null) {
+                        if (parsed.value.id) |v| id_buf = v;
+                    }
+                } else |_| {}
+            }
+        }
+    }
+
+    const id = id_buf orelse {
+        // No id provided at all - let the endpoint return its own 400.
+        return true;
+    };
+
+    const project = app.projects.getById(id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "project_not_found" }, .{});
+        return false;
+    };
+
+    if (!canManageProject(ident, project)) {
+        res.status = 403;
+        try res.json(.{ .ok = false, .err = "forbidden", .detail = "you don't own this project" }, .{});
+        return false;
+    }
+    return true;
+}
+
+// Resolve identity + project and verify ownership in one shot. Returns
+// both on success; writes the right error response and returns null on
+// any failure (auth, missing id, project not found, not owner).
+const ProjAuth = struct {
+    ident: auth.Identity,
+    project: projects.Project,
+};
+
+fn requireProjectAccess(app: *App, req: *httpz.Request, res: *httpz.Response, project_id: []const u8) !?ProjAuth {
+    const ident = (try requireUser(app, req, res)) orelse return null;
+    const project = app.projects.getById(project_id) orelse {
+        res.status = 404;
+        try res.json(.{ .ok = false, .err = "project_not_found" }, .{});
+        return null;
+    };
+    if (!canManageProject(ident, project)) {
+        res.status = 403;
+        try res.json(.{ .ok = false, .err = "forbidden" }, .{});
+        return null;
+    }
+    return ProjAuth{ .ident = ident, .project = project };
+}
+
+fn apiProjectsList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireUser(app, req, res)) orelse return;
+
+    // Admins see everything. Tenants see only what they own.
+    const all = app.projects.listSnapshot(res.arena) catch {
         res.status = 500;
         try res.json(.{ .ok = false, .err = "list_failed" }, .{});
         return;
     };
+
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    try w.writeAll("{\"ok\":true,\"projects\":[");
+    var first = true;
+    for (all) |p| {
+        if (ident.role != .admin and !std.mem.eql(u8, p.owner_id, ident.user_id)) continue;
+        if (!first) try w.writeByte(',');
+        first = false;
+        try projects.writeProjectJson(w, p);
+    }
+    try w.writeAll("]}");
     res.content_type = .JSON;
-    res.body = json_body;
+    res.body = try buf.toOwnedSlice();
 }
 
 fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
-    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
+    const ident = (try requireUser(app, req, res)) orelse return;
+    const actor = ident.username;
+
+    // Tenants enforce the project quota; admin is unlimited.
+    if (ident.role != .admin) {
+        const all = app.projects.listSnapshot(res.arena) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+            return;
+        };
+        var owned: u32 = 0;
+        for (all) |p| {
+            if (std.mem.eql(u8, p.owner_id, ident.user_id)) owned += 1;
+        }
+        const user_record = app.users.findById(ident.user_id) orelse {
+            res.status = 401;
+            try res.json(.{ .ok = false, .err = "user_not_found" }, .{});
+            return;
+        };
+        if (owned >= user_record.max_projects) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "project_quota_exceeded", .max_projects = user_record.max_projects }, .{});
+            return;
+        }
+    }
+
     const form = req.formData() catch {
         res.status = 400;
         try res.json(.{ .ok = false, .err = "bad_form" }, .{});
@@ -5725,6 +5928,12 @@ fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
             const v = form.get("rss_limit_mb") orelse break :blk 0;
             break :blk std.fmt.parseInt(u32, v, 10) catch 0;
         },
+        // Tenants own projects they create. Admin can pass owner_id in
+        // form to create on behalf of a tenant; otherwise admin owns.
+        .owner_id = if (ident.role == .admin)
+            (form.get("owner_id") orelse ident.user_id)
+        else
+            ident.user_id,
     }) catch |err| {
         const code: []const u8 = switch (err) {
             error.SubdomainTaken => "subdomain_taken",
