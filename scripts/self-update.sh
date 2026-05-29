@@ -104,7 +104,7 @@ log "binary age = ${BIN_AGE_S}s, mtime change: $PRE_REBUILD_MTIME -> $POST_REBUI
 # whether any .zig file actually changed; if not, the update is a no-op
 # at the binary level and that's fine. If Zig sources DID change but the
 # binary still didn't advance, that's a real rebuild failure.
-ZIG_CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null | grep -E '\.(zig|html|js|css)$|build\.zig\.zon' | wc -l)
+ZIG_CHANGED=$(git diff --name-only "$BEFORE" "$REMOTE" 2>/dev/null | grep -E '\.(zig|html|js|css)$|build\.zig\.zon' | wc -l)
 log "files affecting binary changed: $ZIG_CHANGED"
 
 if [ "$POST_REBUILD_MTIME" = "$PRE_REBUILD_MTIME" ] && [ "$ZIG_CHANGED" -gt 0 ]; then
