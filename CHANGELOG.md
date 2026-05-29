@@ -6,6 +6,24 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: Per-project ownership + tenant isolation (Phase 2.1)
+
+Tenants can now create and manage their own projects without seeing or touching anyone else's. Admins continue to see everything.
+
+- `src/projects.zig`: `Project.owner_id` field, persisted in JSONL. Pre-multi-tenant projects (owner_id == "") are admin-only by default. New `listSnapshot()` and `writeProjectJson()` helpers.
+- `src/main.zig`:
+  - `apiProjectsList`: filters to caller's own projects unless they're an admin.
+  - `apiProjectsCreate`: sets owner_id to creator. Enforces `max_projects` quota for tenants (admin unlimited).
+  - `guardProjectOwnership()`: centralized ownership pre-check that runs before every `/api/projects/<id-bound>` dispatch. Pulls id from query / form / JSON body, blocks tenants from acting on projects they don't own. Admin API keys (`X-API-Key` with admin scope) bypass.
+  - `requireUser()`: cookie-or-admin-API-key identity resolution. Admin keys map to a synthetic legacy admin Identity so all `/v1/projects/*` and CLI flows keep working.
+- `/v1/projects` keeps unfiltered admin-API-key listing for the rh CLI / GitHub Actions / MCP.
+
+Verified end-to-end:
+- Tenant creates project -> owner_id stamped
+- Tenant lists projects -> only sees own
+- Tenant deletes their own project -> succeeds
+- Tenant attempts to delete someone else's project -> 403 forbidden
+
 ### Added: Multi-tenant signup, invites, admin approval
 
 This is the foundation for letting other developers use rofihosted. Phase 1 covers user storage, signup flows, and admin approval. Per-user project ownership and resource quotas come in Phase 2.
