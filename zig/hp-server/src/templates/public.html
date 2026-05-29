@@ -1,67 +1,536 @@
 ﻿<!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
-<title>rofihosted.space</title>
+<title>rofihosted - a PaaS that fits in your pocket</title>
+<meta name="description" content="A self-hosted Platform-as-a-Service running on a single Android phone. Deploy fullstack apps with built-in database, auth, secrets, cron, and offsite backups. Written in Zig.">
+<meta property="og:title" content="rofihosted - a PaaS that fits in your pocket">
+<meta property="og:description" content="Netlify + Vercel + Supabase + Railway, but it all runs on a Sharp Aquos S40P sitting on a charger in my room.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rofihosted.space">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
 <link rel="stylesheet" href="https://rofihosted.space/theme.css?v=34">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=34">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
-  a, a:link, a:visited, a:hover { text-decoration: none !important; }
-  a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus,
-  button.btn, button.btn:hover, button.btn:focus {
-    text-decoration: none !important;
-    display: inline-flex !important;
-    align-items: center; justify-content: center;
-    gap: .5rem; height: 38px; padding: 0 1.05rem;
+  /* ---- reset basics ---- */
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.6; }
+  a, a:link, a:visited { text-decoration: none !important; color: var(--accent); }
+  a:hover { color: var(--accent-2); }
+  code { background: var(--surface-2); padding: .15em .4em; border-radius: 4px; font-size: .88em; font-family: ui-monospace,'SF Mono',Menlo,monospace; border: 1px solid var(--border-soft); }
+
+  /* ---- shared button styles (override global a underline) ---- */
+  .btn, .btn:link, .btn:visited {
+    text-decoration: none !important; display: inline-flex; align-items: center; justify-content: center;
+    gap: .5rem; height: 42px; padding: 0 1.2rem;
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; font: inherit; font-size: .87rem; font-weight: 500;
+    border-radius: 8px; font-size: .9rem; font-weight: 500;
     color: var(--text); cursor: pointer; white-space: nowrap;
     box-shadow: var(--shadow);
-    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+    transition: background .15s, border-color .15s, transform .12s;
   }
-  a.btn:hover, button.btn:hover { background: var(--surface-2); border-color: var(--text-3); }
-  a.btn-accent, a.btn-accent:link, a.btn-accent:visited, a.btn-accent:hover {
+  .btn:hover { background: var(--surface-2); border-color: var(--text-3); transform: translateY(-1px); }
+  .btn-accent, .btn-accent:link, .btn-accent:visited {
     background: var(--accent) !important;
     border-color: var(--accent) !important;
     color: var(--accent-fg) !important;
   }
-  a.btn-accent:hover { background: var(--accent-2) !important; border-color: var(--accent-2) !important; }
-  a.btn-lg { height: 46px; padding: 0 1.5rem; font-size: .95rem; }
+  .btn-accent:hover { background: var(--accent-2) !important; border-color: var(--accent-2) !important; color: var(--accent-fg) !important; }
+  .btn-lg { height: 50px; padding: 0 1.6rem; font-size: 1rem; font-weight: 600; }
+  .btn i { font-size: .95em; }
 
-  body { display: grid; place-items: center; padding: 1.5rem; text-align: center; min-height: 100vh; }
-  .top-actions { position: fixed; top: 1rem; right: 1rem; }
-  .container { max-width: 540px; }
-  .brand-mark { width: 52px; height: 52px; border-radius: 13px; font-size: 1.4rem; margin: 0 auto 1.6rem; }
-  h1 { font-size: clamp(2rem, 5vw, 2.6rem); margin: 0 0 .9rem; letter-spacing: -0.028em; font-weight: 700; }
-  p { color: var(--text-2); font-size: 1rem; line-height: 1.6; margin: 0 0 2rem; }
-  .actions-row { display: flex; gap: .6rem; justify-content: center; flex-wrap: wrap; }
-  .footer { margin-top: 2.5rem; color: var(--text-3); font-size: .78rem; }
+  /* ---- top nav ---- */
+  .nav-bar {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    background: color-mix(in srgb, var(--bg) 75%, transparent);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .nav-inner {
+    max-width: 1180px; margin: 0 auto; padding: .85rem 1.5rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  }
+  .nav-brand { display: flex; align-items: center; gap: .55rem; font-weight: 700; color: var(--text); font-size: 1.02rem; letter-spacing: -.012em; }
+  .nav-brand:hover { color: var(--text); }
+  .nav-mark { width: 30px; height: 30px; border-radius: 7px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-weight: 700; font-size: .95rem; }
+  .nav-links { display: flex; align-items: center; gap: .35rem; }
+  .nav-link {
+    padding: .5rem .85rem; border-radius: 7px; font-size: .85rem;
+    color: var(--text-2); font-weight: 500;
+  }
+  .nav-link:hover { background: var(--surface-2); color: var(--text); }
+  .nav-icon-btn {
+    width: 36px; height: 36px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--surface); display: grid; place-items: center; cursor: pointer; color: var(--text-2);
+  }
+  .nav-icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  @media (max-width: 640px) { .nav-link.hide-sm { display: none; } }
+
+  /* ---- hero ---- */
+  .hero { padding: 5rem 1.5rem 4rem; text-align: center; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%);
+    z-index: 0;
+  }
+  .hero > * { position: relative; z-index: 1; }
+  .live-pill {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .35rem .85rem; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    font-size: .78rem; font-weight: 500; color: var(--text-2);
+    margin-bottom: 1.6rem;
+  }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px color-mix(in srgb, var(--success) 60%, transparent); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
+  .hero h1 {
+    font-size: clamp(2.2rem, 5.5vw, 3.6rem); font-weight: 700;
+    letter-spacing: -0.032em; line-height: 1.08; margin: 0 0 1.2rem;
+    max-width: 820px; margin-left: auto; margin-right: auto;
+  }
+  .hero h1 .grad {
+    background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, #ec4899));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero .lead {
+    font-size: clamp(1rem, 1.8vw, 1.18rem); color: var(--text-2);
+    max-width: 640px; margin: 0 auto 2rem; line-height: 1.55;
+  }
+  .hero-actions { display: flex; gap: .7rem; justify-content: center; flex-wrap: wrap; }
+
+  /* ---- live counters strip ---- */
+  .stats-strip {
+    margin: 3rem auto 0; max-width: 920px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;
+    padding: 1.4rem 1.5rem; background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 14px; box-shadow: var(--shadow);
+  }
+  .stats-strip .cell { text-align: left; }
+  .stats-strip .cell .lbl { font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  .stats-strip .cell .val { font-size: 1.5rem; font-weight: 700; color: var(--text); margin-top: .25rem; letter-spacing: -.018em; font-feature-settings: 'tnum' 1; }
+  .stats-strip .cell .val.muted { color: var(--text-3); font-weight: 500; }
+  @media (max-width: 720px) { .stats-strip { grid-template-columns: repeat(2, 1fr); } }
+
+  /* ---- generic section ---- */
+  .sect { max-width: 1180px; margin: 0 auto; padding: 5rem 1.5rem; }
+  .sect-head { text-align: center; margin-bottom: 3rem; }
+  .sect-eyebrow { display: inline-block; font-size: .72rem; text-transform: uppercase; letter-spacing: .14em; color: var(--accent); font-weight: 600; margin-bottom: .8rem; }
+  .sect-title { font-size: clamp(1.7rem, 3.5vw, 2.4rem); font-weight: 700; letter-spacing: -.022em; margin: 0 0 .8rem; line-height: 1.15; }
+  .sect-sub { color: var(--text-2); font-size: 1.02rem; max-width: 600px; margin: 0 auto; }
+
+  /* ---- feature grid ---- */
+  .feat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.1rem; }
+  .feat {
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 12px; padding: 1.5rem 1.4rem;
+    transition: border-color .2s, transform .2s;
+  }
+  .feat:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .feat-icon {
+    width: 42px; height: 42px; border-radius: 9px;
+    background: var(--accent-soft); color: var(--accent);
+    display: grid; place-items: center; font-size: 1.15rem;
+    margin-bottom: 1rem;
+  }
+  .feat h3 { font-size: 1rem; font-weight: 600; margin: 0 0 .45rem; letter-spacing: -.012em; color: var(--text); }
+  .feat p { font-size: .87rem; color: var(--text-2); margin: 0; line-height: 1.55; }
+
+  /* ---- diagram + how-it-works ---- */
+  .diagram-wrap {
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 14px; padding: 2rem 1.5rem; box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  /* hand-drawn architecture diagram */
+  .arch {
+    display: grid; gap: 1rem;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: center; min-width: 760px; margin: 0 auto; max-width: 980px;
+    font-size: .85rem;
+  }
+  .arch-node {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: .9rem 1.1rem; text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .arch-node strong { display: block; font-size: .9rem; color: var(--text); font-weight: 600; margin-bottom: .15rem; }
+  .arch-node span { font-size: .75rem; color: var(--text-3); }
+  .arch-node.accent { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+  .arch-node.accent strong { color: var(--accent); }
+  .arch-arrow {
+    color: var(--text-3); font-family: ui-monospace, monospace; font-size: 1.1rem;
+    text-align: center; padding: 0 .5rem;
+  }
+  .arch-phone {
+    grid-column: 5; grid-row: 1;
+    background: var(--surface-2); border: 2px dashed var(--accent);
+    border-radius: 14px; padding: 1rem; display: grid; gap: .5rem;
+  }
+  .arch-phone-head {
+    font-size: .68rem; color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: .1em; text-align: center;
+  }
+  .arch-row-2 {
+    grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: .6rem; margin-top: 1.4rem;
+  }
+  .arch-leaf {
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 8px; padding: .6rem .8rem; text-align: center; font-size: .78rem;
+    color: var(--text-2);
+  }
+  .arch-leaf strong { display: block; color: var(--text); font-size: .82rem; font-weight: 600; }
+  @media (max-width: 760px) {
+    .arch { grid-template-columns: 1fr; min-width: 0; }
+    .arch-arrow { transform: rotate(90deg); padding: .25rem 0; }
+    .arch-phone { grid-column: 1; }
+    .arch-row-2 { grid-template-columns: 1fr; }
+  }
+
+  /* ---- code block ---- */
+  .code-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+  @media (max-width: 800px) { .code-row { grid-template-columns: 1fr; } }
+  .code-step h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 .5rem; letter-spacing: -.012em; }
+  .code-step p { font-size: .9rem; color: var(--text-2); margin: 0 0 1.2rem; }
+  .code-step ol { padding-left: 1.2rem; margin: 0; }
+  .code-step ol li { margin-bottom: .85rem; color: var(--text-2); font-size: .9rem; }
+  .code-step ol li strong { color: var(--text); }
+  .code-block {
+    background: #0a0a10; color: #e4e4e7; padding: 1.2rem 1.3rem;
+    border-radius: 10px; font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: .82rem; line-height: 1.65; overflow-x: auto;
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    box-shadow: 0 8px 30px color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  [data-theme="light"] .code-block { background: #18181b; }
+  .code-block .pmt { color: #71717a; user-select: none; }
+  .code-block .cmt { color: #71717a; }
+  .code-block .acc { color: #c4b5fd; }
+  .code-block .ok { color: #4ade80; }
+
+  /* ---- tech stack badges ---- */
+  .stack-row { display: flex; flex-wrap: wrap; gap: .55rem; justify-content: center; }
+  .badge-tech {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .45rem .9rem; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    font-size: .82rem; color: var(--text-2); font-weight: 500;
+  }
+  .badge-tech .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  /* ---- footer ---- */
+  .footer-bar {
+    border-top: 1px solid var(--border-soft); margin-top: 2rem;
+    padding: 2.5rem 1.5rem; background: var(--surface);
+  }
+  .footer-inner {
+    max-width: 1180px; margin: 0 auto;
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.5rem;
+  }
+  .footer-brand { display: flex; align-items: center; gap: .6rem; font-weight: 600; color: var(--text-2); }
+  .footer-links { display: flex; gap: 1.4rem; flex-wrap: wrap; }
+  .footer-links a { color: var(--text-3); font-size: .85rem; }
+  .footer-links a:hover { color: var(--text); }
+  .footer-meta { font-size: .78rem; color: var(--text-3); }
 </style>
 </head>
 <body>
-<div class="top-actions">
-  <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
-    <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-    <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-  </button>
-</div>
 
-<div class="container">
-  <span class="brand brand-mark">r</span>
-  <h1>rofihosted</h1>
-  <p>Showcase landing coming soon. The console runs at <strong>app.rofihosted.space</strong>.</p>
-  <div class="actions-row">
-    <a href="https://app.rofihosted.space" class="btn btn-accent btn-lg">
-      <span>Open console</span>
+<!-- ============== NAV ============== -->
+<nav class="nav-bar">
+  <div class="nav-inner">
+    <a class="nav-brand" href="/">
+      <span class="nav-mark">r</span>
+      <span>rofihosted</span>
     </a>
+    <div class="nav-links">
+      <a class="nav-link hide-sm" href="#features">Features</a>
+      <a class="nav-link hide-sm" href="#how">How it works</a>
+      <a class="nav-link hide-sm" href="#deploy">Deploy</a>
+      <a class="nav-link hide-sm" href="https://github.com/rofiperlungoding/rofihosted">GitHub</a>
+      <a class="btn" href="https://app.rofihosted.space"><span>Sign in</span></a>
+      <button class="nav-icon-btn" data-action="toggle-theme" aria-label="Toggle theme">
+        <svg class="sun-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
   </div>
-  <div class="footer">rofihosted.space</div>
-</div>
+</nav>
+
+<!-- ============== HERO ============== -->
+<section class="hero">
+  <div class="live-pill" id="live-pill">
+    <span class="live-dot"></span>
+    <span id="live-text">Live, running on a Sharp Aquos S40P</span>
+  </div>
+  <h1>A PaaS that fits in <span class="grad">your pocket</span>.</h1>
+  <p class="lead">
+    rofihosted is a self-hosted platform that runs an entire fullstack hosting stack on a single Android phone.
+    Deploy from a Git URL, get a subdomain, a built-in Postgres-like database, auth, secrets, cron, and offsite backups.
+    All written in Zig, under 18 MB.
+  </p>
+  <div class="hero-actions">
+    <a class="btn btn-accent btn-lg" href="https://app.rofihosted.space"><i class="icon-rocket"></i><span>Open console</span></a>
+    <a class="btn btn-lg" href="#how"><i class="icon-info"></i><span>How it works</span></a>
+  </div>
+
+  <div class="stats-strip">
+    <div class="cell"><div class="lbl">Projects deployed</div><div class="val" id="stat-projects">--</div></div>
+    <div class="cell"><div class="lbl">Requests today</div><div class="val" id="stat-requests">--</div></div>
+    <div class="cell"><div class="lbl">Uptime</div><div class="val" id="stat-uptime">--</div></div>
+    <div class="cell"><div class="lbl">Battery</div><div class="val" id="stat-battery">--</div></div>
+  </div>
+</section>
+
+<!-- ============== FEATURES ============== -->
+<section class="sect" id="features">
+  <div class="sect-head">
+    <span class="sect-eyebrow">What you get</span>
+    <h2 class="sect-title">Everything Vercel + Supabase + Railway give you, on hardware you own.</h2>
+    <p class="sect-sub">No monthly bill, no vendor lock-in, no anxiety about pricing pages updating overnight.</p>
+  </div>
+  <div class="feat-grid">
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-rocket"></i></div>
+      <h3>Git-based deploys</h3>
+      <p>Paste a repo URL, pick a subdomain, click Deploy. Auto-detects React/Next/Astro/Express/Python and runs the right install + build. GitHub webhook triggers on push.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-globe"></i></div>
+      <h3>Wildcard subdomains</h3>
+      <p>Every project gets <code>&lt;name&gt;.rofihosted.space</code> with TLS via Cloudflare Tunnel. No port-forwarding, no carrier-grade NAT problems, no DDNS.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-database"></i></div>
+      <h3>Per-project SQLite</h3>
+      <p>Each project gets an isolated database at <code>~/data/dbs/&lt;id&gt;.db</code>. WAL mode, full SQL via the dashboard, accessible from your runtime through <code>$ROFI_DB_PATH</code>.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-user"></i></div>
+      <h3>Auth-as-a-service</h3>
+      <p>Built-in <code>/auth/signup</code>, <code>/auth/login</code>, <code>/auth/verify</code> on every project. JWT signed with per-project keys derived from a per-install pepper. Zero glue code.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-key"></i></div>
+      <h3>Encrypted secrets</h3>
+      <p>AES-256-GCM vault per project. Plaintext only at decrypt time. Injected as environment variables when your process starts.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-clock"></i></div>
+      <h3>Cron + supervisor</h3>
+      <p>Scheduled tasks per project. Auto-restart on crash with exponential backoff. RSS quota enforcement. Survives reboots; resumes everything that was running.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-cloud-upload"></i></div>
+      <h3>Hourly offsite backups</h3>
+      <p>Tarball of the entire registry + databases + secrets pushed to Cloudflare R2 every hour. Last 7 days of hourly snapshots. Full restore tested on every release.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-shield"></i></div>
+      <h3>Defense in depth</h3>
+      <p>Per-IP rate limit, scanner classifier, auto-ban on probe attempts, geo-block, login brute-force tracker, AES-256-GCM at rest, HMAC sessions, no plaintext secrets.</p>
+    </div>
+    <div class="feat">
+      <div class="feat-icon"><i class="icon-energy"></i></div>
+      <h3>AI assist</h3>
+      <p>Mistral integration for ban annotations, daily digests, IP profiling, weekly policy review. Optional, off by default. Costs ~5 cents a month at typical volume.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============== HOW IT WORKS ============== -->
+<section class="sect" id="how">
+  <div class="sect-head">
+    <span class="sect-eyebrow">Architecture</span>
+    <h2 class="sect-title">How a phone serves the world.</h2>
+    <p class="sect-sub">Your request hits Cloudflare's edge, gets piped through a tunnel into the phone, and lands on a single Zig binary that does everything.</p>
+  </div>
+  <div class="diagram-wrap">
+    <div class="arch">
+      <div class="arch-node">
+        <strong>Visitor</strong>
+        <span>browser, curl, bot</span>
+      </div>
+      <div class="arch-arrow">&rarr;</div>
+      <div class="arch-node">
+        <strong>Cloudflare Edge</strong>
+        <span>TLS, WAF, DDoS</span>
+      </div>
+      <div class="arch-arrow">&rarr;</div>
+      <div class="arch-phone">
+        <div class="arch-phone-head">Sharp Aquos S40P</div>
+        <div class="arch-node">
+          <strong>cloudflared</strong>
+          <span>tunnel daemon</span>
+        </div>
+        <div class="arch-arrow" style="font-size:.95rem">&darr;</div>
+        <div class="arch-node accent">
+          <strong>hp-server</strong>
+          <span>Zig binary, port 8080</span>
+        </div>
+      </div>
+      <div class="arch-row-2">
+        <div class="arch-leaf">
+          <strong>SQLite</strong>
+          per-project DB
+        </div>
+        <div class="arch-leaf">
+          <strong>Encrypted vault</strong>
+          AES-256-GCM secrets
+        </div>
+        <div class="arch-leaf">
+          <strong>R2 backups</strong>
+          hourly, last 7 days
+        </div>
+      </div>
+    </div>
+  </div>
+  <p style="text-align:center; color:var(--text-3); font-size:.82rem; margin:1.4rem auto 0; max-width:620px;">
+    No public IP needed. No port forwarding. The phone holds the outbound tunnel; Cloudflare routes traffic back through it.
+  </p>
+</section>
+
+<!-- ============== DEPLOY EXAMPLE ============== -->
+<section class="sect" id="deploy">
+  <div class="sect-head">
+    <span class="sect-eyebrow">Get started</span>
+    <h2 class="sect-title">Deploy in 30 seconds, not 30 minutes.</h2>
+    <p class="sect-sub">Two ways: through the dashboard, or with the <code>rh</code> CLI from your laptop.</p>
+  </div>
+  <div class="code-row">
+    <div class="code-step">
+      <h3>Via dashboard</h3>
+      <p>Click through a 4-step wizard. Auto-detect handles everything for any standard JS / Python repo.</p>
+      <ol>
+        <li><strong>Source.</strong> Paste a Git URL or upload a ZIP.</li>
+        <li><strong>Subdomain.</strong> Pick the subdomain (live availability check).</li>
+        <li><strong>Runtime.</strong> Confirm or override the auto-detected install / build / start commands.</li>
+        <li><strong>Secrets.</strong> Drop in your environment variables. Encrypted at rest.</li>
+      </ol>
+      <a class="btn btn-accent" href="https://app.rofihosted.space/projects"><i class="icon-rocket"></i><span>Open Projects</span></a>
+    </div>
+    <div class="code-step">
+      <h3>Via CLI</h3>
+      <p>The <code>rh</code> CLI is a single Node 18+ script. Auth once, deploy from anywhere.</p>
+<pre class="code-block"><span class="cmt"># Install (one-time, from the repo)</span>
+<span class="pmt">$</span> npm install -g <span class="acc">./cli</span>
+
+<span class="cmt"># Authenticate against your phone</span>
+<span class="pmt">$</span> rh login
+
+<span class="cmt"># Deploy current directory as a static site</span>
+<span class="pmt">$</span> rh deploy --name my-app --runtime auto
+<span class="ok">  + zipped 142 files (3.4 MB)</span>
+<span class="ok">  + uploaded</span>
+<span class="ok">  + live at https://my-app.rofihosted.space</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============== TECH STACK ============== -->
+<section class="sect" style="padding-top: 0;">
+  <div class="sect-head">
+    <span class="sect-eyebrow">Built with</span>
+    <h2 class="sect-title">A small, deliberate stack.</h2>
+    <p class="sect-sub">No node_modules anywhere on the server. Everything is one statically-linked binary plus the tools the OS already ships.</p>
+  </div>
+  <div class="stack-row">
+    <span class="badge-tech"><span class="dot"></span>Zig 0.14</span>
+    <span class="badge-tech"><span class="dot"></span>httpz</span>
+    <span class="badge-tech"><span class="dot"></span>Termux (Android 11)</span>
+    <span class="badge-tech"><span class="dot"></span>Cloudflare Tunnel</span>
+    <span class="badge-tech"><span class="dot"></span>Cloudflare R2</span>
+    <span class="badge-tech"><span class="dot"></span>SQLite (per-project)</span>
+    <span class="badge-tech"><span class="dot"></span>rclone</span>
+    <span class="badge-tech"><span class="dot"></span>Mistral AI</span>
+    <span class="badge-tech"><span class="dot"></span>vanilla HTML / CSS / JS</span>
+  </div>
+</section>
+
+<!-- ============== HARDWARE BRAG ============== -->
+<section class="sect" style="padding-top: 0; padding-bottom: 6rem;">
+  <div class="sect-head">
+    <span class="sect-eyebrow">The hardware</span>
+    <h2 class="sect-title">A 4-year-old budget phone, plugged into the wall.</h2>
+    <p class="sect-sub">Sharp Aquos S40P. 6 GB of RAM. The battery is failing, so it stays charging 24/7. That is the entire infrastructure.</p>
+  </div>
+  <div class="diagram-wrap" style="text-align:center;">
+    <div style="font-family:ui-monospace,monospace; font-size:.85rem; color:var(--text-2); line-height:1.85;">
+      <strong style="color:var(--text)">CPU</strong> Snapdragon 720G (8 cores @ 2.3 GHz)<br>
+      <strong style="color:var(--text)">RAM</strong> 6 GB LPDDR4X<br>
+      <strong style="color:var(--text)">Storage</strong> 128 GB UFS 2.1 (uses ~12 GB)<br>
+      <strong style="color:var(--text)">Network</strong> Home Wi-Fi -&gt; Cloudflare Tunnel<br>
+      <strong style="color:var(--text)">Power</strong> Always plugged in (battery is faulty)<br>
+      <strong style="color:var(--text)">Cost</strong> $0/month (sunk cost)
+    </div>
+  </div>
+</section>
+
+<!-- ============== FOOTER ============== -->
+<footer class="footer-bar">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <span class="nav-mark">r</span>
+      <span>rofihosted</span>
+    </div>
+    <div class="footer-links">
+      <a href="https://app.rofihosted.space">Console</a>
+      <a href="https://app.rofihosted.space/status">Status</a>
+      <a href="https://github.com/rofiperlungoding/rofihosted">GitHub</a>
+      <a href="https://github.com/rofiperlungoding/rofihosted/blob/main/docs/PROJECT-BRIEFING.md">Docs</a>
+    </div>
+    <div class="footer-meta">Made with care, hosted from a phone.</div>
+  </div>
+</footer>
 
 <script src="https://rofihosted.space/theme.js?v=34"></script>
+<script>
+  // Live stats from public APIs
+  function fmtNum(n) {
+    if (n == null) return '--';
+    if (n < 1000) return n.toString();
+    if (n < 1e6) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  }
+  function fmtUptime(sec) {
+    if (!sec) return '--';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+    var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
+    return d + 'd' + (h ? ' ' + h + 'h' : '');
+  }
+
+  fetch('https://app.rofihosted.space/health', { mode: 'cors' })
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .catch(function () { return null; })
+    .then(function (txt) {
+      var pill = document.getElementById('live-text');
+      var dot = document.querySelector('.live-dot');
+      if (txt === null) {
+        pill.textContent = 'Console offline (phone may be rebooting)';
+        if (dot) { dot.style.background = 'var(--warning)'; dot.style.boxShadow = 'none'; }
+      }
+    });
+
+  // /v1/system/info is admin-only, but a public stat endpoint exists at /v1/public/stats? not yet.
+  // For now we wire what's available without auth.
+  fetch('https://app.rofihosted.space/v1/public/stats', { mode: 'cors' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .catch(function () { return null; })
+    .then(function (j) {
+      if (!j || !j.ok) return;
+      var el;
+      el = document.getElementById('stat-projects');
+      if (el && j.projects != null) el.textContent = fmtNum(j.projects);
+      el = document.getElementById('stat-requests');
+      if (el && j.requests_24h != null) el.textContent = fmtNum(j.requests_24h);
+      el = document.getElementById('stat-uptime');
+      if (el && j.uptime_seconds != null) el.textContent = fmtUptime(j.uptime_seconds);
+      el = document.getElementById('stat-battery');
+      if (el && j.battery_percent != null) el.textContent = j.battery_percent + '%';
+    });
+</script>
 </body>
 </html>

@@ -3562,6 +3562,13 @@ fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const 
         return handleGithubWebhook(app, req, res, project_id);
     }
 
+    // Public stats endpoint for the marketing landing page. No auth, just
+    // aggregate counters. CORS-enabled so rofihosted.space can fetch from
+    // app.rofihosted.space.
+    if (std.mem.eql(u8, path, "/v1/public/stats")) {
+        return v1PublicStats(app, res);
+    }
+
     // Extract API key
     const raw_key = req.header("x-api-key") orelse req.header("X-Api-Key") orelse "";
     if (raw_key.len == 0) {
@@ -3694,6 +3701,49 @@ fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const 
 
     res.status = 404;
     try res.json(.{ .ok = false, .err = "unknown_endpoint" }, .{});
+}
+
+fn v1PublicStats(app: *App, res: *httpz.Response) !void {
+    // CORS so the marketing landing on rofihosted.space can fetch from
+    // app.rofihosted.space without preflight.
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Cache-Control", "public, max-age=30");
+
+    // Project count: locked snapshot of the registry.
+    var project_count: usize = 0;
+    {
+        app.projects.mutex.lock();
+        defer app.projects.mutex.unlock();
+        project_count = app.projects.projects.items.len;
+    }
+
+    // Requests in last 24h: served from dbcache (no JSONL scan).
+    const requests_24h: u64 = app.dbcache.countVisits(86400, null, null, null, null) catch 0;
+
+    // Uptime: just process started_at.
+    const uptime_seconds: i64 = std.time.timestamp() - app.started_at;
+
+    // Battery: snapshot from powermon. -1 means termux-api unavailable, in
+    // which case we omit the field and the JS shows '--'.
+    const reading = app.powermon.snapshot();
+    const battery_pct: ?i32 = if (reading.percentage >= 0) reading.percentage else null;
+
+    if (battery_pct) |b| {
+        try res.json(.{
+            .ok = true,
+            .projects = project_count,
+            .requests_24h = requests_24h,
+            .uptime_seconds = uptime_seconds,
+            .battery_percent = b,
+        }, .{});
+    } else {
+        try res.json(.{
+            .ok = true,
+            .projects = project_count,
+            .requests_24h = requests_24h,
+            .uptime_seconds = uptime_seconds,
+        }, .{});
+    }
 }
 
 fn v1Execute(app: *App, req: *httpz.Request, res: *httpz.Response, rec: apikey.Record) !void {
