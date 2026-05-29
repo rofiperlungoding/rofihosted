@@ -374,13 +374,14 @@ a.btn [class^="icon-"], a.btn svg, button.btn [class^="icon-"], button.btn svg {
 .form-card {
   background: var(--surface); border: 1px solid var(--border-soft);
   border-radius: 12px; padding: 1.6rem;
-  box-shadow: var(--shadow); max-width: 540px;
+  box-shadow: var(--shadow);
+  margin-bottom: 1.5rem;
 }
 .form-card h2 { font-size: 1.05rem; margin: 0 0 .35rem; letter-spacing: -0.018em; color: var(--text); font-weight: 600; }
 .form-card p.lead { color: var(--text-3); font-size: .87rem; margin: 0 0 1.4rem; line-height: 1.55; }
 .form-card form { display: flex; flex-direction: column; gap: 1rem; }
 .form-card .form-row { display: flex; flex-direction: column; }
-.form-card .submit-row { margin-top: .5rem; display: flex; gap: .6rem; }
+.form-card .submit-row { margin-top: .5rem; display: flex; gap: .6rem; flex-wrap: wrap; }
 
 .alert { padding: .7rem 1rem; border-radius: 8px; font-size: .82rem; display: flex; align-items: center; gap: .55rem; margin-bottom: 1rem; }
 .alert.success { background: var(--success-soft); color: var(--success); border: 1px solid var(--success-soft); }
