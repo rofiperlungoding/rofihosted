@@ -4271,7 +4271,7 @@ fn mcpToolListSecrets(app: *App, res: *httpz.Response, id_json: []const u8, args
         try mcpJsonToolText(res, id_json, "invalid project_id", true);
         return;
     }
-    const keys = projsecrets.listKeys(res.arena, app.pepper, pid) catch {
+    const keys = projsecrets.Vault.listKeys(res.arena, app.pepper, pid) catch {
         try mcpJsonToolText(res, id_json, "(no secrets vault yet)", false);
         return;
     };
@@ -4308,7 +4308,7 @@ fn mcpToolSetSecret(app: *App, res: *httpz.Response, id_json: []const u8, args: 
         try mcpJsonToolText(res, id_json, "value must be non-empty (use delete_secret to remove)", true);
         return;
     }
-    projsecrets.setOne(res.arena, app.pepper, pid, key, value) catch |e| {
+    projsecrets.Vault.setOne(res.arena, app.pepper, pid, key, value) catch |e| {
         var m: [128]u8 = undefined;
         const msg = std.fmt.bufPrint(&m, "set failed: {s}", .{@errorName(e)}) catch "set failed";
         try mcpJsonToolText(res, id_json, msg, true);
@@ -4331,7 +4331,7 @@ fn mcpToolDeleteSecret(app: *App, res: *httpz.Response, id_json: []const u8, arg
         return;
     }
     // setOne with empty value deletes the key.
-    projsecrets.setOne(res.arena, app.pepper, pid, key, "") catch |e| {
+    projsecrets.Vault.setOne(res.arena, app.pepper, pid, key, "") catch |e| {
         var m: [128]u8 = undefined;
         const msg = std.fmt.bufPrint(&m, "delete failed: {s}", .{@errorName(e)}) catch "delete failed";
         try mcpJsonToolText(res, id_json, msg, true);
