@@ -4818,6 +4818,25 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         .detail = user.username,
     });
 
+    // Telegram alert for pending self-signups so the operator notices
+    // immediately without polling the dashboard. Best-effort, skipped
+    // silently if Telegram isn't configured.
+    if (initial_status == .pending and app.tg_cfg.enabled()) {
+        const tg_msg = std.fmt.allocPrint(
+            app.allocator,
+            "[rofihosted] new signup pending\n" ++
+                "user: {s}\n" ++
+                "email: {s}\n" ++
+                "reason: {s}\n" ++
+                "approve: https://app.rofihosted.space/admin/users",
+            .{ user.username, user.email, if (user.signup_reason.len > 0) user.signup_reason else "(none)" },
+        ) catch null;
+        if (tg_msg) |m| {
+            telegram.send(app.allocator, app.tg_cfg, m);
+            app.allocator.free(m);
+        }
+    }
+
     // Issue a session cookie so they don't have to log in again
     auth.issueUserCookie(app.auth_cfg, user, res) catch {};
 

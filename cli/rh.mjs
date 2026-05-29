@@ -100,6 +100,74 @@ async function cmdLogin() {
   }
 }
 
+async function cmdSignup() {
+  // Sign up a new tenant account on rofihosted.space and save its API key
+  // locally. Two paths: with an invite code (instant approval) or self-
+  // signup (operator approves manually).
+  const rl = readline.createInterface({ input, output });
+  console.log(`Sign up for a rofihosted tenant account.`);
+  console.log(`If you have an invite code from the operator, paste it for instant approval.`);
+  console.log(`Otherwise leave blank and the operator will review your request.`);
+  console.log();
+  const baseRaw = (await rl.question(`Server [${DEFAULT_BASE}]: `)).trim();
+  const base = baseRaw || DEFAULT_BASE;
+  const username = (await rl.question('Username (3-32 chars, alnum + _ -): ')).trim();
+  const email = (await rl.question('Email: ')).trim();
+  const password = (await rl.question('Password (min 8 chars): ')).trim();
+  const inviteCode = (await rl.question('Invite code (optional): ')).trim().toUpperCase();
+  let reason = '';
+  if (!inviteCode) {
+    reason = (await rl.question('Reason (helps the operator decide): ')).trim();
+  }
+  rl.close();
+
+  if (!username || !email || !password) fail('username, email, password are required');
+  if (password.length < 8) fail('password must be at least 8 characters');
+
+  // The signup endpoint lives on the apex domain, not app.*
+  const apex = base.replace(/\/\/app\./, '//');
+  const fd = new URLSearchParams();
+  fd.set('username', username);
+  fd.set('email', email);
+  fd.set('password', password);
+  if (inviteCode) fd.set('invite_code', inviteCode);
+  if (reason) fd.set('signup_reason', reason);
+
+  const res = await fetch(`${apex}/signup/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: fd.toString(),
+  });
+  const j = await res.json();
+  if (!j.ok) {
+    const map = {
+      username_taken: 'That username is already taken.',
+      email_taken: 'That email is already registered.',
+      invalid_username: 'Username must be 3-32 chars (alphanumeric, _ or -).',
+      weak_password: 'Password must be at least 8 characters.',
+      invite_used: 'That invite code has already been used or expired.',
+      invite_invalid: 'Invite code is invalid.',
+      invalid_email: 'Invalid email.',
+    };
+    fail(map[j.err] || j.err || 'signup failed');
+  }
+
+  console.log();
+  if (j.status === 'active') {
+    ok(`signed up as ${j.username} (id=${j.id}). You're approved instantly.`);
+    console.log();
+    console.log('Next: open the dashboard or create an admin-scoped key:');
+    console.log(`  ${base}/settings`);
+    console.log(`Then run \`rh login\` with the key value.`);
+  } else {
+    ok(`signup submitted as ${j.username} (id=${j.id}, status=${j.status}).`);
+    console.log();
+    console.log('The operator will review your request. You will be able to sign in');
+    console.log('and deploy once they approve. Check back at:');
+    console.log(`  ${base}/login`);
+  }
+}
+
 async function cmdWhoami({ base, apiKey }) {
   const j = await api(base, apiKey, '/v1/whoami');
   console.log(JSON.stringify(j, null, 2));
@@ -635,6 +703,7 @@ async function main() {
     console.log(`rh - rofihosted CLI`);
     console.log();
     console.log(`Account & system:`);
+    console.log(`  rh signup                      sign up for a new tenant account`);
     console.log(`  rh login                       save API key (interactive)`);
     console.log(`  rh whoami                      show current API key identity`);
     console.log(`  rh status                      hp-server vitals`);
@@ -672,6 +741,10 @@ async function main() {
 
   if (cmd === 'login') {
     await cmdLogin();
+    return;
+  }
+  if (cmd === 'signup') {
+    await cmdSignup();
     return;
   }
 
