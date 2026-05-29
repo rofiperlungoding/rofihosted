@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Settings / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=36">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=36">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=36">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=37">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=37">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=37">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   /* ---- stat grid (db cache) ---- */
@@ -169,7 +169,7 @@
       </div>
 
       <!-- ===== GEO-BLOCK ===== -->
-      <div class="form-card">
+      <div class="form-card" data-admin-only>
         <h2>Geo-block</h2>
         <p class="lead">Drop traffic from countries not in the allow list. Uses Cloudflare's <code>cf-ipcountry</code> header. Authenticated requests and local requests are never blocked.</p>
         <form id="geoblock-form" autocomplete="off">
@@ -192,7 +192,7 @@
       </div>
 
       <!-- ===== HONEYPOT ===== -->
-      <div class="form-card">
+      <div class="form-card" data-admin-only>
         <h2>Honeypot</h2>
         <p class="lead">Scanner-classified requests targeting common probe paths (<code>/wp-admin</code>, <code>/.env</code>, etc) get answered with AI-generated decoy content instead of a 403. Requires Mistral API key.</p>
         <form id="honey-form" autocomplete="off">
@@ -211,7 +211,7 @@
       </div>
 
       <!-- ===== DATABASE CACHE ===== -->
-      <div class="form-card">
+      <div class="form-card" data-admin-only>
         <h2>Database cache</h2>
         <p class="lead">SQLite read-side cache at <code>~/data/cache.db</code>. Makes the AI query bar fast. Auto-syncs every 5 minutes from <code>visits.jsonl</code>.</p>
         <div class="stat-grid" id="dbcache-grid">
@@ -296,7 +296,7 @@
 
 
       <!-- ===== SYSTEM ===== -->
-      <div class="form-card">
+      <div class="form-card" data-admin-only>
         <h2>System</h2>
         <p class="lead">Pull the latest code from GitHub, rebuild, and validate backups. No SSH required.</p>
 
@@ -318,7 +318,7 @@
       </div>
 
       <!-- ===== BACKUPS ===== -->
-      <div class="form-card">
+      <div class="form-card" data-admin-only>
         <h2>Backups</h2>
         <p class="lead">Snapshot the irreplaceable bits (registry, project DBs, encrypted secrets vaults) into a tarball. Local copies kept in <code>~/backups/</code>; R2 copies pushed offsite hourly. Run <code>bash ~/r2-setup.sh</code> from Shell to wire R2 credentials.</p>
 
@@ -351,7 +351,7 @@
       </div>
 
       <!-- ===== OPERATOR RULES ===== -->
-      <div class="form-card">
+      <div class="form-card" data-admin-only>
         <h2>Operator rules</h2>
         <p class="lead">Define event handlers. Each rule has a trigger (<code>on_visit</code>, <code>on_login_attempt</code>, <code>on_blocklist_change</code>, <code>on_anomaly</code>), AND-ed conditions, and actions (<code>block</code>, <code>log</code>, <code>increment</code>).</p>
         <p class="hint">Edit the JSON below and click Save to replace the entire rule set. Each rule needs <code>id</code>, <code>name</code>, <code>enabled</code>, <code>trigger</code>, <code>conditions</code>, <code>actions</code>.</p>
@@ -369,8 +369,8 @@
 </div>
 
 
-<script src="https://rofihosted.space/theme.js?v=36"></script>
-<script src="https://rofihosted.space/app.js?v=36"></script>
+<script src="https://rofihosted.space/theme.js?v=37"></script>
+<script src="https://rofihosted.space/app.js?v=37"></script>
 <script>
   (function () {
     RH.loadCurrentUser();

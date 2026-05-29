@@ -970,8 +970,61 @@ fn handleLogout(_: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn handleChangeCreds(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
-    const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
-    const ok = auth.changeCredentials(app.auth_cfg, req, res) catch false;
+    // Multi-tenant: tenants change their own password in the users
+    // store. The legacy operator (no users.zig record) keeps the
+    // ~/.hp-server-creds.txt path. We branch on identity.
+    const ident_opt = auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req);
+    const actor = if (ident_opt) |i| i.username else "unknown";
+
+    var ok: bool = false;
+
+    if (ident_opt) |ident| {
+        const form = req.formData() catch null;
+        if (form) |f| {
+            const current_pass = f.get("current_password") orelse "";
+            const new_user = f.get("new_username") orelse "";
+            const new_pass = f.get("new_password") orelse "";
+
+            if (ident.legacy) {
+                // Legacy operator: update creds.txt + secret + cookie via auth.changeCredentials
+                // We have to call the existing helper which re-parses the form. Use it.
+                ok = auth.changeCredentials(app.auth_cfg, req, res) catch false;
+            } else if (current_pass.len > 0 and new_pass.len >= 8) {
+                // Tenant: verify current password against users.zig, then change.
+                _ = app.users.verify(ident.username, current_pass) catch {
+                    ok = false;
+                    res.status = 302;
+                    res.header("Location", "https://app.rofihosted.space/settings?error=1");
+                    res.body = "";
+                    audit.append(.{ .timestamp = std.time.timestamp(), .actor = actor, .action = "change_credentials", .target = ident.user_id, .ok = false });
+                    return;
+                };
+                // Username change is not supported for tenants in this phase
+                // (would require re-checking subdomain conflicts etc).
+                if (new_user.len > 0 and !std.mem.eql(u8, new_user, ident.username)) {
+                    res.status = 302;
+                    res.header("Location", "https://app.rofihosted.space/settings?error=1");
+                    res.body = "";
+                    audit.append(.{ .timestamp = std.time.timestamp(), .actor = actor, .action = "change_credentials", .target = ident.user_id, .ok = false });
+                    return;
+                }
+                app.users.changePassword(ident.user_id, new_pass) catch {
+                    ok = false;
+                    res.status = 302;
+                    res.header("Location", "https://app.rofihosted.space/settings?error=1");
+                    res.body = "";
+                    audit.append(.{ .timestamp = std.time.timestamp(), .actor = actor, .action = "change_credentials", .target = ident.user_id, .ok = false });
+                    return;
+                };
+                // Re-issue cookie with new password hash so the tenant stays logged in.
+                if (app.users.findById(ident.user_id)) |refreshed| {
+                    auth.issueUserCookie(app.auth_cfg, refreshed, res) catch {};
+                }
+                ok = true;
+            }
+        }
+    }
+
     audit.append(.{
         .timestamp = std.time.timestamp(),
         .actor = actor,
