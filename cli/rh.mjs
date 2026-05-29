@@ -424,6 +424,208 @@ async function cmdLogs({ base, apiKey }, [sub]) {
   console.log(runtime.log || '(empty)');
 }
 
+// ---- new commands: secrets, sql, lifecycle, exec, blocklist, mcp ----
+
+async function findProject(base, apiKey, sub) {
+  const list = await api(base, apiKey, '/v1/projects');
+  const project = (list.projects || []).find(p => p.subdomain === sub || p.id === sub);
+  if (!project) fail(`no project matches '${sub}' (by subdomain or id)`);
+  return project;
+}
+
+function form(obj) {
+  const fd = new URLSearchParams();
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined && v !== null) fd.set(k, String(v));
+  }
+  return {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: fd.toString(),
+  };
+}
+
+async function cmdSecret({ base, apiKey }, args) {
+  const [action, sub, key, ...rest] = args;
+  if (!action || !['set', 'get', 'list', 'ls', 'rm', 'delete'].includes(action)) {
+    fail('usage: rh secret <set|get|list|rm> <subdomain> [key] [value]');
+  }
+  if (!sub) fail('subdomain required');
+  const project = await findProject(base, apiKey, sub);
+
+  if (action === 'list' || action === 'ls') {
+    const j = await api(base, apiKey, `/api/projects/secrets/list?id=${project.id}`);
+    if (!j.ok) fail(j.err || 'list failed');
+    const keys = j.keys || [];
+    if (keys.length === 0) {
+      console.log('(empty)');
+      return;
+    }
+    console.log(`${keys.length} secret(s):`);
+    for (const k of keys) console.log(`  ${k}`);
+    return;
+  }
+
+  if (!key) fail(`key required for ${action}`);
+
+  if (action === 'set') {
+    let value = rest.join(' ');
+    if (!value) {
+      // Read from stdin if value not given on cli
+      const rl = readline.createInterface({ input, output, terminal: false });
+      value = (await rl.question(`${key}=`)).trim();
+      rl.close();
+    }
+    if (!value) fail('empty value');
+    const j = await api(base, apiKey, '/api/projects/secrets/set', {
+      method: 'POST',
+      ...form({ project_id: project.id, key, value }),
+    });
+    if (!j.ok) fail(j.err || 'set failed');
+    ok(`set ${key} on ${project.subdomain} (restart project for env to apply)`);
+    return;
+  }
+
+  if (action === 'rm' || action === 'delete') {
+    const j = await api(base, apiKey, '/api/projects/secrets/delete', {
+      method: 'POST',
+      ...form({ project_id: project.id, key }),
+    });
+    if (!j.ok) fail(j.err || 'delete failed');
+    ok(`removed ${key}`);
+    return;
+  }
+
+  if (action === 'get') {
+    fail(`secret values are write-only (decrypted only into the running process). Use 'rh secret list' to see keys.`);
+  }
+}
+
+async function cmdSql({ base, apiKey }, args) {
+  const [sub, ...rest] = args;
+  if (!sub) fail('usage: rh sql <subdomain> "<query>"');
+  const project = await findProject(base, apiKey, sub);
+  const sqlText = rest.join(' ').trim();
+  if (!sqlText) fail('empty SQL');
+  const j = await api(base, apiKey, '/api/projects/sql', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: project.id, sql: sqlText }),
+  });
+  if (j.output) {
+    console.log(j.output);
+  } else {
+    console.log(JSON.stringify(j, null, 2));
+  }
+}
+
+async function cmdProjectAction({ base, apiKey }, args, action) {
+  const [sub] = args;
+  if (!sub) fail(`usage: rh ${action} <subdomain>`);
+  const project = await findProject(base, apiKey, sub);
+  const path = `/api/projects/${action}`;
+  const j = await api(base, apiKey, path, {
+    method: 'POST',
+    ...form({ id: project.id }),
+  });
+  if (!j.ok) fail(j.err || `${action} failed`);
+  ok(`${action} ${project.subdomain}`);
+}
+
+async function cmdRedeploy({ base, apiKey }, args) {
+  const [sub] = args;
+  if (!sub) fail('usage: rh redeploy <subdomain>');
+  const project = await findProject(base, apiKey, sub);
+  const j = await api(base, apiKey, '/v1/projects/deploy', {
+    method: 'POST',
+    ...form({ id: project.id }),
+  });
+  if (!j.ok) fail(j.err || 'deploy failed');
+  ok(`deploy started for ${project.subdomain}. Tail with: rh logs ${project.subdomain}`);
+}
+
+async function cmdTail({ base, apiKey }, args) {
+  const [sub, kind = 'runtime'] = args;
+  if (!sub) fail('usage: rh tail <subdomain> [runtime|build]');
+  const project = await findProject(base, apiKey, sub);
+  const which = kind === 'build' ? 'logs' : 'runtime-logs';
+  console.log(`Tailing ${kind} log for ${project.subdomain}. Ctrl-C to stop.`);
+  let lastSize = 0;
+  while (true) {
+    try {
+      const j = await api(base, apiKey, `/v1/projects/${which}?id=${project.id}`);
+      const log = j.log || '';
+      if (log.length > lastSize) {
+        process.stdout.write(log.slice(lastSize));
+        lastSize = log.length;
+      }
+    } catch (e) {
+      console.error(`(poll error: ${e.message})`);
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+async function cmdExec({ base, apiKey }, args) {
+  const cmd = args.join(' ').trim();
+  if (!cmd) fail('usage: rh exec "<shell command>"');
+  const j = await api(base, apiKey, '/api/system/exec', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cmd, timeout_ms: 60000 }),
+  });
+  if (j.stdout) process.stdout.write(j.stdout);
+  if (j.stderr) process.stderr.write(j.stderr);
+  if (j.timed_out) console.error('rh: command timed out');
+  process.exit(j.exit_code === undefined ? 0 : j.exit_code);
+}
+
+async function cmdBan({ base, apiKey }, args) {
+  const [sub, ...reasonParts] = args;
+  if (!sub) fail('usage: rh ban <ip> [reason...]');
+  const reason = reasonParts.join(' ') || 'manual via rh CLI';
+  const j = await api(base, apiKey, '/api/security/block', {
+    method: 'POST',
+    ...form({ ip: sub, reason }),
+  });
+  if (!j.ok) fail(j.err || 'block failed');
+  ok(`blocked ${sub}`);
+}
+
+async function cmdUnban({ base, apiKey }, args) {
+  const [ip] = args;
+  if (!ip) fail('usage: rh unban <ip>');
+  const j = await api(base, apiKey, '/api/security/unblock', {
+    method: 'POST',
+    ...form({ ip }),
+  });
+  if (!j.ok) fail(j.err || 'unblock failed');
+  ok(`unblocked ${ip}`);
+}
+
+async function cmdMcpConfig({ base }) {
+  // Print snippets for popular MCP clients.
+  console.log();
+  console.log('=== Claude Desktop / claude_desktop_config.json ===');
+  console.log(JSON.stringify({
+    mcpServers: {
+      rofihosted: {
+        url: `${base}/mcp`,
+        transport: 'streamable-http',
+        headers: { Authorization: 'Bearer ${ROFIHOSTED_API_KEY}' },
+      },
+    },
+  }, null, 2));
+  console.log();
+  console.log('=== Kiro / Cursor / continuum (similar pattern) ===');
+  console.log('Add to your MCP servers list:');
+  console.log(`  url:        ${base}/mcp`);
+  console.log(`  transport:  streamable-http`);
+  console.log(`  auth:       Bearer <admin-scoped api key>`);
+  console.log();
+  console.log('Discovery doc: ' + base + '/.well-known/mcp.json');
+  console.log();
+}
+
 // ---- main ----
 
 async function main() {
@@ -432,17 +634,37 @@ async function main() {
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(`rh - rofihosted CLI`);
     console.log();
-    console.log(`commands:`);
-    console.log(`  rh login                   save API key (interactive)`);
-    console.log(`  rh whoami                  show current API key identity`);
-    console.log(`  rh status                  full hp-server vitals`);
-    console.log(`  rh power                   charger and battery status`);
-    console.log(`  rh update                  pull latest commit and rebuild`);
-    console.log(`  rh backup [--r2]           trigger a backup`);
-    console.log(`  rh ls                      list all projects`);
-    console.log(`  rh deploy <dir> <sub>      zip and upload a directory as static project`);
-    console.log(`    --static                 force static (skip auto-detect)`);
-    console.log(`  rh logs <subdomain>        tail build + runtime logs`);
+    console.log(`Account & system:`);
+    console.log(`  rh login                       save API key (interactive)`);
+    console.log(`  rh whoami                      show current API key identity`);
+    console.log(`  rh status                      hp-server vitals`);
+    console.log(`  rh power                       charger and battery status`);
+    console.log(`  rh update                      pull latest commit and rebuild`);
+    console.log(`  rh backup [--r2]               trigger a backup`);
+    console.log(`  rh exec "<cmd>"                run an arbitrary shell command on the phone`);
+    console.log();
+    console.log(`Projects:`);
+    console.log(`  rh ls                          list all projects`);
+    console.log(`  rh deploy <dir> <sub>          zip and upload as static project`);
+    console.log(`  rh redeploy <sub>              re-clone the repo and rebuild`);
+    console.log(`  rh start <sub>                 start a project`);
+    console.log(`  rh stop <sub>                  stop a project`);
+    console.log(`  rh restart <sub>               stop then start with grace`);
+    console.log(`  rh logs <sub>                  show build + runtime logs once`);
+    console.log(`  rh tail <sub> [runtime|build]  follow the runtime/build log live`);
+    console.log();
+    console.log(`Secrets and database:`);
+    console.log(`  rh secret list <sub>           list secret keys`);
+    console.log(`  rh secret set <sub> <key> [v]  set a secret (prompts if v omitted)`);
+    console.log(`  rh secret rm <sub> <key>       remove a secret`);
+    console.log(`  rh sql <sub> "<query>"         run SQL against the project's SQLite DB`);
+    console.log();
+    console.log(`Security:`);
+    console.log(`  rh ban <ip> [reason]           manually block an IP`);
+    console.log(`  rh unban <ip>                  remove an IP from the blocklist`);
+    console.log();
+    console.log(`MCP integration:`);
+    console.log(`  rh mcp                         print config snippets for Claude/Kiro/Cursor`);
     console.log();
     console.log(`config: ~/.rofihosted/config.json or env ROFIHOSTED_API_KEY`);
     process.exit(0);
@@ -468,9 +690,20 @@ async function main() {
     deploy: cmdDeploy,
     ls: cmdLs,
     logs: cmdLogs,
+    tail: cmdTail,
+    secret: cmdSecret,
+    sql: cmdSql,
+    redeploy: cmdRedeploy,
+    start: (creds, args) => cmdProjectAction(creds, args, 'start'),
+    stop: (creds, args) => cmdProjectAction(creds, args, 'stop'),
+    restart: (creds, args) => cmdProjectAction(creds, args, 'restart'),
+    exec: cmdExec,
+    ban: cmdBan,
+    unban: cmdUnban,
+    mcp: cmdMcpConfig,
   };
   const handler = handlers[cmd];
-  if (!handler) fail(`unknown command: ${cmd}`);
+  if (!handler) fail(`unknown command: ${cmd}. Run 'rh help' for the list.`);
   await handler(creds, args);
 }
 
