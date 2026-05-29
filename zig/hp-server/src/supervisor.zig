@@ -158,6 +158,28 @@ pub const Supervisor = struct {
         const db_path = try std.fmt.allocPrint(self.allocator, "{s}/data/dbs/{s}.db", .{ HOME, project_id });
         defer self.allocator.free(db_path);
         try env_map.put("ROFI_DB_PATH", db_path);
+
+        // Convenience: many ORMs (Drizzle, Prisma, Knex, SQLAlchemy) read
+        // DATABASE_URL by default. Auto-set to a SQLite URL pointing at the
+        // per-project DB so devs can `import drizzle from 'drizzle-orm/...'`
+        // and have it just work. Operator overrides win - if they set
+        // DATABASE_URL via secrets we leave it alone.
+        if (env_map.get("DATABASE_URL") == null) {
+            const db_url = try std.fmt.allocPrint(self.allocator, "file:{s}", .{db_path});
+            defer self.allocator.free(db_url);
+            try env_map.put("DATABASE_URL", db_url);
+        }
+
+        // Project public URL (so server-side code can build absolute links).
+        const public_url = try std.fmt.allocPrint(self.allocator, "https://{s}.rofihosted.space", .{project.subdomain});
+        defer self.allocator.free(public_url);
+        try env_map.put("ROFI_PUBLIC_URL", public_url);
+
+        // Auth-as-a-service endpoint base (relative to the project's own
+        // subdomain). Apps can POST username+password to /auth/signup
+        // and /auth/login and get a per-project JWT back without having
+        // to write any auth code.
+        try env_map.put("ROFI_AUTH_BASE", "/auth");
         // Hint Node-style ecosystems toward production unless operator overrode it
         if (env_map.get("NODE_ENV") == null) try env_map.put("NODE_ENV", "production");
 

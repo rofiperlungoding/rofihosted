@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=38">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=38">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=38">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=39">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=39">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=39">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -128,6 +128,7 @@
       <!-- Tabs -->
       <div style="display:flex; gap:.2rem; border-bottom:1px solid var(--border-soft); margin-bottom:1rem; overflow-x:auto">
         <button class="d-tab" data-tab="logs" style="background:none; border:0; padding:.6rem 1rem; font-size:.82rem; color:var(--text); cursor:pointer; border-bottom:2px solid var(--accent); font-weight:500">Logs</button>
+        <button class="d-tab" data-tab="resources" style="background:none; border:0; padding:.6rem 1rem; font-size:.82rem; color:var(--text-3); cursor:pointer; border-bottom:2px solid transparent">Resources</button>
         <button class="d-tab" data-tab="config" style="background:none; border:0; padding:.6rem 1rem; font-size:.82rem; color:var(--text-3); cursor:pointer; border-bottom:2px solid transparent">Config</button>
         <button class="d-tab" data-tab="secrets" style="background:none; border:0; padding:.6rem 1rem; font-size:.82rem; color:var(--text-3); cursor:pointer; border-bottom:2px solid transparent">Env vars</button>
         <button class="d-tab" data-tab="webhook" style="background:none; border:0; padding:.6rem 1rem; font-size:.82rem; color:var(--text-3); cursor:pointer; border-bottom:2px solid transparent">GitHub webhook</button>
@@ -139,6 +140,118 @@
           <button class="btn btn-sm" data-log-kind="runtime" id="d-log-runtime">Runtime log</button>
         </div>
         <pre id="d-logs" style="max-height:480px; overflow:auto; padding:1rem 1.2rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.74rem; line-height:1.5; white-space:pre-wrap; word-break:break-word; color:var(--text); margin:0">Loading...</pre>
+      </div>
+
+      <div id="d-tab-resources" style="display:none">
+        <div style="background:var(--surface); border:1px solid var(--border-soft); border-radius:10px; padding:1.4rem 1.5rem">
+          <p class="hint" style="margin:0 0 1rem">Everything below is auto-provisioned for your project. No setup needed - the URLs and env vars are already injected into your runtime. Code snippets are clipboard-ready.</p>
+
+          <!-- Database -->
+          <div style="margin-bottom:1.6rem">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.5rem">
+              <h3 style="margin:0; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-database" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i>SQLite database</h3>
+              <a class="btn btn-sm" href="#" id="d-res-db-open">Open SQL runner</a>
+            </div>
+            <p class="hint" style="margin:.2rem 0 .6rem">Per-project SQLite at <code id="d-res-db-path">~/data/dbs/&lt;id&gt;.db</code>, mode 0600. Auto-created on first connect. No size limit beyond available phone storage.</p>
+            <p class="hint" style="margin:.2rem 0 .6rem">Already exposed to your runtime via:</p>
+            <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.7rem .9rem; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.78rem; margin:.3rem 0 .8rem; overflow-x:auto"><code>DATABASE_URL=file:&lt;auto-injected&gt;
+ROFI_DB_PATH=&lt;auto-injected&gt;</code></pre>
+            <details>
+              <summary style="cursor:pointer; font-size:.82rem; color:var(--accent); margin-bottom:.6rem">Code snippets</summary>
+              <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:.8rem; margin-top:.6rem">
+                <div>
+                  <div style="font-size:.72rem; color:var(--text-3); margin-bottom:.3rem">Node + better-sqlite3</div>
+                  <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.6rem .8rem; font-family:ui-monospace,monospace; font-size:.74rem; margin:0; overflow-x:auto"><code>import Database from 'better-sqlite3';
+const db = new Database(process.env.ROFI_DB_PATH);
+db.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)');
+const rows = db.prepare('SELECT * FROM notes').all();</code></pre>
+                </div>
+                <div>
+                  <div style="font-size:.72rem; color:var(--text-3); margin-bottom:.3rem">Node + Drizzle ORM</div>
+                  <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.6rem .8rem; font-family:ui-monospace,monospace; font-size:.74rem; margin:0; overflow-x:auto"><code>import { drizzle } from 'drizzle-orm/better-sqlite3';
+import Database from 'better-sqlite3';
+const db = drizzle(new Database(process.env.ROFI_DB_PATH));
+// DATABASE_URL also works for drizzle-kit migrations</code></pre>
+                </div>
+                <div>
+                  <div style="font-size:.72rem; color:var(--text-3); margin-bottom:.3rem">Python + sqlite3</div>
+                  <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.6rem .8rem; font-family:ui-monospace,monospace; font-size:.74rem; margin:0; overflow-x:auto"><code>import os, sqlite3
+con = sqlite3.connect(os.environ['ROFI_DB_PATH'])
+con.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)')
+con.commit()</code></pre>
+                </div>
+                <div>
+                  <div style="font-size:.72rem; color:var(--text-3); margin-bottom:.3rem">Python + SQLAlchemy</div>
+                  <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.6rem .8rem; font-family:ui-monospace,monospace; font-size:.74rem; margin:0; overflow-x:auto"><code>from sqlalchemy import create_engine
+import os
+engine = create_engine(os.environ['DATABASE_URL'])  # file:&lt;path&gt;</code></pre>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <!-- Auth -->
+          <div style="margin-bottom:1.6rem">
+            <h3 style="margin:0 0 .4rem; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-user" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i>Auth-as-a-Service</h3>
+            <p class="hint" style="margin:.2rem 0 .6rem">Three endpoints already mounted on your subdomain. JWT signed with a per-project key derived from a per-install pepper - so projects can never sign each other's tokens. 7-day TTL.</p>
+            <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.7rem .9rem; font-family:ui-monospace,monospace; font-size:.78rem; margin:.3rem 0 .8rem; overflow-x:auto"><code>POST <span id="d-res-auth-base"></span>/auth/signup    { email, password }
+POST <span class="d-res-auth-host"></span>/auth/login     { email, password }   -&gt; { token }
+GET  <span class="d-res-auth-host"></span>/auth/verify    Authorization: Bearer &lt;token&gt;</code></pre>
+            <details>
+              <summary style="cursor:pointer; font-size:.82rem; color:var(--accent); margin-bottom:.6rem">Code snippet (frontend)</summary>
+              <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.7rem .9rem; font-family:ui-monospace,monospace; font-size:.74rem; margin:.6rem 0; overflow-x:auto"><code>// Signup
+const r = await fetch('/auth/signup', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email, password }),
+});
+const { token } = await r.json();
+localStorage.setItem('jwt', token);
+
+// Make authenticated requests later
+fetch('/auth/verify', {
+  headers: { Authorization: 'Bearer ' + localStorage.getItem('jwt') },
+});</code></pre>
+            </details>
+          </div>
+
+          <!-- Secrets / env -->
+          <div style="margin-bottom:1.6rem">
+            <h3 style="margin:0 0 .4rem; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-key" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i>Secrets &amp; environment</h3>
+            <p class="hint" style="margin:.2rem 0 .6rem">Variables you set in the <strong>Env vars</strong> tab are AES-256-GCM-encrypted on disk and decrypted only into your running process. Plus we always inject:</p>
+            <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.7rem .9rem; font-family:ui-monospace,monospace; font-size:.78rem; margin:.3rem 0 .8rem; overflow-x:auto"><code>PORT=&lt;allocated&gt;            # bind to this!
+HOST=127.0.0.1
+NODE_ENV=production
+ROFI_PROJECT_ID=&lt;your id&gt;
+ROFI_SUBDOMAIN=&lt;your subdomain&gt;
+ROFI_PUBLIC_URL=https://&lt;sub&gt;.rofihosted.space
+ROFI_DB_PATH=&lt;sqlite path&gt;
+DATABASE_URL=file:&lt;sqlite path&gt;
+ROFI_AUTH_BASE=/auth</code></pre>
+            <p class="hint" style="margin:.4rem 0; font-size:.74rem">Any DATABASE_URL you set via secrets overrides the auto-injected SQLite. Useful if you'd rather use a hosted Postgres (Supabase, Turso, Neon, etc).</p>
+          </div>
+
+          <!-- Cron -->
+          <div style="margin-bottom:1.6rem">
+            <h3 style="margin:0 0 .4rem; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-clock" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i>Scheduled tasks</h3>
+            <p class="hint" style="margin:.2rem 0 .6rem">Use the <strong>Tasks</strong> tab to define cron-like jobs that run inside your project's environment. Same env vars, same DB, runs as a child of your project.</p>
+            <pre style="background:var(--surface-2); border:1px solid var(--border-soft); border-radius:6px; padding:.7rem .9rem; font-family:ui-monospace,monospace; font-size:.78rem; margin:.3rem 0 .8rem; overflow-x:auto"><code>schedule: every 1h  command: node scripts/cleanup.js
+schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
+          </div>
+
+          <!-- Want Postgres? -->
+          <div>
+            <h3 style="margin:0 0 .4rem; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-info" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i>Want Postgres / Redis / vector DB?</h3>
+            <p class="hint" style="margin:.2rem 0 .6rem">A phone with 6 GB of RAM can't run a Postgres server for every tenant. Use a hosted free tier and put the connection string in your <strong>Env vars</strong>:</p>
+            <ul style="margin:.4rem 0 .6rem; padding-left:1.2rem; color:var(--text-2); font-size:.85rem; line-height:1.7">
+              <li><a href="https://supabase.com" target="_blank" rel="noreferrer">Supabase</a> - Postgres + Auth, 500 MB free</li>
+              <li><a href="https://turso.tech" target="_blank" rel="noreferrer">Turso</a> - SQLite at the edge, 9 GB free</li>
+              <li><a href="https://neon.tech" target="_blank" rel="noreferrer">Neon</a> - serverless Postgres, 0.5 GB free</li>
+              <li><a href="https://upstash.com" target="_blank" rel="noreferrer">Upstash</a> - Redis + Vector, free tier</li>
+            </ul>
+            <p class="hint" style="margin:.4rem 0; font-size:.74rem">Set <code>DATABASE_URL=postgres://...</code> in <strong>Env vars</strong> and it'll override the bundled SQLite for the next deploy. Most ORMs (Drizzle, Prisma, SQLAlchemy) work the same way against either.</p>
+          </div>
+        </div>
       </div>
 
       <div id="d-tab-config" style="display:none">
@@ -274,6 +387,9 @@
         <!-- Step 3: Environment variables -->
         <div id="wiz-s3" style="display:none">
           <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Add environment variables (encrypted at rest). You can add more later in project settings.</p>
+          <div style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.7rem .9rem; margin-bottom:1rem; font-size:.78rem; color:var(--text-2)">
+            <strong style="color:var(--accent)">Already auto-injected for you:</strong> <code>PORT</code>, <code>HOST</code>, <code>NODE_ENV=production</code>, <code>DATABASE_URL</code> (per-project SQLite), <code>ROFI_DB_PATH</code>, <code>ROFI_AUTH_BASE</code>, <code>ROFI_PUBLIC_URL</code>. Add only secrets your code reads beyond those.
+          </div>
           <div id="wiz-env-list"></div>
           <div style="display:grid; grid-template-columns:1fr 1fr auto; gap:.4rem; margin-top:.5rem">
             <input class="input" id="wiz-env-key" placeholder="KEY" style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.8rem">
@@ -337,8 +453,8 @@
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=38"></script>
-<script src="https://rofihosted.space/app.js?v=38"></script>
+<script src="https://rofihosted.space/theme.js?v=39"></script>
+<script src="https://rofihosted.space/app.js?v=39"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -917,6 +1033,25 @@ RH.loadCurrentUser();
     document.getElementById('d-webhook-url').textContent = location.origin + '/v1/github/' + p.id;
     document.getElementById('d-webhook-secret').textContent = 'click reveal';
     document.getElementById('d-webhook-secret').dataset.full = p.webhook_secret || '';
+
+    // Resources panel: fill in the project-specific bits.
+    var dbPathEl = document.getElementById('d-res-db-path');
+    if (dbPathEl) dbPathEl.textContent = '~/data/dbs/' + p.id + '.db';
+    var authBaseEl = document.getElementById('d-res-auth-base');
+    if (authBaseEl) authBaseEl.textContent = 'https://' + p.subdomain + '.rofihosted.space';
+    document.querySelectorAll('.d-res-auth-host').forEach(function (el) {
+      el.textContent = 'https://' + p.subdomain + '.rofihosted.space';
+    });
+    var openSqlBtn = document.getElementById('d-res-db-open');
+    if (openSqlBtn) {
+      openSqlBtn.onclick = function (e) {
+        e.preventDefault();
+        // Try to switch to a Database tab if one exists; else go to /shell
+        var dbTab = document.querySelector('.d-tab[data-tab="database"]');
+        if (dbTab) { dbTab.click(); return; }
+        window.location.href = '/shell?cmd=' + encodeURIComponent('sqlite3 ~/data/dbs/' + p.id + '.db');
+      };
+    }
 
     document.getElementById('d-alert').style.display = 'none';
   }
