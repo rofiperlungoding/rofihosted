@@ -250,14 +250,14 @@
   - _Requirements: NFR (housekeeping)_
   - [deps: 6.3]
 
-- [-] 6.5 Commit + push to main branch
+- [x] 6.5 Commit + push to main branch
   - Stage only intended files (no scratch `*.ps1`, `*.log`, `rebuild-tenancy.sh`, etc per .gitignore)
   - Commit message: "feat: Phase 3 - Developer Experience (auto-deploy + DB wizard + landing + MCP + CLI)"
   - Push to `origin main`
   - _Requirements: NFR (housekeeping)_
   - [deps: 6.4]
 
-- [~] 6.6 Trigger rebuild on phone + smoke test
+- [x] 6.6 Trigger rebuild on phone + smoke test
   - Trigger via `/v1/system/update` (POST with admin API key) OR `ssh hp 'bash ~/rebuild-tenancy.sh'`
   - Wait ~240s for ReleaseFast build to finish
   - SIGTERM hp-server so watchdog respawns new binary: `ssh hp '( sleep 3; pkill -TERM -f zig-out/bin/hp-server ) >/dev/null 2>&1 & disown'`
@@ -267,7 +267,7 @@
   - _Requirements: NFR (smoke test green)_
   - [deps: 6.5]
 
-- [~] 6.7 Manual end-to-end live verification
+- [x] 6.7 Manual end-to-end live verification
   - Test 1: log in as admin, click Auto-deploy with a public Vite repo URL, verify 4-stage progress, verify site at `<sub>.rofihosted.space` returns 200
   - Test 2: log in as `devtest1` tenant, repeat, verify project appears in their list (not admin's)
   - Test 3: manual wizard with Postgres mode → finish → verify `db_mode=postgres` in registry, secret stored
@@ -276,7 +276,7 @@
   - _Requirements: all_
   - [deps: 6.6]
 
-- [~] 6.8 Cleanup scratch files
+- [-] 6.8 Cleanup scratch files
   - Delete any `*.ps1` (except `cli/*.ps1`), `unblock.sh`, `gen-key.sh`, `diag-*.sh`, `bump-cache.ps1`, `rebuild-tenancy.sh`, `msg.txt` left at workspace root or `scripts/`
   - Verify `git status` shows clean tree on main
   - _Requirements: NFR (housekeeping)_
