@@ -3296,7 +3296,8 @@ fn apiSystemRecovery(app: *App, req: *httpz.Request, res: *httpz.Response) !void
     if (std.fs.openFileAbsolute(boot_log, .{})) |f| {
         defer f.close();
         if (f.stat()) |st| {
-            boot_log_recent_unix = @divTrunc(st.mtime, std.time.ns_per_s);
+            // st.mtime is i128 nanoseconds; downcast to i64 seconds.
+            boot_log_recent_unix = @intCast(@divTrunc(st.mtime, std.time.ns_per_s));
         } else |_| {}
     } else |_| {}
 
