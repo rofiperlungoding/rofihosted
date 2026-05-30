@@ -163,7 +163,8 @@ Smoke test (`scripts/test-everything.sh` "BOOT RECOVERY CHAIN" section) asserts 
 | hp-server hangs (deadlock, infinite loop) | `watchdog.sh` step 2 | &le; 90 s |
 | hp-server leaks RAM | `watchdog.sh` step 3 | &le; 30 s after threshold |
 | cloudflared crashes | `watchdog.sh` step 4 | &le; 30 s |
-| cloudflared connected but no traffic | `watchdog.sh` step 5 (via hp-server flag) | 2-5 min |
+| cloudflared running but tunnel never registered (e.g. WiFi reconnect after reboot) | `watchdog.sh` step 5 (tunnel state via metrics endpoint) | &le; 5 min |
+| cloudflared connected but no traffic | `watchdog.sh` step 6 (via hp-server flag) | 2-5 min |
 | `watchdog.sh` dies | `watchdogSentinelLoop` in hp-server | &le; 90 s |
 | Both watchdog + hp-server die | next cold boot via Termux:Boot | depends on operator |
 | Phone power off / battery yanked | `01-server.sh` on next power-on | 60-120 s after kernel up |
@@ -174,7 +175,17 @@ Smoke test (`scripts/test-everything.sh` "BOOT RECOVERY CHAIN" section) asserts 
 
 ## Things that are NOT auto-recovered
 
-- **Termux:Boot uninstalled.** If the operator removes Termux:Boot or revokes its boot permission, the entire chain stops at the kernel. There is no software fallback.
+- **Termux:Boot uninstalled OR battery-optimized.** If the operator removes Termux:Boot, revokes its boot permission, OR Android puts Termux/Termux:Boot under battery optimization, the entire chain stops at the kernel. Sharp Aquos Android 12 in particular ships with aggressive battery optimization. To exempt:
+
+  ```
+  Settings -> Apps -> Termux         -> Battery -> Unrestricted
+  Settings -> Apps -> Termux:Boot    -> Battery -> Unrestricted
+  Settings -> Apps -> Termux:API     -> Battery -> Unrestricted
+  ```
+
+  Also disable "Adaptive battery" globally for these apps if the option is present. Without this, Android will SIGKILL Termux background processes during Doze mode.
+
+- **WiFi takes too long to reconnect after reboot.** The boot script now waits up to 90 seconds for `https://1.1.1.1/` to be reachable before spawning cloudflared (Phase 3 hardening). If WiFi still hasn't connected after that, the script proceeds and the watchdog handles cloudflared retries. Worst case, hp comes back online ~1-2 min after WiFi finally connects.
 - **Cloudflare credentials expired or rotated.** The named tunnel uses long-lived credentials at `~/.cloudflared/`. If those are revoked, cloudflared fails to register. Operator must run `scripts/cf-login.sh` again.
 - **`~/.hp-server.env` deleted.** hp-server boots in a degraded mode (no AI, no Telegram, no R2 backup, possibly no auth) but doesn't crash. The operator restores from the latest age-encrypted backup.
 - **Pepper file deleted.** `~/.hp-server-secret.bin` rotation invalidates every session and every secret encrypted at rest. There is no automatic recovery — restore from a backup that has the matching pepper, or do a clean reset.
