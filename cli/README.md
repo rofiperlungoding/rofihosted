@@ -50,7 +50,8 @@ export ROFIHOSTED_BASE=https://app.rofihosted.space  # optional, default
 | Command | Description |
 | --- | --- |
 | `rh ls` | List all projects with status |
-| `rh deploy <dir> <sub>` | Zip a directory and upload as a static project |
+| `rh deploy <repo-url> [--branch=main] [--sub=name]` | One-click deploy from a public Git repo. AI scans, creates project, streams build log live. |
+| `rh deploy <dir> <sub>` | (legacy) Zip a directory and upload as a static project |
 | `rh redeploy <sub>` | Re-clone the project's repo and rebuild |
 | `rh start <sub>` | Start a stopped project |
 | `rh stop <sub>` | Stop a running project |
@@ -66,6 +67,9 @@ export ROFIHOSTED_BASE=https://app.rofihosted.space  # optional, default
 | `rh secret set <sub> <key> [value]` | Set a secret (prompts if value omitted) |
 | `rh secret rm <sub> <key>` | Remove a secret |
 | `rh sql <sub> "<query>"` | Run SQL against the project's per-project SQLite database |
+| `rh db url <sub>` | Show effective `DATABASE_URL` (file:// for sqlite mode, masked for postgres) |
+| `rh db url <sub> <postgres-url>` | Set `DATABASE_URL` secret + flip `db_mode=postgres`. Restart for env to apply. |
+| `rh db url <sub> --clear` | Remove `DATABASE_URL` secret + revert `db_mode=sqlite` |
 
 ### Security
 
@@ -95,7 +99,42 @@ hp-server status
   uptime     2d 6h
 ```
 
-### Deploy a Vite app
+### Deploy a public Git repo
+
+```sh
+$ rh deploy https://github.com/you/my-vite-app
+[ANALYZE -] [CREATE -] [DEPLOY -] [LIVE -]
+project_id=a1b2c3d4e5f60718 subdomain=my-vite-app ai_used=true runtime=static
+[clone] git clone --depth=1 https://github.com/you/my-vite-app
+[install] npm ci
+...
+=== published
+OK deployed: https://my-vite-app.rofihosted.space
+```
+
+Server handles AI analysis, subdomain derivation, project creation, and the
+build pipeline. The CLI just streams the build log and exits 0 / 1 / 2 on
+success / failure / 5-minute timeout.
+
+### Set or rotate a Postgres URL
+
+```sh
+# Read current setting
+$ rh db url my-app
+db_mode: sqlite
+url:     file:/data/data/com.termux/files/home/data/dbs/a1b2c3d4e5f60718.db
+
+# Switch to a hosted Postgres
+$ rh db url my-app 'postgres://user:pass@db.supabase.co:5432/postgres'
+OK my-app: DATABASE_URL stored in vault, db_mode=postgres. Restart for env to apply.
+$ rh restart my-app
+
+# Revert to zero-config SQLite
+$ rh db url my-app --clear
+OK my-app: db_mode reverted to sqlite. Restart for env to apply.
+```
+
+### Deploy a static dist directory (legacy zip path)
 
 ```sh
 $ npm run build
@@ -107,6 +146,9 @@ Zipping ./dist...
 Uploading 142.3 KB to /v1/projects/upload?id=a1b2c3d4e5f60718...
 OK deployed: https://my-app.rofihosted.space
 ```
+
+Use this path when you don't want to push to a Git remote. For most cases,
+prefer the repo-URL form above.
 
 ### Set a secret and restart
 
@@ -126,6 +168,26 @@ Tailing runtime log for my-app. Ctrl-C to stop.
 [server] listening on :3001
 [server] GET / 200 12ms
 ...
+
+# Or stream the build log of an in-flight deploy
+$ rh tail my-app build
+Tailing build log for my-app. Ctrl-C to stop.
+[clone] git clone --depth=1 ...
+[install] npm ci
+...
+```
+
+### Identity in a script
+
+```sh
+$ rh whoami --json
+{"name":"kiro-access","id":"k_abc123"}
+
+$ rh whoami           # human readable
+{
+  "name": "kiro-access",
+  "id": "k_abc123"
+}
 ```
 
 ### Run a quick query
@@ -186,9 +248,15 @@ depending on cache state. Cloudflare's 100-second gateway timeout means we
 can't wait synchronously, so we poll. If it's been 4+ minutes, SSH in and
 check `~/logs/self-update.log`.
 
-**`rh deploy` says "non-static deploy not supported via zip upload"** - true.
-For Node/Python/etc, push your code to a git repo, set the repo URL via the
-dashboard, then `rh redeploy <sub>`.
+**`rh deploy` says "non-static deploy not supported via zip upload"** - true,
+but only for the legacy directory-zip path. For backend projects, prefer the
+repo-URL flow:
+
+```sh
+rh deploy https://github.com/you/my-api
+```
+
+The server will run install + build + start automatically.
 
 **`rh exec` returns nothing** - check that your key has the `admin` scope.
 `sql` and `mcp` are admin-only operations.

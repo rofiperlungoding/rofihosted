@@ -557,6 +557,19 @@ fn handleRoot(app: *App, req: *httpz.Request, res: *httpz.Response, path: []cons
         return;
     }
     if (std.mem.eql(u8, path, "/")) {
+        // Role-aware: authed users go to the console; everyone else gets the
+        // marketing landing. This means the apex serves as both the public
+        // pitch (anon) and a "go to dashboard" shortcut (authed).
+        if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
+            res.status = 302;
+            const target: []const u8 = if (ident.role == .admin)
+                "https://app.rofihosted.space/"
+            else
+                "https://app.rofihosted.space/projects";
+            res.header("Location", target);
+            res.body = "";
+            return;
+        }
         res.content_type = .HTML;
         res.body = @embedFile("templates/public.html");
         return;
@@ -603,12 +616,25 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
         // hide admin-only nav for tenants. Falls back gracefully to legacy
         // operator if no user record exists.
         if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
+            // Look up the per-user record so we can surface quota fields
+            // (max_projects, max_rss_mb) to the dashboard. Admins / legacy
+            // get sentinels (0) which the JS treats as unlimited.
+            var max_projects: u32 = 0;
+            var max_rss_mb: u32 = 0;
+            if (ident.role == .tenant) {
+                if (app.users.findById(ident.user_id)) |u| {
+                    max_projects = u.max_projects;
+                    max_rss_mb = u.max_rss_mb;
+                }
+            }
             try res.json(.{
                 .username = ident.username,
                 .user_id = ident.user_id,
                 .role = ident.role.label(),
                 .status = ident.status.label(),
                 .legacy = ident.legacy,
+                .max_projects = max_projects,
+                .max_rss_mb = max_rss_mb,
             }, .{});
         } else {
             try res.json(.{ .username = "" }, .{});
@@ -671,6 +697,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/webhooks/delete")) return apiWebhooksDelete(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects")) return apiProjectsList(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/create")) return apiProjectsCreate(app, req, res);
+    if (std.mem.eql(u8, path, "/api/projects/auto-deploy")) return apiProjectsAutoDeploy(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/preview-repo")) return apiProjectsPreviewRepo(app, req, res);
     if (std.mem.eql(u8, path, "/api/projects/analyze")) return apiProjectsAnalyze(app, req, res);
 
@@ -3921,8 +3948,8 @@ fn handleMcpDiscovery(_: *App, res: *httpz.Response) !void {
         .endpoint = "https://app.rofihosted.space/mcp",
         .auth = .{
             .type = "bearer",
-            .scope = "admin",
-            .docs = "Create an admin API key at /settings, then send Authorization: Bearer <key> on every POST /mcp request.",
+            .scope = "any (admin or tenant)",
+            .docs = "Create any API key at /settings, then send Authorization: Bearer <key> on every POST /mcp request. Tenants get a filtered tool surface (admin-only system tools are blocked; project-scoped tools are checked against ownership).",
         },
     }, .{});
 }
@@ -4126,7 +4153,7 @@ fn handleMcpToolCall(app: *App, req: *httpz.Request, res: *httpz.Response, id_js
             "get_project_status", "start_project",  "stop_project",     "restart_project",
             "deploy_project",     "read_build_log", "read_runtime_log", "list_secrets",
             "set_secret",         "delete_secret",  "query_db",         "exec_db",
-            "list_tables",
+            "list_tables",        "tail_build_log", "get_db_url",       "set_db_url",
         };
         var is_project_tool = false;
         for (PROJECT_TOOLS) |t| {
@@ -4192,6 +4219,12 @@ fn handleMcpToolCall(app: *App, req: *httpz.Request, res: *httpz.Response, id_js
 
     if (std.mem.eql(u8, tool_name, "list_backups")) return mcpToolListBackups(app, res, id_json);
     if (std.mem.eql(u8, tool_name, "trigger_backup")) return mcpToolTriggerBackup(app, res, id_json, args);
+
+    // Phase 3 developer-experience tools
+    if (std.mem.eql(u8, tool_name, "auto_deploy")) return mcpToolAutoDeploy(app, res, id_json, args, caller_owner);
+    if (std.mem.eql(u8, tool_name, "tail_build_log")) return mcpToolTailBuildLog(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "get_db_url")) return mcpToolGetDbUrl(app, res, id_json, args);
+    if (std.mem.eql(u8, tool_name, "set_db_url")) return mcpToolSetDbUrl(app, res, id_json, args);
 
     try mcpJsonError(res, id_json, -32602, "unknown tool");
 }
@@ -4819,6 +4852,406 @@ fn mcpToolTriggerBackup(app: *App, res: *httpz.Response, id_json: []const u8, ar
 }
 
 // =================================================================
+// MCP TOOLS - Phase 3 developer experience
+// =================================================================
+
+fn mcpToolAutoDeploy(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap, caller_owner: []const u8) !void {
+    const repo_url = mcpArgString(args, "repo_url") orelse {
+        try mcpJsonError(res, id_json, -32602, "repo_url required");
+        return;
+    };
+    const branch_in = mcpArgString(args, "branch") orelse "main";
+    const subdomain_hint = mcpArgString(args, "subdomain_hint") orelse "";
+
+    // Re-do the URL shape validation (same rules as the HTTP endpoint).
+    if (repo_url.len == 0 or repo_url.len > 512) {
+        try mcpJsonToolText(res, id_json, "bad_repo_url: empty or over 512 chars", true);
+        return;
+    }
+    if (!std.mem.startsWith(u8, repo_url, "https://")) {
+        try mcpJsonToolText(res, id_json, "bad_repo_url: only https:// is supported", true);
+        return;
+    }
+    {
+        const after_scheme = repo_url["https://".len..];
+        const slash = std.mem.indexOfScalar(u8, after_scheme, '/') orelse after_scheme.len;
+        if (std.mem.indexOfScalar(u8, after_scheme[0..slash], '@')) |_| {
+            try mcpJsonToolText(res, id_json, "bad_repo_url: credentials in URL are not allowed", true);
+            return;
+        }
+    }
+
+    // Quota gate: tenants only. Admin keys (caller_owner == "") skip.
+    const is_admin = caller_owner.len == 0;
+    if (!is_admin) {
+        const all = app.projects.listSnapshot(res.arena) catch {
+            try mcpJsonToolText(res, id_json, "list_failed", true);
+            return;
+        };
+        var owned: u32 = 0;
+        for (all) |p| {
+            if (std.mem.eql(u8, p.owner_id, caller_owner)) owned += 1;
+        }
+        const user_record = app.users.findById(caller_owner) orelse {
+            try mcpJsonToolText(res, id_json, "user_not_found", true);
+            return;
+        };
+        if (owned >= user_record.max_projects) {
+            var msg_buf: [128]u8 = undefined;
+            const m = std.fmt.bufPrint(&msg_buf, "quota_exceeded: max_projects={d}", .{user_record.max_projects}) catch "quota_exceeded";
+            try mcpJsonToolText(res, id_json, m, true);
+            return;
+        }
+    }
+
+    // Run analyzer (preferred) with deterministic preview fallback.
+    var ai_used = false;
+    var preview: PreviewResult = undefined;
+    var clone_err_buf: [1024]u8 = undefined;
+    var clone_err_n: usize = 0;
+    if (analyzeRepoCore(app, res.arena, repo_url, branch_in, clone_err_buf[0..], &clone_err_n)) |analysis| {
+        preview = analysis.preview;
+        ai_used = true;
+    } else |ai_err| {
+        switch (ai_err) {
+            error.AiDisabled, error.AiFailed => {},
+            error.InvalidRepoUrl, error.InvalidProtocol => {
+                try mcpJsonToolText(res, id_json, "bad_repo_url", true);
+                return;
+            },
+            error.CloneFailed => {
+                var msg = std.ArrayList(u8).init(res.arena);
+                try msg.appendSlice("clone_failed: ");
+                try msg.appendSlice(clone_err_buf[0..@min(clone_err_n, 512)]);
+                try mcpJsonToolText(res, id_json, msg.items, true);
+                return;
+            },
+            error.DetectFailed, error.OutOfMemory => {
+                try mcpJsonToolText(res, id_json, "analyze_failed", true);
+                return;
+            },
+        }
+        var fb_err_buf: [1024]u8 = undefined;
+        var fb_err_n: usize = 0;
+        preview = previewRepoCore(res.arena, repo_url, branch_in, fb_err_buf[0..], &fb_err_n) catch |fb_err| {
+            const code: []const u8 = switch (fb_err) {
+                error.InvalidRepoUrl, error.InvalidProtocol => "bad_repo_url",
+                error.CloneFailed => "clone_failed",
+                error.DetectFailed => "analyze_failed",
+                error.OutOfMemory => "oom",
+            };
+            try mcpJsonToolText(res, id_json, code, true);
+            return;
+        };
+    }
+
+    const candidate_seed = if (subdomain_hint.len > 0)
+        subdomain_hint
+    else if (preview.suggested_subdomain.len > 0)
+        preview.suggested_subdomain
+    else
+        preview.suggested_name;
+    var subdomain = deriveAutoSubdomain(res.arena, candidate_seed) catch {
+        try mcpJsonToolText(res, id_json, "subdomain_derivation_failed", true);
+        return;
+    };
+    pathsafe.validateSubdomain(subdomain) catch {
+        subdomain = appendRandomSuffix(res.arena, "app") catch {
+            try mcpJsonToolText(res, id_json, "subdomain_derivation_failed", true);
+            return;
+        };
+    };
+
+    const runtime = projects.Runtime.fromString(preview.runtime) orelse projects.Runtime.generic;
+    // For admin: optional explicit owner_id arg, else leave unowned (legacy state).
+    // For tenant: always own the new project.
+    const owner_id: []const u8 = if (is_admin)
+        (mcpArgString(args, "owner_id") orelse "")
+    else
+        caller_owner;
+
+    var project_opt: ?projects.Project = null;
+    {
+        const r = app.projects.create(.{
+            .name = subdomain,
+            .subdomain = subdomain,
+            .repo_url = repo_url,
+            .branch = preview.actual_branch,
+            .runtime = runtime,
+            .install_cmd = preview.install_cmd,
+            .build_cmd = preview.build_cmd,
+            .start_cmd = preview.start_cmd,
+            .publish_dir = preview.publish_dir,
+            .owner_id = owner_id,
+            .db_mode = .sqlite,
+        }) catch |err| switch (err) {
+            error.SubdomainTaken => null,
+            else => {
+                var msg_buf: [128]u8 = undefined;
+                const m = std.fmt.bufPrint(&msg_buf, "create_failed: {s}", .{@errorName(err)}) catch "create_failed";
+                try mcpJsonToolText(res, id_json, m, true);
+                return;
+            },
+        };
+        if (r) |p| project_opt = p;
+    }
+    if (project_opt == null) {
+        const retry_sub = appendRandomSuffix(res.arena, subdomain) catch {
+            try mcpJsonToolText(res, id_json, "subdomain_derivation_failed", true);
+            return;
+        };
+        project_opt = app.projects.create(.{
+            .name = retry_sub,
+            .subdomain = retry_sub,
+            .repo_url = repo_url,
+            .branch = preview.actual_branch,
+            .runtime = runtime,
+            .install_cmd = preview.install_cmd,
+            .build_cmd = preview.build_cmd,
+            .start_cmd = preview.start_cmd,
+            .publish_dir = preview.publish_dir,
+            .owner_id = owner_id,
+            .db_mode = .sqlite,
+        }) catch {
+            try mcpJsonToolText(res, id_json, "subdomain_taken", true);
+            return;
+        };
+    }
+    const project = project_opt.?;
+
+    app.builder.deployAsync(project.id) catch |err| {
+        var msg_buf: [128]u8 = undefined;
+        const m = std.fmt.bufPrint(&msg_buf, "deploy_spawn_failed: {s} (project_id={s})", .{ @errorName(err), project.id }) catch "deploy_spawn_failed";
+        try mcpJsonToolText(res, id_json, m, true);
+        return;
+    };
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = if (caller_owner.len > 0) caller_owner else "admin_api_key",
+        .action = "project_autodeploy",
+        .target = project.id,
+        .detail = repo_url,
+    });
+
+    var out_buf = std.ArrayList(u8).init(res.arena);
+    const w = out_buf.writer();
+    try w.print(
+        \\{{"project_id":"{s}","subdomain":"{s}","public_url":"https://{s}.rofihosted.space","stream_url":"/api/projects/log-stream?id={s}&kind=build","ai_used":{s},"runtime":"{s}"}}
+    , .{
+        project.id,
+        project.subdomain,
+        project.subdomain,
+        project.id,
+        if (ai_used) "true" else "false",
+        runtime.toString(),
+    });
+    try mcpJsonToolText(res, id_json, out_buf.items, false);
+}
+
+fn mcpToolTailBuildLog(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    _ = app;
+    const id = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    if (!isValidProjectId(id)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    var max_lines: usize = 200;
+    if (args.get("max_lines")) |v| {
+        if (v == .integer) {
+            const n = v.integer;
+            if (n > 0 and n <= 2000) max_lines = @intCast(n);
+        }
+    }
+    const path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/build.log", .{id});
+    const file = std.fs.openFileAbsolute(path, .{}) catch {
+        try mcpJsonToolText(res, id_json, "{\"lines\":[],\"complete\":false,\"note\":\"log_not_found\"}", false);
+        return;
+    };
+    defer file.close();
+    const stat = file.stat() catch {
+        try mcpJsonToolText(res, id_json, "stat_failed", true);
+        return;
+    };
+    // Read at most the last 256 KB; that's plenty for 2000 lines of typical
+    // build output.
+    const READ_CAP: u64 = 256 * 1024;
+    const start_off: u64 = if (stat.size > READ_CAP) stat.size - READ_CAP else 0;
+    file.seekTo(start_off) catch {};
+    const slice_len: usize = @intCast(stat.size - start_off);
+    const buf = res.arena.alloc(u8, slice_len) catch {
+        try mcpJsonToolText(res, id_json, "oom", true);
+        return;
+    };
+    const n = file.readAll(buf) catch 0;
+
+    // Collect last `max_lines` non-empty lines.
+    var lines = std.ArrayList([]const u8).init(res.arena);
+    var it = std.mem.splitScalar(u8, buf[0..n], '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        try lines.append(line);
+    }
+    const start_idx: usize = if (lines.items.len > max_lines) lines.items.len - max_lines else 0;
+    const tail = lines.items[start_idx..];
+
+    var complete = false;
+    for (tail) |line| {
+        if (std.mem.indexOf(u8, line, "=== build complete") != null or
+            std.mem.indexOf(u8, line, "=== published") != null or
+            std.mem.indexOf(u8, line, "=== build failed") != null)
+        {
+            complete = true;
+            break;
+        }
+    }
+
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    try w.writeAll("{\"lines\":[");
+    for (tail, 0..) |line, i| {
+        if (i > 0) try w.writeByte(',');
+        try mcp.writeJsonString(w, line);
+    }
+    try w.writeAll("],\"complete\":");
+    try w.writeAll(if (complete) "true" else "false");
+    try w.writeAll("}");
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpToolGetDbUrl(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    const proj = app.projects.getById(pid) orelse {
+        try mcpJsonToolText(res, id_json, "project_not_found", true);
+        return;
+    };
+
+    var out = std.ArrayList(u8).init(res.arena);
+    const w = out.writer();
+    if (proj.db_mode == .sqlite) {
+        try w.print(
+            \\{{"db_mode":"sqlite","url":"file:/data/data/com.termux/files/home/data/dbs/{s}.db"}}
+        , .{pid});
+        try mcpJsonToolText(res, id_json, out.items, false);
+        return;
+    }
+
+    // postgres: read DATABASE_URL from secrets vault and mask credentials.
+    const env_pairs = projsecrets.Vault.loadAsEnvPairs(res.arena, app.pepper, pid) catch {
+        try mcpJsonToolText(res, id_json, "{\"db_mode\":\"postgres\",\"url\":\"\",\"note\":\"vault_read_failed\"}", false);
+        return;
+    };
+    var raw: []const u8 = "";
+    for (env_pairs) |pair| {
+        if (std.mem.startsWith(u8, pair, "DATABASE_URL=")) {
+            raw = pair["DATABASE_URL=".len..];
+            break;
+        }
+    }
+    if (raw.len == 0) {
+        try mcpJsonToolText(res, id_json, "{\"db_mode\":\"postgres\",\"url\":\"\",\"note\":\"secret_missing\"}", false);
+        return;
+    }
+
+    // Mask the user:pass section: postgres://user:pass@host... -> postgres://***:***@host...
+    const masked = maskPostgresUrl(res.arena, raw) catch raw;
+    try w.writeAll("{\"db_mode\":\"postgres\",\"url\":");
+    try mcp.writeJsonString(w, masked);
+    try w.writeAll("}");
+    try mcpJsonToolText(res, id_json, out.items, false);
+}
+
+fn mcpToolSetDbUrl(app: *App, res: *httpz.Response, id_json: []const u8, args: std.json.ObjectMap) !void {
+    const pid = mcpArgString(args, "project_id") orelse {
+        try mcpJsonError(res, id_json, -32602, "project_id required");
+        return;
+    };
+    if (!isValidProjectId(pid)) {
+        try mcpJsonToolText(res, id_json, "invalid project_id", true);
+        return;
+    }
+    if (app.projects.getById(pid) == null) {
+        try mcpJsonToolText(res, id_json, "project_not_found", true);
+        return;
+    }
+
+    // url is optional in the schema; null/empty means "clear back to sqlite".
+    var url_val: []const u8 = "";
+    if (args.get("url")) |v| {
+        switch (v) {
+            .string => url_val = v.string,
+            .null => url_val = "",
+            else => {
+                try mcpJsonToolText(res, id_json, "url must be string or null", true);
+                return;
+            },
+        }
+    }
+
+    if (url_val.len == 0) {
+        // Clear: delete the secret (setOne with empty value deletes per
+        // existing convention) and flip db_mode back to sqlite.
+        projsecrets.Vault.setOne(res.arena, app.pepper, pid, "DATABASE_URL", "") catch |e| {
+            // setOne with empty deletes; if the secret didn't exist that's fine.
+            if (e != error.FileNotFound) {
+                var m: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&m, "clear_failed: {s}", .{@errorName(e)}) catch "clear_failed";
+                try mcpJsonToolText(res, id_json, msg, true);
+                return;
+            }
+        };
+        _ = app.projects.update(pid, .{ .db_mode = .sqlite }) catch {
+            try mcpJsonToolText(res, id_json, "db_mode_update_failed", true);
+            return;
+        };
+        try mcpJsonToolText(res, id_json, "{\"ok\":true,\"db_mode\":\"sqlite\"}", false);
+        return;
+    }
+
+    // Validate postgres URL.
+    if (!std.mem.startsWith(u8, url_val, "postgres://") and !std.mem.startsWith(u8, url_val, "postgresql://")) {
+        try mcpJsonToolText(res, id_json, "bad_db_url: must start with postgres:// or postgresql://", true);
+        return;
+    }
+    if (url_val.len > 1024) {
+        try mcpJsonToolText(res, id_json, "bad_db_url: too long", true);
+        return;
+    }
+
+    projsecrets.Vault.setOne(res.arena, app.pepper, pid, "DATABASE_URL", url_val) catch |e| {
+        var m: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&m, "set_failed: {s}", .{@errorName(e)}) catch "set_failed";
+        try mcpJsonToolText(res, id_json, msg, true);
+        return;
+    };
+    _ = app.projects.update(pid, .{ .db_mode = .postgres }) catch {
+        try mcpJsonToolText(res, id_json, "db_mode_update_failed", true);
+        return;
+    };
+    try mcpJsonToolText(res, id_json, "{\"ok\":true,\"db_mode\":\"postgres\",\"note\":\"restart project for env change to take effect\"}", false);
+}
+
+/// Mask user:pass portion of a postgres URL. Returns the raw URL if it
+/// can't be parsed safely.
+fn maskPostgresUrl(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
+    const at = std.mem.indexOfScalar(u8, url, '@') orelse return allocator.dupe(u8, url);
+    const scheme_end = std.mem.indexOf(u8, url, "://") orelse return allocator.dupe(u8, url);
+    const after_scheme = scheme_end + 3;
+    if (at <= after_scheme) return allocator.dupe(u8, url);
+    return std.fmt.allocPrint(allocator, "{s}***:***{s}", .{ url[0..after_scheme], url[at..] });
+}
+
+// =================================================================
 // SIGNUP + USER MANAGEMENT (multi-tenancy)
 // =================================================================
 
@@ -5323,10 +5756,14 @@ fn v1PublicStats(app: *App, res: *httpz.Response) !void {
 
     // Project count: locked snapshot of the registry.
     var project_count: usize = 0;
+    var projects_running: usize = 0;
     {
         app.projects.mutex.lock();
         defer app.projects.mutex.unlock();
         project_count = app.projects.projects.items.len;
+        for (app.projects.projects.items) |p| {
+            if (p.status == .running) projects_running += 1;
+        }
     }
 
     // Requests in last 24h: served from dbcache (no JSONL scan).
@@ -5334,6 +5771,14 @@ fn v1PublicStats(app: *App, res: *httpz.Response) !void {
 
     // Uptime: just process started_at.
     const uptime_seconds: i64 = std.time.timestamp() - app.started_at;
+    const uptime_days: i64 = @divFloor(uptime_seconds, 86400);
+
+    // Total registered users (active+pending+suspended). Cheap, locked read.
+    const total_users: usize = app.users.count();
+
+    // Short build SHA, cached 5 min in-process to avoid spawning git per
+    // request. Empty string when the source tree isn't reachable.
+    const version_short = getCachedVersionShort(res.arena);
 
     // Battery: snapshot from powermon. -1 means termux-api unavailable, in
     // which case we omit the field and the JS shows '--'.
@@ -5344,18 +5789,68 @@ fn v1PublicStats(app: *App, res: *httpz.Response) !void {
         try res.json(.{
             .ok = true,
             .projects = project_count,
+            .projects_running = projects_running,
             .requests_24h = requests_24h,
             .uptime_seconds = uptime_seconds,
+            .uptime_days = uptime_days,
+            .total_users = total_users,
+            .version_short = version_short,
             .battery_percent = b,
         }, .{});
     } else {
         try res.json(.{
             .ok = true,
             .projects = project_count,
+            .projects_running = projects_running,
             .requests_24h = requests_24h,
             .uptime_seconds = uptime_seconds,
+            .uptime_days = uptime_days,
+            .total_users = total_users,
+            .version_short = version_short,
         }, .{});
     }
+}
+
+/// In-process cache for the short git SHA so /v1/public/stats doesn't spawn
+/// a subprocess on every hit. Refreshes at most once every 5 minutes.
+var version_short_cache_buf: [16]u8 = undefined;
+var version_short_cache_len: usize = 0;
+var version_short_cache_at: i64 = 0;
+var version_short_cache_mutex: std.Thread.Mutex = .{};
+
+fn getCachedVersionShort(allocator: std.mem.Allocator) []const u8 {
+    const now = std.time.timestamp();
+    version_short_cache_mutex.lock();
+    defer version_short_cache_mutex.unlock();
+    const cached_age = now - version_short_cache_at;
+    if (cached_age < 300 and version_short_cache_len > 0) {
+        return allocator.dupe(u8, version_short_cache_buf[0..version_short_cache_len]) catch "";
+    }
+    // Refresh from git.
+    var argv = [_][]const u8{ "sh", "-c", "cd ~/rofihosted-src && git rev-parse --short HEAD 2>/dev/null" };
+    var child = std.process.Child.init(&argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return "";
+    var sha: [32]u8 = undefined;
+    var n: usize = 0;
+    if (child.stdout) |stdout| {
+        n = stdout.read(&sha) catch 0;
+    }
+    _ = child.wait() catch {};
+    const trimmed = std.mem.trim(u8, sha[0..n], " \t\r\n");
+    if (trimmed.len == 0 or trimmed.len > version_short_cache_buf.len) {
+        // Couldn't read; let stale cache stand if any, else return empty.
+        if (version_short_cache_len > 0) {
+            return allocator.dupe(u8, version_short_cache_buf[0..version_short_cache_len]) catch "";
+        }
+        return "";
+    }
+    @memcpy(version_short_cache_buf[0..trimmed.len], trimmed);
+    version_short_cache_len = trimmed.len;
+    version_short_cache_at = now;
+    return allocator.dupe(u8, version_short_cache_buf[0..version_short_cache_len]) catch "";
 }
 
 fn v1Execute(app: *App, req: *httpz.Request, res: *httpz.Response, rec: apikey.Record) !void {
@@ -6216,6 +6711,10 @@ fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
             (form.get("owner_id") orelse ident.user_id)
         else
             ident.user_id,
+        .db_mode = blk: {
+            const v = form.get("db_mode") orelse break :blk projects.DbMode.sqlite;
+            break :blk projects.DbMode.fromString(v) orelse projects.DbMode.sqlite;
+        },
     }) catch |err| {
         const code: []const u8 = switch (err) {
             error.SubdomainTaken => "subdomain_taken",
@@ -6235,6 +6734,357 @@ fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         .target = project.subdomain,
     });
     try res.json(.{ .ok = true, .id = project.id, .port = project.port }, .{});
+}
+
+/// Reserved subdomains that auto-deploy MUST NOT pick (matches the list in
+/// hosted.zig RESERVED_SUBDOMAINS). Kept as a private constant so we don't
+/// have to plumb hosted's internals into main.
+const AUTO_RESERVED_SUBDOMAINS = [_][]const u8{
+    "app", "www", "dashboard", "status", "api", "files",
+};
+
+fn isReservedSubdomain(s: []const u8) bool {
+    for (AUTO_RESERVED_SUBDOMAINS) |r| {
+        if (std.mem.eql(u8, s, r)) return true;
+    }
+    return false;
+}
+
+/// Append a 4-character random hex suffix prefixed with `-` to a base
+/// subdomain. Result is owned by the caller's allocator.
+fn appendRandomSuffix(allocator: std.mem.Allocator, base: []const u8) ![]u8 {
+    var buf: [2]u8 = undefined;
+    std.crypto.random.bytes(&buf);
+    const cs = "0123456789abcdef";
+    var hex: [4]u8 = undefined;
+    for (buf, 0..) |b, i| {
+        hex[i * 2] = cs[b >> 4];
+        hex[i * 2 + 1] = cs[b & 0xf];
+    }
+    return std.fmt.allocPrint(allocator, "{s}-{s}", .{ base, &hex });
+}
+
+/// Produce a deploy-ready subdomain from an analyzer's name suggestion.
+/// Lowercases, replaces non-[a-z0-9-] with `-`, collapses repeated dashes,
+/// trims leading/trailing dashes, then ensures the result is at least 3
+/// chars and not a reserved label by appending a random suffix as needed.
+/// The output always passes pathsafe.validateSubdomain.
+fn deriveAutoSubdomain(allocator: std.mem.Allocator, hint: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+
+    var prev_dash = true; // start true so leading dashes get squashed
+    for (hint) |c| {
+        const lower = if (c >= 'A' and c <= 'Z') c + 32 else c;
+        const ok = (lower >= 'a' and lower <= 'z') or (lower >= '0' and lower <= '9') or lower == '-';
+        if (ok) {
+            if (lower == '-') {
+                if (!prev_dash) {
+                    try buf.append('-');
+                    prev_dash = true;
+                }
+            } else {
+                try buf.append(lower);
+                prev_dash = false;
+            }
+        } else {
+            // Non-allowed chars become a dash separator.
+            if (!prev_dash) {
+                try buf.append('-');
+                prev_dash = true;
+            }
+        }
+    }
+    // Trim trailing dash.
+    while (buf.items.len > 0 and buf.items[buf.items.len - 1] == '-') _ = buf.pop();
+
+    // Cap to 50 so suffix still fits within 63-char DNS label limit.
+    if (buf.items.len > 50) buf.shrinkRetainingCapacity(50);
+
+    // Empty / too short / reserved -> fall back to "app-XXXX".
+    const base_owned = try buf.toOwnedSlice();
+    defer allocator.free(base_owned);
+
+    if (base_owned.len < 3 or isReservedSubdomain(base_owned)) {
+        const fallback_base = if (base_owned.len < 3) "app" else base_owned;
+        return appendRandomSuffix(allocator, fallback_base);
+    }
+    return allocator.dupe(u8, base_owned);
+}
+
+/// One-click auto-deploy endpoint. Takes a repo URL, runs the analyzer
+/// (with deterministic preview fallback when AI is disabled or fails),
+/// derives a subdomain, creates the project stamped with the caller's
+/// owner_id (or empty for unowned admin projects), and kicks off a
+/// background deploy. Returns project_id + subdomain + the SSE log
+/// stream URL the client should subscribe to for live progress.
+fn apiProjectsAutoDeploy(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const ident = (try requireUser(app, req, res)) orelse return;
+    const actor = ident.username;
+    const t_start = std.time.timestamp();
+
+    // Quota gate: tenants can't exceed max_projects.
+    if (ident.role != .admin) {
+        const all = app.projects.listSnapshot(res.arena) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "list_failed" }, .{});
+            return;
+        };
+        var owned: u32 = 0;
+        for (all) |p| {
+            if (std.mem.eql(u8, p.owner_id, ident.user_id)) owned += 1;
+        }
+        const user_record = app.users.findById(ident.user_id) orelse {
+            res.status = 401;
+            try res.json(.{ .ok = false, .err = "user_not_found" }, .{});
+            return;
+        };
+        if (owned >= user_record.max_projects) {
+            res.status = 429;
+            try res.json(.{ .ok = false, .err = "quota_exceeded", .max_projects = user_record.max_projects }, .{});
+            return;
+        }
+    }
+
+    // Form-encoded body (per house style; httpz multipart is unreliable).
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+    const repo_url = form.get("repo_url") orelse {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_repo_url" }, .{});
+        return;
+    };
+    const branch_in = form.get("branch") orelse "main";
+    const subdomain_hint = form.get("subdomain_hint") orelse "";
+
+    // URL shape validation. Reject http://, ssh://, git@, paths with
+    // embedded credentials, and over-long inputs.
+    if (repo_url.len == 0 or repo_url.len > 512) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_repo_url" }, .{});
+        return;
+    }
+    if (!std.mem.startsWith(u8, repo_url, "https://")) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_repo_url", .reason = "https_required" }, .{});
+        return;
+    }
+    // Block https://user:pass@host/... which leaks creds. We look for `@`
+    // before the first `/` after the scheme.
+    {
+        const after_scheme = repo_url["https://".len..];
+        const slash = std.mem.indexOfScalar(u8, after_scheme, '/') orelse after_scheme.len;
+        if (std.mem.indexOfScalar(u8, after_scheme[0..slash], '@')) |_| {
+            res.status = 400;
+            try res.json(.{ .ok = false, .err = "bad_repo_url", .reason = "credentials_in_url" }, .{});
+            return;
+        }
+    }
+
+    // Run analyzer (preferred) with deterministic fallback. We track which
+    // path produced the suggestions so the audit log is honest.
+    var ai_used = false;
+    var preview: PreviewResult = undefined;
+
+    var clone_err_buf: [1024]u8 = undefined;
+    var clone_err_n: usize = 0;
+    if (analyzeRepoCore(app, res.arena, repo_url, branch_in, clone_err_buf[0..], &clone_err_n)) |analysis| {
+        preview = analysis.preview;
+        ai_used = true;
+    } else |ai_err| {
+        // Don't immediately bail - try the deterministic preview path so
+        // auto-deploy still works when AI is disabled or quota-exhausted.
+        // Hard URL/protocol/clone failures still need to surface to the user.
+        switch (ai_err) {
+            error.AiDisabled, error.AiFailed => {},
+            error.InvalidRepoUrl, error.InvalidProtocol => {
+                res.status = 400;
+                try res.json(.{ .ok = false, .err = "bad_repo_url" }, .{});
+                return;
+            },
+            error.CloneFailed => {
+                res.status = 400;
+                try res.json(.{
+                    .ok = false,
+                    .err = "clone_failed",
+                    .stderr = clone_err_buf[0..@min(clone_err_n, 512)],
+                }, .{});
+                return;
+            },
+            error.DetectFailed, error.OutOfMemory => {
+                res.status = 500;
+                try res.json(.{ .ok = false, .err = "analyze_failed" }, .{});
+                return;
+            },
+        }
+        var fb_err_buf: [1024]u8 = undefined;
+        var fb_err_n: usize = 0;
+        preview = previewRepoCore(res.arena, repo_url, branch_in, fb_err_buf[0..], &fb_err_n) catch |fb_err| {
+            const status: u16 = switch (fb_err) {
+                error.InvalidRepoUrl, error.InvalidProtocol, error.CloneFailed => 400,
+                error.DetectFailed, error.OutOfMemory => 500,
+            };
+            const code: []const u8 = switch (fb_err) {
+                error.InvalidRepoUrl => "bad_repo_url",
+                error.InvalidProtocol => "bad_repo_url",
+                error.CloneFailed => "clone_failed",
+                error.DetectFailed => "analyze_failed",
+                error.OutOfMemory => "oom",
+            };
+            res.status = status;
+            if (fb_err == error.CloneFailed) {
+                try res.json(.{
+                    .ok = false,
+                    .err = code,
+                    .stderr = fb_err_buf[0..@min(fb_err_n, 512)],
+                }, .{});
+            } else {
+                try res.json(.{ .ok = false, .err = code }, .{});
+            }
+            return;
+        };
+    }
+
+    // Subdomain derivation. If caller supplied a hint, prefer it; else use
+    // the analyzer's suggested_subdomain (which falls back to repo name).
+    const candidate_seed = if (subdomain_hint.len > 0)
+        subdomain_hint
+    else if (preview.suggested_subdomain.len > 0)
+        preview.suggested_subdomain
+    else
+        preview.suggested_name;
+
+    var subdomain = deriveAutoSubdomain(res.arena, candidate_seed) catch {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "subdomain_derivation_failed" }, .{});
+        return;
+    };
+
+    // Final shape check; deriveAutoSubdomain should always pass but be safe.
+    pathsafe.validateSubdomain(subdomain) catch {
+        subdomain = appendRandomSuffix(res.arena, "app") catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "subdomain_derivation_failed" }, .{});
+            return;
+        };
+    };
+
+    const runtime = projects.Runtime.fromString(preview.runtime) orelse projects.Runtime.generic;
+
+    // Owner: tenants always own; admins own unless they explicitly pass
+    // `owner_id=` (e.g. via MCP for assigning to a tenant).
+    const owner_id: []const u8 = if (ident.role == .admin)
+        (form.get("owner_id") orelse ident.user_id)
+    else
+        ident.user_id;
+
+    // Try create. On subdomain_taken, retry once with a fresh suffix.
+    var project_opt: ?projects.Project = null;
+    {
+        const r = app.projects.create(.{
+            .name = subdomain,
+            .subdomain = subdomain,
+            .repo_url = repo_url,
+            .branch = preview.actual_branch,
+            .runtime = runtime,
+            .install_cmd = preview.install_cmd,
+            .build_cmd = preview.build_cmd,
+            .start_cmd = preview.start_cmd,
+            .publish_dir = preview.publish_dir,
+            .owner_id = owner_id,
+            .db_mode = .sqlite,
+        }) catch |err| switch (err) {
+            error.SubdomainTaken => null,
+            else => {
+                const code: []const u8 = switch (err) {
+                    error.InvalidSubdomain => "invalid_subdomain",
+                    error.InvalidName => "invalid_name",
+                    error.PortExhausted => "port_exhausted",
+                    else => "create_failed",
+                };
+                res.status = 400;
+                try res.json(.{ .ok = false, .err = code }, .{});
+                return;
+            },
+        };
+        if (r) |p| project_opt = p;
+    }
+    if (project_opt == null) {
+        // One retry with a fresh random suffix.
+        const retry_sub = appendRandomSuffix(res.arena, subdomain) catch {
+            res.status = 500;
+            try res.json(.{ .ok = false, .err = "subdomain_derivation_failed" }, .{});
+            return;
+        };
+        project_opt = app.projects.create(.{
+            .name = retry_sub,
+            .subdomain = retry_sub,
+            .repo_url = repo_url,
+            .branch = preview.actual_branch,
+            .runtime = runtime,
+            .install_cmd = preview.install_cmd,
+            .build_cmd = preview.build_cmd,
+            .start_cmd = preview.start_cmd,
+            .publish_dir = preview.publish_dir,
+            .owner_id = owner_id,
+            .db_mode = .sqlite,
+        }) catch {
+            res.status = 409;
+            try res.json(.{ .ok = false, .err = "subdomain_taken" }, .{});
+            return;
+        };
+    }
+    const project = project_opt.?;
+
+    // Fire-and-forget deploy.
+    app.builder.deployAsync(project.id) catch |err| {
+        const code: []const u8 = switch (err) {
+            error.AlreadyInFlight => "already_in_flight",
+            else => "deploy_spawn_failed",
+        };
+        // Project exists; surface the error but keep the row so the user can
+        // retry from the dashboard.
+        res.status = 500;
+        try res.json(.{
+            .ok = false,
+            .err = code,
+            .project_id = project.id,
+            .subdomain = project.subdomain,
+        }, .{});
+        return;
+    };
+
+    // Audit a single line per attempt with all the metadata we have.
+    var detail_buf: [256]u8 = undefined;
+    const detail = std.fmt.bufPrint(&detail_buf, "{s} branch={s} ai={s} elapsed={d}s", .{
+        repo_url,
+        preview.actual_branch,
+        if (ai_used) "yes" else "no",
+        std.time.timestamp() - t_start,
+    }) catch "autodeploy";
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = actor,
+        .action = "project_autodeploy",
+        .target = project.id,
+        .detail = detail,
+    });
+
+    const stream_url = try std.fmt.allocPrint(res.arena, "/api/projects/log-stream?id={s}&kind=build", .{project.id});
+    const public_url = try std.fmt.allocPrint(res.arena, "https://{s}.rofihosted.space", .{project.subdomain});
+
+    try res.json(.{
+        .ok = true,
+        .project_id = project.id,
+        .subdomain = project.subdomain,
+        .public_url = public_url,
+        .stream_url = stream_url,
+        .ai_used = ai_used,
+        .runtime = runtime.toString(),
+    }, .{});
 }
 
 fn apiProjectsUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
@@ -6261,6 +7111,9 @@ fn apiProjectsUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         if (std.fmt.parseInt(u32, v, 10)) |n| {
             input.rss_limit_mb = n;
         } else |_| {}
+    }
+    if (form.get("db_mode")) |v| {
+        if (projects.DbMode.fromString(v)) |m| input.db_mode = m;
     }
 
     const updated = app.projects.update(id, input) catch |err| {
@@ -7414,6 +8267,211 @@ fn apiCronRun(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 // PROJECT IMPORT WIZARD HELPERS
 // =================================================================
 
+/// Result of a deterministic file-tree analysis of a remote repo. Contains
+/// the framework detector's suggestions plus a cloned actual_branch (which
+/// may differ from the requested branch if cloneWithFallback resolved a
+/// default). All slices are allocated from the caller's allocator.
+const PreviewResult = struct {
+    suggested_name: []const u8,
+    suggested_subdomain: []const u8,
+    actual_branch: []const u8,
+    runtime: []const u8,
+    install_cmd: []const u8,
+    build_cmd: []const u8,
+    start_cmd: []const u8,
+    publish_dir: []const u8,
+    framework_hint: []const u8,
+};
+
+/// Result of a full AI-augmented analysis. Wraps a PreviewResult plus the
+/// raw AI JSON object as a string ready to splice into a response envelope.
+const AnalysisResult = struct {
+    preview: PreviewResult,
+    ai_json: []const u8,
+};
+
+const PreviewCoreError = error{
+    InvalidRepoUrl,
+    InvalidProtocol,
+    CloneFailed,
+    DetectFailed,
+    OutOfMemory,
+};
+
+const AnalysisCoreError = PreviewCoreError || error{
+    AiDisabled,
+    AiFailed,
+};
+
+/// Shallow-clone the repo to a temp dir, run the framework detector, and
+/// return suggestions. Used by both the wizard's `/api/projects/preview-repo`
+/// endpoint and the auto-deploy fallback path. Cleans up the temp tree before
+/// returning. `err_buf`/`err_n_out` are optional caller-supplied buffers that
+/// receive git stderr on `CloneFailed`.
+fn previewRepoCore(
+    allocator: std.mem.Allocator,
+    repo_url: []const u8,
+    branch: []const u8,
+    err_buf: ?[]u8,
+    err_n_out: ?*usize,
+) PreviewCoreError!PreviewResult {
+    if (repo_url.len == 0 or repo_url.len > 512) return error.InvalidRepoUrl;
+    if (!std.mem.startsWith(u8, repo_url, "https://") and !std.mem.startsWith(u8, repo_url, "git@")) {
+        return error.InvalidProtocol;
+    }
+    const eff_branch = if (branch.len == 0) "main" else branch;
+
+    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    std.fs.makeDirAbsolute(tmp_root) catch {};
+    var rand: [8]u8 = undefined;
+    std.crypto.random.bytes(&rand);
+    const cs = "0123456789abcdef";
+    var rand_hex: [16]u8 = undefined;
+    for (rand, 0..) |b, i| {
+        rand_hex[i * 2] = cs[b >> 4];
+        rand_hex[i * 2 + 1] = cs[b & 0xf];
+    }
+    const tmp_dir = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_root, &rand_hex }) catch return error.OutOfMemory;
+    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    // Clone with fallback. We need a stderr buffer; if caller didn't supply
+    // one, use a small stack scratch space.
+    var stack_err: [1024]u8 = undefined;
+    var stack_err_n: usize = 0;
+    const eff_err: []u8 = err_buf orelse stack_err[0..];
+    const eff_err_n: *usize = err_n_out orelse &stack_err_n;
+
+    const used_branch = cloneWithFallback(allocator, repo_url, eff_branch, tmp_dir, eff_err, eff_err_n) orelse {
+        return error.CloneFailed;
+    };
+
+    const sug = detect.detect(allocator, tmp_dir) catch return error.DetectFailed;
+    const name_hint = detect.nameFromRepo(allocator, repo_url) catch (allocator.dupe(u8, "") catch return error.OutOfMemory);
+    const sub_hint = detect.suggestSubdomain(allocator, name_hint) catch (allocator.dupe(u8, "") catch return error.OutOfMemory);
+
+    return .{
+        .suggested_name = name_hint,
+        .suggested_subdomain = sub_hint,
+        .actual_branch = used_branch,
+        .runtime = sug.runtime,
+        .install_cmd = sug.install_cmd,
+        .build_cmd = sug.build_cmd,
+        .start_cmd = sug.start_cmd,
+        .publish_dir = sug.publish_dir,
+        .framework_hint = sug.framework_hint,
+    };
+}
+
+/// Full AI-augmented analysis: clones, runs deterministic detect, reads
+/// package.json/README/file list, calls Mistral, and returns both the
+/// preview metadata and the raw AI JSON. Used by `/api/projects/analyze`
+/// and the auto-deploy primary path.
+fn analyzeRepoCore(
+    app: *App,
+    allocator: std.mem.Allocator,
+    repo_url: []const u8,
+    branch: []const u8,
+    err_buf: ?[]u8,
+    err_n_out: ?*usize,
+) AnalysisCoreError!AnalysisResult {
+    if (!app.ai_cfg.enabled()) return error.AiDisabled;
+    if (repo_url.len == 0 or repo_url.len > 512) return error.InvalidRepoUrl;
+    if (!std.mem.startsWith(u8, repo_url, "https://") and !std.mem.startsWith(u8, repo_url, "git@")) {
+        return error.InvalidProtocol;
+    }
+    const eff_branch = if (branch.len == 0) "main" else branch;
+
+    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    std.fs.makeDirAbsolute(tmp_root) catch {};
+    var rand: [8]u8 = undefined;
+    std.crypto.random.bytes(&rand);
+    const cs = "0123456789abcdef";
+    var rand_hex: [16]u8 = undefined;
+    for (rand, 0..) |b, i| {
+        rand_hex[i * 2] = cs[b >> 4];
+        rand_hex[i * 2 + 1] = cs[b & 0xf];
+    }
+    const tmp_dir = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_root, &rand_hex }) catch return error.OutOfMemory;
+    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    var stack_err: [1024]u8 = undefined;
+    var stack_err_n: usize = 0;
+    const eff_err: []u8 = err_buf orelse stack_err[0..];
+    const eff_err_n: *usize = err_n_out orelse &stack_err_n;
+
+    const used_branch = cloneWithFallback(allocator, repo_url, eff_branch, tmp_dir, eff_err, eff_err_n) orelse {
+        return error.CloneFailed;
+    };
+
+    const sug = detect.detect(allocator, tmp_dir) catch return error.DetectFailed;
+
+    // Read package.json (truncated)
+    const pkg_path = std.fmt.allocPrint(allocator, "{s}/package.json", .{tmp_dir}) catch return error.OutOfMemory;
+    var pkg_content: []const u8 = "";
+    if (std.fs.openFileAbsolute(pkg_path, .{})) |pf| {
+        defer pf.close();
+        pkg_content = pf.readToEndAlloc(allocator, 6 * 1024) catch "";
+    } else |_| {}
+
+    // Read README (truncated)
+    const readme_paths = [_][]const u8{ "README.md", "readme.md", "README", "Readme.md" };
+    var readme_content: []const u8 = "";
+    for (readme_paths) |rp| {
+        const path_full = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir, rp }) catch continue;
+        if (std.fs.openFileAbsolute(path_full, .{})) |rf| {
+            defer rf.close();
+            readme_content = rf.readToEndAlloc(allocator, 2 * 1024) catch "";
+            if (readme_content.len > 0) break;
+        } else |_| {}
+    }
+
+    // List repo root files (only top-level, max 50)
+    var file_list_buf = std.ArrayList(u8).init(allocator);
+    if (std.fs.openDirAbsolute(tmp_dir, .{ .iterate = true })) |*dir_const| {
+        var dir = dir_const.*;
+        defer dir.close();
+        var it = dir.iterate();
+        var count: u32 = 0;
+        while (it.next() catch null) |entry| {
+            if (entry.name.len == 0 or entry.name[0] == '.') continue;
+            if (count >= 50) break;
+            file_list_buf.appendSlice(entry.name) catch break;
+            file_list_buf.append('\n') catch break;
+            count += 1;
+        }
+    } else |_| {}
+
+    const ai_result = ai.analyzeProject(app.ai_cfg, allocator, .{
+        .framework_hint = sug.framework_hint,
+        .detected_runtime = sug.runtime,
+        .detected_install = sug.install_cmd,
+        .detected_build = sug.build_cmd,
+        .detected_start = sug.start_cmd,
+        .detected_publish = sug.publish_dir,
+        .package_json_excerpt = pkg_content,
+        .readme_excerpt = readme_content,
+        .file_list = file_list_buf.items,
+    }) orelse return error.AiFailed;
+
+    const name_hint = detect.nameFromRepo(allocator, repo_url) catch (allocator.dupe(u8, "") catch return error.OutOfMemory);
+    const sub_hint = detect.suggestSubdomain(allocator, name_hint) catch (allocator.dupe(u8, "") catch return error.OutOfMemory);
+
+    return .{
+        .preview = .{
+            .suggested_name = name_hint,
+            .suggested_subdomain = sub_hint,
+            .actual_branch = used_branch,
+            .runtime = sug.runtime,
+            .install_cmd = sug.install_cmd,
+            .build_cmd = sug.build_cmd,
+            .start_cmd = sug.start_cmd,
+            .publish_dir = sug.publish_dir,
+            .framework_hint = sug.framework_hint,
+        },
+        .ai_json = ai_result,
+    };
+}
+
 /// Shallow-clone or unzip a repo URL to ~/.tmp-preview/<random>/, run the
 /// framework detector against it, return the suggestions, then delete the
 /// temp tree. Lets the wizard show pre-filled commands like Netlify does.
@@ -7434,62 +8492,48 @@ fn apiProjectsPreviewRepo(app: *App, req: *httpz.Request, res: *httpz.Response) 
     };
     defer parsed.deinit();
     const p = parsed.value;
-    if (p.repo_url.len == 0 or p.repo_url.len > 512) {
-        res.status = 400;
-        try res.json(.{ .ok = false, .err = "invalid_repo_url" }, .{});
-        return;
-    }
-    if (!std.mem.startsWith(u8, p.repo_url, "https://") and !std.mem.startsWith(u8, p.repo_url, "git@")) {
-        res.status = 400;
-        try res.json(.{ .ok = false, .err = "invalid_protocol" }, .{});
-        return;
-    }
 
-    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
-    std.fs.makeDirAbsolute(tmp_root) catch {};
-    var rand: [8]u8 = undefined;
-    std.crypto.random.bytes(&rand);
-    const cs = "0123456789abcdef";
-    var rand_hex: [16]u8 = undefined;
-    for (rand, 0..) |b, i| {
-        rand_hex[i * 2] = cs[b >> 4];
-        rand_hex[i * 2 + 1] = cs[b & 0xf];
-    }
-    const tmp_dir = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_root, &rand_hex });
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-
-    // git clone with auto-fallback to default branch if requested branch fails
     var stderr_buf: [2048]u8 = undefined;
     var stderr_n: usize = 0;
-    const used_branch = cloneWithFallback(res.arena, p.repo_url, p.branch, tmp_dir, &stderr_buf, &stderr_n) orelse {
-        res.status = 400;
-        try res.json(.{
-            .ok = false,
-            .err = "clone_failed",
-            .stderr = stderr_buf[0..@min(stderr_n, 1024)],
-        }, .{});
+    const result = previewRepoCore(res.arena, p.repo_url, p.branch, stderr_buf[0..], &stderr_n) catch |err| {
+        const status: u16 = switch (err) {
+            error.InvalidRepoUrl => 400,
+            error.InvalidProtocol => 400,
+            error.CloneFailed => 400,
+            error.DetectFailed => 500,
+            error.OutOfMemory => 500,
+        };
+        const code: []const u8 = switch (err) {
+            error.InvalidRepoUrl => "invalid_repo_url",
+            error.InvalidProtocol => "invalid_protocol",
+            error.CloneFailed => "clone_failed",
+            error.DetectFailed => "detect_failed",
+            error.OutOfMemory => "oom",
+        };
+        res.status = status;
+        if (err == error.CloneFailed) {
+            try res.json(.{
+                .ok = false,
+                .err = code,
+                .stderr = stderr_buf[0..@min(stderr_n, 1024)],
+            }, .{});
+        } else {
+            try res.json(.{ .ok = false, .err = code }, .{});
+        }
         return;
     };
-
-    const sug = detect.detect(res.arena, tmp_dir) catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "detect_failed" }, .{});
-        return;
-    };
-    const name_hint = detect.nameFromRepo(res.arena, p.repo_url) catch try res.arena.dupe(u8, "");
-    const sub_hint = detect.suggestSubdomain(res.arena, name_hint) catch try res.arena.dupe(u8, "");
 
     try res.json(.{
         .ok = true,
-        .suggested_name = name_hint,
-        .suggested_subdomain = sub_hint,
-        .actual_branch = used_branch,
-        .runtime = sug.runtime,
-        .install_cmd = sug.install_cmd,
-        .build_cmd = sug.build_cmd,
-        .start_cmd = sug.start_cmd,
-        .publish_dir = sug.publish_dir,
-        .framework_hint = sug.framework_hint,
+        .suggested_name = result.suggested_name,
+        .suggested_subdomain = result.suggested_subdomain,
+        .actual_branch = result.actual_branch,
+        .runtime = result.runtime,
+        .install_cmd = result.install_cmd,
+        .build_cmd = result.build_cmd,
+        .start_cmd = result.start_cmd,
+        .publish_dir = result.publish_dir,
+        .framework_hint = result.framework_hint,
     }, .{});
 }
 
@@ -7692,11 +8736,6 @@ fn apiProjectsLogStream(app: *App, req: *httpz.Request, res: *httpz.Response) !v
 // PROJECT AI ANALYZER (best-fit deploy config)
 // =================================================================
 fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
-    if (!app.ai_cfg.enabled()) {
-        res.status = 503;
-        try res.json(.{ .ok = false, .err = "ai_disabled" }, .{});
-        return;
-    }
     const body = req.body() orelse "";
     const Payload = struct {
         repo_url: []const u8,
@@ -7712,107 +8751,47 @@ fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
     };
     defer parsed.deinit();
     const p = parsed.value;
-    if (p.repo_url.len == 0 or p.repo_url.len > 512) {
-        res.status = 400;
-        try res.json(.{ .ok = false, .err = "invalid_repo_url" }, .{});
-        return;
-    }
-    if (!std.mem.startsWith(u8, p.repo_url, "https://") and !std.mem.startsWith(u8, p.repo_url, "git@")) {
-        res.status = 400;
-        try res.json(.{ .ok = false, .err = "invalid_protocol" }, .{});
-        return;
-    }
 
-    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
-    std.fs.makeDirAbsolute(tmp_root) catch {};
-    var rand: [8]u8 = undefined;
-    std.crypto.random.bytes(&rand);
-    const cs = "0123456789abcdef";
-    var rand_hex: [16]u8 = undefined;
-    for (rand, 0..) |b, i| {
-        rand_hex[i * 2] = cs[b >> 4];
-        rand_hex[i * 2 + 1] = cs[b & 0xf];
-    }
-    const tmp_dir = try std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_root, &rand_hex });
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-
-    // Shallow clone with fallback to default branch if the requested one fails
     var clone_err_buf: [1024]u8 = undefined;
     var clone_err_n: usize = 0;
-    const used_branch = cloneWithFallback(res.arena, p.repo_url, p.branch, tmp_dir, &clone_err_buf, &clone_err_n) orelse {
-        res.status = 400;
-        try res.json(.{
-            .ok = false,
-            .err = "clone_failed",
-            .stderr = clone_err_buf[0..@min(clone_err_n, 512)],
-        }, .{});
-        return;
-    };
-
-    // Detect framework first
-    const sug = detect.detect(res.arena, tmp_dir) catch {
-        res.status = 500;
-        try res.json(.{ .ok = false, .err = "detect_failed" }, .{});
-        return;
-    };
-
-    // Read package.json (truncated)
-    const pkg_path = try std.fmt.allocPrint(res.arena, "{s}/package.json", .{tmp_dir});
-    var pkg_content: []const u8 = "";
-    if (std.fs.openFileAbsolute(pkg_path, .{})) |pf| {
-        defer pf.close();
-        pkg_content = pf.readToEndAlloc(res.arena, 6 * 1024) catch "";
-    } else |_| {}
-
-    // Read README (truncated)
-    const readme_paths = [_][]const u8{ "README.md", "readme.md", "README", "Readme.md" };
-    var readme_content: []const u8 = "";
-    for (readme_paths) |rp| {
-        const path_full = std.fmt.allocPrint(res.arena, "{s}/{s}", .{ tmp_dir, rp }) catch continue;
-        if (std.fs.openFileAbsolute(path_full, .{})) |rf| {
-            defer rf.close();
-            readme_content = rf.readToEndAlloc(res.arena, 2 * 1024) catch "";
-            if (readme_content.len > 0) break;
-        } else |_| {}
-    }
-
-    // List repo root files (only top-level, max 50)
-    var file_list_buf = std.ArrayList(u8).init(res.arena);
-    if (std.fs.openDirAbsolute(tmp_dir, .{ .iterate = true })) |*dir_const| {
-        var dir = dir_const.*;
-        defer dir.close();
-        var it = dir.iterate();
-        var count: u32 = 0;
-        while (it.next() catch null) |entry| {
-            if (entry.name.len == 0 or entry.name[0] == '.') continue;
-            if (count >= 50) break;
-            file_list_buf.appendSlice(entry.name) catch break;
-            file_list_buf.append('\n') catch break;
-            count += 1;
+    const result = analyzeRepoCore(app, res.arena, p.repo_url, p.branch, clone_err_buf[0..], &clone_err_n) catch |err| {
+        const status: u16 = switch (err) {
+            error.AiDisabled => 503,
+            error.InvalidRepoUrl => 400,
+            error.InvalidProtocol => 400,
+            error.CloneFailed => 400,
+            error.DetectFailed => 500,
+            error.AiFailed => 502,
+            error.OutOfMemory => 500,
+        };
+        const code: []const u8 = switch (err) {
+            error.AiDisabled => "ai_disabled",
+            error.InvalidRepoUrl => "invalid_repo_url",
+            error.InvalidProtocol => "invalid_protocol",
+            error.CloneFailed => "clone_failed",
+            error.DetectFailed => "detect_failed",
+            error.AiFailed => "ai_failed",
+            error.OutOfMemory => "oom",
+        };
+        res.status = status;
+        if (err == error.CloneFailed) {
+            try res.json(.{
+                .ok = false,
+                .err = code,
+                .stderr = clone_err_buf[0..@min(clone_err_n, 512)],
+            }, .{});
+        } else {
+            try res.json(.{ .ok = false, .err = code }, .{});
         }
-    } else |_| {}
-
-    const ai_result = ai.analyzeProject(app.ai_cfg, res.arena, .{
-        .framework_hint = sug.framework_hint,
-        .detected_runtime = sug.runtime,
-        .detected_install = sug.install_cmd,
-        .detected_build = sug.build_cmd,
-        .detected_start = sug.start_cmd,
-        .detected_publish = sug.publish_dir,
-        .package_json_excerpt = pkg_content,
-        .readme_excerpt = readme_content,
-        .file_list = file_list_buf.items,
-    }) orelse {
-        res.status = 502;
-        try res.json(.{ .ok = false, .err = "ai_failed" }, .{});
         return;
     };
 
-    // ai_result is already a JSON object. Wrap it with detection metadata.
+    // ai_json is already a JSON object. Wrap it with detection metadata.
+    const sug = result.preview;
     var envelope = std.ArrayList(u8).init(res.arena);
     try envelope.appendSlice("{\"ok\":true,\"detected\":{");
     try envelope.appendSlice("\"actual_branch\":");
-    try std.json.stringify(used_branch, .{}, envelope.writer());
+    try std.json.stringify(sug.actual_branch, .{}, envelope.writer());
     try envelope.appendSlice(",\"framework_hint\":");
     try std.json.stringify(sug.framework_hint, .{}, envelope.writer());
     try envelope.appendSlice(",\"runtime\":");
@@ -7826,7 +8805,7 @@ fn apiProjectsAnalyze(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
     try envelope.appendSlice(",\"publish_dir\":");
     try std.json.stringify(sug.publish_dir, .{}, envelope.writer());
     try envelope.appendSlice("},\"ai\":");
-    try envelope.appendSlice(ai_result);
+    try envelope.appendSlice(result.ai_json);
     try envelope.appendSlice("}");
     res.content_type = .JSON;
     res.body = try res.arena.dupe(u8, envelope.items);

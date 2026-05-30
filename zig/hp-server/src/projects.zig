@@ -71,6 +71,26 @@ pub const Status = enum {
     }
 };
 
+/// Which database backend the project uses. `sqlite` is the zero-config
+/// default; the supervisor auto-injects `DATABASE_URL=file:<path>` plus
+/// `ROFI_DB_PATH` for backend runtimes. `postgres` means the operator
+/// stored a `DATABASE_URL` in the project's secrets vault that overrides
+/// the auto-injected SQLite URI. Persisted as a lowercase JSON string
+/// (`"sqlite"` / `"postgres"`) for dashboard compatibility.
+pub const DbMode = enum {
+    sqlite,
+    postgres,
+
+    pub fn toString(self: DbMode) []const u8 {
+        return @tagName(self);
+    }
+    pub fn fromString(s: []const u8) ?DbMode {
+        if (std.mem.eql(u8, s, "sqlite")) return .sqlite;
+        if (std.mem.eql(u8, s, "postgres")) return .postgres;
+        return null;
+    }
+};
+
 pub const Project = struct {
     id: []const u8, // 16 hex chars, immutable
     name: []const u8, // human-friendly, mutable
@@ -93,6 +113,9 @@ pub const Project = struct {
     /// supervisor polls /proc/<pid>/status and SIGTERMs the child if it
     /// exceeds this for two consecutive samples. 0 = no limit.
     rss_limit_mb: u32 = 0,
+    /// Which database backend the project uses. Defaults to `.sqlite` for
+    /// backwards-compatibility with projects created pre-Phase-3.
+    db_mode: DbMode = .sqlite,
     created_at: i64,
     updated_at: i64,
     last_deploy_at: i64,
@@ -168,6 +191,7 @@ pub const Manager = struct {
                 updated_at: i64 = 0,
                 last_deploy_at: i64 = 0,
                 rss_limit_mb: u32 = 0,
+                db_mode: []const u8 = "sqlite",
                 deleted: bool = false,
             };
             const parsed = std.json.parseFromSlice(Wire, self.allocator, line, .{
@@ -179,6 +203,7 @@ pub const Manager = struct {
             if (w.deleted) continue;
             const rt = Runtime.fromString(w.runtime) orelse Runtime.generic;
             const st = Status.fromString(w.status) orelse Status.created;
+            const dbm = DbMode.fromString(w.db_mode) orelse DbMode.sqlite;
             try self.projects.append(.{
                 .id = try arena.dupe(u8, w.id),
                 .name = try arena.dupe(u8, w.name),
@@ -195,6 +220,7 @@ pub const Manager = struct {
                 .status = st,
                 .owner_id = try arena.dupe(u8, w.owner_id),
                 .rss_limit_mb = w.rss_limit_mb,
+                .db_mode = dbm,
                 .created_at = w.created_at,
                 .updated_at = w.updated_at,
                 .last_deploy_at = w.last_deploy_at,
@@ -244,6 +270,7 @@ pub const Manager = struct {
         publish_dir: []const u8 = "",
         rss_limit_mb: u32 = 0,
         owner_id: []const u8 = "",
+        db_mode: DbMode = .sqlite,
     };
 
     pub fn create(self: *Manager, input: CreateInput) !Project {
@@ -297,6 +324,7 @@ pub const Manager = struct {
             .status = .created,
             .owner_id = try arena.dupe(u8, input.owner_id),
             .rss_limit_mb = input.rss_limit_mb,
+            .db_mode = input.db_mode,
             .created_at = now,
             .updated_at = now,
             .last_deploy_at = 0,
@@ -326,6 +354,7 @@ pub const Manager = struct {
         status: ?Status = null,
         last_deploy_at: ?i64 = null,
         rss_limit_mb: ?u32 = null,
+        db_mode: ?DbMode = null,
     };
 
     pub fn update(self: *Manager, id: []const u8, input: UpdateInput) !Project {
@@ -347,6 +376,7 @@ pub const Manager = struct {
                 if (input.status) |v| p.status = v;
                 if (input.last_deploy_at) |v| p.last_deploy_at = v;
                 if (input.rss_limit_mb) |v| p.rss_limit_mb = v;
+                if (input.db_mode) |v| p.db_mode = v;
                 p.updated_at = std.time.timestamp();
                 try self.rewriteToDisk();
                 return p.*;
@@ -463,8 +493,8 @@ fn writeProject(w: anytype, p: Project) !void {
     try w.writeAll(",\"owner_id\":\"");
     try writeJsonStr(w, p.owner_id);
     try w.print(
-        ",\"port\":{d},\"status\":\"{s}\",\"created_at\":{d},\"updated_at\":{d},\"last_deploy_at\":{d},\"rss_limit_mb\":{d}}}",
-        .{ p.port, p.status.toString(), p.created_at, p.updated_at, p.last_deploy_at, p.rss_limit_mb },
+        ",\"port\":{d},\"status\":\"{s}\",\"created_at\":{d},\"updated_at\":{d},\"last_deploy_at\":{d},\"rss_limit_mb\":{d},\"db_mode\":\"{s}\"}}",
+        .{ p.port, p.status.toString(), p.created_at, p.updated_at, p.last_deploy_at, p.rss_limit_mb, p.db_mode.toString() },
     );
 }
 
@@ -488,4 +518,64 @@ test "Runtime roundtrip" {
     try std.testing.expect(Runtime.fromString("node") == .node);
     try std.testing.expect(Runtime.fromString("nope") == null);
     try std.testing.expectEqualStrings("python", Runtime.python.toString());
+}
+
+test "DbMode roundtrip" {
+    try std.testing.expect(DbMode.fromString("sqlite") == .sqlite);
+    try std.testing.expect(DbMode.fromString("postgres") == .postgres);
+    try std.testing.expect(DbMode.fromString("mysql") == null);
+    try std.testing.expectEqualStrings("sqlite", DbMode.sqlite.toString());
+    try std.testing.expectEqualStrings("postgres", DbMode.postgres.toString());
+}
+
+test "writeProject emits db_mode lowercase string" {
+    const p = Project{
+        .id = "0123456789abcdef",
+        .name = "demo",
+        .subdomain = "demo",
+        .repo_url = "",
+        .branch = "main",
+        .runtime = Runtime.static,
+        .install_cmd = "",
+        .build_cmd = "",
+        .start_cmd = "",
+        .publish_dir = "",
+        .webhook_secret = "",
+        .port = 0,
+        .status = Status.created,
+        .owner_id = "",
+        .rss_limit_mb = 0,
+        .db_mode = DbMode.postgres,
+        .created_at = 0,
+        .updated_at = 0,
+        .last_deploy_at = 0,
+    };
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeProject(fbs.writer(), p);
+    const written = fbs.getWritten();
+    // Field must be present, lowercase, and quoted.
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"db_mode\":\"postgres\"") != null);
+}
+
+test "DbMode defaults to sqlite when JSON line lacks the field" {
+    // Simulates a legacy JSONL line written before Phase 3 added db_mode.
+    const line =
+        \\{"id":"abc","name":"old","subdomain":"old","runtime":"static","status":"created"}
+    ;
+    const Wire = struct {
+        id: []const u8,
+        name: []const u8 = "",
+        subdomain: []const u8 = "",
+        runtime: []const u8 = "static",
+        status: []const u8 = "created",
+        db_mode: []const u8 = "sqlite",
+    };
+    const parsed = try std.json.parseFromSlice(Wire, std.testing.allocator, line, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    const dbm = DbMode.fromString(parsed.value.db_mode) orelse DbMode.sqlite;
+    try std.testing.expect(dbm == .sqlite);
 }

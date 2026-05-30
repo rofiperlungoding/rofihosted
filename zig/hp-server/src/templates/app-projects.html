@@ -7,9 +7,9 @@
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=39">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=39">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=39">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=40">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=40">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=40">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -149,8 +149,11 @@
           <!-- Database -->
           <div style="margin-bottom:1.6rem">
             <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.5rem">
-              <h3 style="margin:0; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-database" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i>SQLite database</h3>
+              <h3 style="margin:0; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-database" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i><span id="d-res-db-heading">SQLite database</span></h3>
               <a class="btn btn-sm" href="#" id="d-res-db-open">Open SQL runner</a>
+            </div>
+            <div id="d-res-db-mode-banner" style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.6rem .85rem; margin-bottom:.7rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
+              <span id="d-res-db-mode-text">Zero-config SQLite. To switch to Postgres, set the <code>DATABASE_URL</code> secret to a postgres:// URL.</span>
             </div>
             <p class="hint" style="margin:.2rem 0 .6rem">Per-project SQLite at <code id="d-res-db-path">~/data/dbs/&lt;id&gt;.db</code>, mode 0600. Auto-created on first connect. No size limit beyond available phone storage.</p>
             <p class="hint" style="margin:.2rem 0 .6rem">Already exposed to your runtime via:</p>
@@ -326,6 +329,7 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
           <div class="wiz-dot active" style="flex:1; height:4px; border-radius:2px; background:var(--accent)"></div>
           <div class="wiz-dot" style="flex:1; height:4px; border-radius:2px; background:var(--border-soft)"></div>
           <div class="wiz-dot" style="flex:1; height:4px; border-radius:2px; background:var(--border-soft)"></div>
+          <div class="wiz-dot" style="flex:1; height:4px; border-radius:2px; background:var(--border-soft)"></div>
         </div>
 
         <!-- Step 1: Source -->
@@ -335,10 +339,13 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
           <input class="input" id="wiz-repo" placeholder="https://github.com/you/repo" style="margin-bottom:.8rem">
           <label style="display:block; font-size:.78rem; color:var(--text-2); margin-bottom:.35rem; font-weight:500">Branch</label>
           <input class="input" id="wiz-branch" value="main" placeholder="main" style="margin-bottom:.8rem">
-          <div style="display:flex; gap:.5rem; align-items:center; margin-top:.4rem">
+          <div style="display:flex; gap:.5rem; align-items:center; margin-top:.4rem; flex-wrap:wrap">
             <button class="btn btn-sm" id="wiz-ai-analyze" type="button"><i class="icon-magic-wand"></i><span>Ask AI for best fit</span></button>
-            <span style="font-size:.72rem; color:var(--text-3)">Optional. AI inspects the repo and pre-fills optimal commands + flags.</span>
+            <button class="btn btn-sm btn-accent" id="wiz-auto-deploy" type="button"><i class="icon-rocket"></i><span>Auto-deploy from repo</span></button>
           </div>
+          <p style="font-size:.72rem; color:var(--text-3); margin-top:.5rem; line-height:1.5">
+            <strong>Auto-deploy</strong>: AI scans the repo, picks runtime + commands, derives subdomain from repo name, creates the project, and ships it. You watch the build log live below. Skip the form entirely.
+          </p>
           <div id="wiz-detect-status" style="font-size:.76rem; color:var(--text-3); margin-top:.6rem; min-height:1.2rem"></div>
 
           <!-- AI analysis result panel -->
@@ -384,7 +391,34 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
           <div id="wiz-hint" style="font-size:.74rem; color:var(--accent); margin-bottom:.5rem"></div>
         </div>
 
-        <!-- Step 3: Environment variables -->
+        <!-- Step 3: Database (skipped for static runtime) -->
+        <div id="wiz-s-db" style="display:none">
+          <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Where will your project store data? You can change this later from project settings.</p>
+          <div class="scope-chips" id="wiz-db-chips" style="margin-bottom:1rem">
+            <label class="chip" data-db="sqlite">
+              <input type="radio" name="wiz-db" value="sqlite" checked style="position:absolute; opacity:0; pointer-events:none">
+              <span><i class="icon-disc"></i> SQLite (zero config)</span>
+            </label>
+            <label class="chip" data-db="postgres">
+              <input type="radio" name="wiz-db" value="postgres" style="position:absolute; opacity:0; pointer-events:none">
+              <span><i class="icon-cloud-upload"></i> Bring your own Postgres</span>
+            </label>
+          </div>
+          <div id="wiz-db-sqlite-info" style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.7rem .9rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
+            <strong style="color:var(--accent)">SQLite is auto-injected.</strong> Your project will receive these env vars at runtime. No setup needed.
+            <ul style="margin:.5rem 0 0 1rem; padding:0; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.74rem; color:var(--text)">
+              <li><code>DATABASE_URL=file:&lt;path&gt;</code> &mdash; auto-recognized by Drizzle, Prisma, Knex, SQLAlchemy</li>
+              <li><code>ROFI_DB_PATH=&lt;path&gt;</code> &mdash; raw path for better-sqlite3 et al</li>
+            </ul>
+          </div>
+          <div id="wiz-db-postgres-info" style="display:none; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px; padding:.7rem .9rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
+            <p style="margin:0 0 .5rem">Paste your Postgres connection string. It will be encrypted in this project's secrets vault and injected as <code>DATABASE_URL</code> at every spawn, overriding the auto-injected SQLite URI.</p>
+            <input class="input" id="wiz-db-pg-url" type="password" placeholder="postgres://user:pass@host:5432/dbname" style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.78rem; margin-top:.4rem">
+            <p style="font-size:.72rem; color:var(--text-3); margin:.5rem 0 0">Need free Postgres? Try <a href="https://supabase.com" target="_blank" rel="noopener">Supabase</a>, <a href="https://neon.tech" target="_blank" rel="noopener">Neon</a>, <a href="https://turso.tech" target="_blank" rel="noopener">Turso</a>, or <a href="https://upstash.com" target="_blank" rel="noopener">Upstash</a>.</p>
+          </div>
+        </div>
+
+        <!-- Step 4: Environment variables -->
         <div id="wiz-s3" style="display:none">
           <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Add environment variables (encrypted at rest). You can add more later in project settings.</p>
           <div style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.7rem .9rem; margin-bottom:1rem; font-size:.78rem; color:var(--text-2)">
@@ -400,6 +434,27 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
 
         <!-- Alert -->
         <div id="wiz-alert" style="display:none; margin-top:1rem" class="alert"></div>
+
+        <!-- Auto-deploy live progress panel -->
+        <div id="wiz-auto" style="display:none; margin-top:1rem; padding:1rem 1.2rem; background:var(--surface-2); border:1px solid var(--border-soft); border-radius:8px">
+          <div style="display:flex; align-items:center; gap:.6rem; margin-bottom:.7rem">
+            <span class="ws-dot" id="wiz-auto-dot" style="background:var(--accent)"></span>
+            <strong id="wiz-auto-stage" style="font-size:.85rem; color:var(--text)">Starting...</strong>
+            <span id="wiz-auto-elapsed" style="margin-left:auto; font-size:.72rem; color:var(--text-3); font-family:ui-monospace,monospace">0s</span>
+          </div>
+          <div id="wiz-auto-steps" style="font-size:.78rem; color:var(--text-2); margin-bottom:.6rem; line-height:1.55">
+            <div data-stage="analyze" style="opacity:.4">1. AI scans repo</div>
+            <div data-stage="create" style="opacity:.4">2. Create project</div>
+            <div data-stage="deploy" style="opacity:.4">3. Clone, install, build, publish</div>
+            <div data-stage="live" style="opacity:.4">4. Live at &lt;subdomain&gt;.rofihosted.space</div>
+          </div>
+          <pre id="wiz-auto-log" style="max-height:280px; overflow:auto; padding:.7rem .9rem; background:#0a0a10; color:#d4d4d8; border-radius:6px; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.74rem; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; border:1px solid color-mix(in srgb, var(--accent) 25%, transparent)"></pre>
+          <div style="display:flex; gap:.5rem; margin-top:.7rem">
+            <a class="btn btn-sm btn-accent" id="wiz-auto-open" style="display:none" target="_blank" rel="noreferrer"><i class="icon-rocket"></i><span>Open site</span></a>
+            <button class="btn btn-sm" id="wiz-auto-detail" style="display:none">Open project page</button>
+            <button class="btn btn-sm" id="wiz-auto-close" style="display:none; margin-left:auto">Close</button>
+          </div>
+        </div>
 
         <!-- Footer -->
         <div style="display:flex; justify-content:space-between; margin-top:1.4rem">
@@ -453,8 +508,8 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=39"></script>
-<script src="https://rofihosted.space/app.js?v=39"></script>
+<script src="https://rofihosted.space/theme.js?v=40"></script>
+<script src="https://rofihosted.space/app.js?v=40"></script>
 <script>
 RH.loadCurrentUser();
 
@@ -494,30 +549,78 @@ RH.loadCurrentUser();
   function loadProjects() {
     fetch('/api/projects').then(function (r) { return r.json(); }).then(function (j) {
       if (j.ok) { allProjects = j.projects || []; renderProjects(); }
+      refreshQuotaButton();
     });
+  }
+
+  // Disable both the "New project" and "Auto-deploy" buttons when a tenant
+  // has hit max_projects. Admin keys / legacy operator -> always enabled.
+  function refreshQuotaButton() {
+    fetch('/api/me').then(function (r) { return r.json(); }).then(function (me) {
+      var newBtn = document.getElementById('new-project-btn');
+      var autoBtn = document.getElementById('wiz-auto-deploy');
+      if (!me || !me.username) return;
+      // Legacy / admin: never restricted client-side.
+      if (me.role !== 'tenant') {
+        if (newBtn) { newBtn.disabled = false; newBtn.title = ''; }
+        if (autoBtn) { autoBtn.disabled = false; autoBtn.title = ''; }
+        return;
+      }
+      // Tenant: count own projects vs (cached) max_projects from /api/me?
+      // We don't expose max_projects yet - fall back to letting the server
+      // 429 if the tenant tries to exceed. As long as `/api/me` shows the
+      // tenant is below their quota, leave the buttons enabled.
+      var owned = (allProjects || []).filter(function (p) { return p.owner_id === me.user_id; }).length;
+      var max = me.max_projects || 0;
+      var atCap = max > 0 && owned >= max;
+      if (newBtn) {
+        newBtn.disabled = atCap;
+        newBtn.title = atCap ? 'Project quota reached (' + owned + '/' + max + '). Delete a project to free up a slot.' : '';
+      }
+      if (autoBtn) {
+        autoBtn.disabled = atCap;
+        autoBtn.title = atCap ? 'Project quota reached (' + owned + '/' + max + '). Delete a project to free up a slot.' : '';
+      }
+    }).catch(function () {});
   }
 
   // --- Wizard state ---
   var wiz = { step: 1, envs: [] };
   var wizEl = document.getElementById('wizard');
   var listEl = document.getElementById('projects-list');
-  var steps = [document.getElementById('wiz-s1'), document.getElementById('wiz-s2'), document.getElementById('wiz-s3')];
+  var steps = [
+    document.getElementById('wiz-s1'),
+    document.getElementById('wiz-s2'),
+    document.getElementById('wiz-s-db'),
+    document.getElementById('wiz-s3')
+  ];
   var dots = document.querySelectorAll('#wiz-step-indicator > div');
   var backBtn = document.getElementById('wiz-back');
   var nextBtn = document.getElementById('wiz-next');
   var alertEl = document.getElementById('wiz-alert');
+
+  // Logical step count is 4. Static projects skip the DB step (index 3) since
+  // they never run a server-side process and don't need DATABASE_URL.
+  var TOTAL_STEPS = 4;
+  function dbStepActive() {
+    var rt = document.getElementById('wiz-runtime').value;
+    return rt !== 'static';
+  }
 
   function showStep(n) {
     wiz.step = n;
     steps.forEach(function (s, i) { s.style.display = i === n - 1 ? '' : 'none'; });
     dots.forEach(function (d, i) { d.style.background = i < n ? 'var(--accent)' : 'var(--border-soft)'; });
     backBtn.style.display = n > 1 ? '' : 'none';
-    nextBtn.textContent = n === 3 ? 'Deploy' : 'Next';
+    var lastStep = dbStepActive() ? TOTAL_STEPS : TOTAL_STEPS - 1; // skip db when static
+    nextBtn.textContent = n === TOTAL_STEPS ? 'Deploy' : 'Next';
+    if (!dbStepActive() && n === TOTAL_STEPS) nextBtn.textContent = 'Deploy';
+    if (n === lastStep) nextBtn.textContent = 'Deploy';
     alertEl.style.display = 'none';
   }
 
   function showWizard() {
-    wiz = { step: 1, envs: [] };
+    wiz = { step: 1, envs: [], db_mode: 'sqlite', db_pg_url: '' };
     document.getElementById('wiz-repo').value = '';
     document.getElementById('wiz-branch').value = 'main';
     document.getElementById('wiz-name').value = '';
@@ -530,9 +633,26 @@ RH.loadCurrentUser();
     document.getElementById('wiz-hint').textContent = '';
     document.getElementById('wiz-detect-status').textContent = '';
     document.getElementById('wiz-env-list').innerHTML = '';
+    // Reset DB chip state to SQLite default.
+    var pgUrlEl = document.getElementById('wiz-db-pg-url');
+    if (pgUrlEl) pgUrlEl.value = '';
+    var sqliteRadio = document.querySelector('input[name="wiz-db"][value="sqlite"]');
+    if (sqliteRadio) sqliteRadio.checked = true;
+    syncDbChipUi();
     showStep(1);
     wizEl.style.display = '';
     listEl.style.display = 'none';
+  }
+
+  // Sync the visual chip-active state and info panel with the radio's value.
+  function syncDbChipUi() {
+    var mode = (document.querySelector('input[name="wiz-db"]:checked') || { value: 'sqlite' }).value;
+    wiz.db_mode = mode;
+    document.getElementById('wiz-db-sqlite-info').style.display = mode === 'sqlite' ? '' : 'none';
+    document.getElementById('wiz-db-postgres-info').style.display = mode === 'postgres' ? '' : 'none';
+    document.querySelectorAll('#wiz-db-chips .chip').forEach(function (c) {
+      c.classList.toggle('on', c.dataset.db === mode);
+    });
   }
 
   function hideWizard() {
@@ -542,7 +662,24 @@ RH.loadCurrentUser();
 
   document.getElementById('new-project-btn').addEventListener('click', showWizard);
   document.getElementById('wiz-cancel').addEventListener('click', hideWizard);
-  backBtn.addEventListener('click', function () { if (wiz.step > 1) showStep(wiz.step - 1); });
+  backBtn.addEventListener('click', function () {
+    if (wiz.step <= 1) return;
+    var prev = wiz.step - 1;
+    // Skip the db step when going back if static.
+    if (prev === 3 && !dbStepActive()) prev = 2;
+    showStep(prev);
+  });
+
+  // DB chip click + radio sync
+  document.querySelectorAll('#wiz-db-chips .chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      var mode = chip.dataset.db;
+      var radio = chip.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+      wiz.db_mode = mode;
+      syncDbChipUi();
+    });
+  });
 
   // Runtime toggle: show publish_dir for static, start_cmd for backend
   document.getElementById('wiz-runtime').addEventListener('change', function () {
@@ -742,13 +879,47 @@ RH.loadCurrentUser();
         showAlert('Subdomain must be lowercase letters, numbers, and dashes (1-63 chars, no leading/trailing dash).');
         return;
       }
-      renderEnvList();
-      showStep(3);
+      // Static projects don't run a server-side process, so DATABASE_URL is
+      // moot. Skip the DB step in that case.
+      if (dbStepActive()) {
+        syncDbChipUi();
+        showStep(3);
+      } else {
+        renderEnvList();
+        showStep(4);
+      }
       return;
     }
 
     if (wiz.step === 3) {
-      // Create project + push secrets + deploy
+      // Database step. Validate Postgres URL if that mode is selected.
+      var mode = (document.querySelector('input[name="wiz-db"]:checked') || { value: 'sqlite' }).value;
+      wiz.db_mode = mode;
+      if (mode === 'postgres') {
+        var pgUrl = (document.getElementById('wiz-db-pg-url').value || '').trim();
+        if (!pgUrl) {
+          showAlert('Paste your Postgres URL or switch back to SQLite.');
+          return;
+        }
+        if (!/^postgres(ql)?:\/\//i.test(pgUrl)) {
+          showAlert('Postgres URL must start with postgres:// or postgresql://');
+          return;
+        }
+        if (pgUrl.length > 1024) {
+          showAlert('Postgres URL is unusually long; double-check before deploying.');
+          return;
+        }
+        wiz.db_pg_url = pgUrl;
+      } else {
+        wiz.db_pg_url = '';
+      }
+      renderEnvList();
+      showStep(4);
+      return;
+    }
+
+    if (wiz.step === 4) {
+      // Final: create project + (optional) push DATABASE_URL secret + push other secrets + deploy
       nextBtn.disabled = true;
       nextBtn.textContent = 'Deploying...';
       var fd = new URLSearchParams();
@@ -761,6 +932,7 @@ RH.loadCurrentUser();
       fd.set('build_cmd', document.getElementById('wiz-build').value);
       fd.set('start_cmd', document.getElementById('wiz-start').value);
       fd.set('publish_dir', document.getElementById('wiz-publish').value);
+      fd.set('db_mode', wiz.db_mode || 'sqlite');
 
       fetch('/api/projects/create', {
         method: 'POST',
@@ -772,27 +944,229 @@ RH.loadCurrentUser();
           if (!j.ok) { nextBtn.disabled = false; nextBtn.textContent = 'Deploy'; showAlert('Create failed: ' + (j.err || 'unknown')); return; }
           var projectId = j.id;
 
-          // Push secrets sequentially
-          var pushSecrets = function (i) {
-            if (i >= wiz.envs.length) { triggerDeploy(projectId); return; }
-            var e = wiz.envs[i];
-            // Skip empty/incomplete envs
-            if (!e.key || !e.value) { pushSecrets(i + 1); return; }
-            var sf = new URLSearchParams();
-            sf.set('project_id', projectId);
-            sf.set('key', e.key);
-            sf.set('value', e.value);
-            fetch('/api/projects/secrets/set', {
+          // If postgres mode, push DATABASE_URL secret first so the supervisor
+          // sees it on the very first spawn.
+          var pushedDbUrl = Promise.resolve();
+          if (wiz.db_mode === 'postgres' && wiz.db_pg_url) {
+            var sf0 = new URLSearchParams();
+            sf0.set('project_id', projectId);
+            sf0.set('key', 'DATABASE_URL');
+            sf0.set('value', wiz.db_pg_url);
+            pushedDbUrl = fetch('/api/projects/secrets/set', {
               method: 'POST',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: sf.toString(),
-            })
-              .then(function () { pushSecrets(i + 1); })
-              .catch(function () { pushSecrets(i + 1); });
-          };
-          pushSecrets(0);
+              body: sf0.toString(),
+            });
+          }
+
+          pushedDbUrl.then(function () {
+            // Push remaining secrets sequentially
+            var pushSecrets = function (i) {
+              if (i >= wiz.envs.length) { triggerDeploy(projectId); return; }
+              var e = wiz.envs[i];
+              if (!e.key || !e.value) { pushSecrets(i + 1); return; }
+              var sf = new URLSearchParams();
+              sf.set('project_id', projectId);
+              sf.set('key', e.key);
+              sf.set('value', e.value);
+              fetch('/api/projects/secrets/set', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: sf.toString(),
+              })
+                .then(function () { pushSecrets(i + 1); })
+                .catch(function () { pushSecrets(i + 1); });
+            };
+            pushSecrets(0);
+          }).catch(function () {
+            // Even if the postgres secret upload failed, continue with the
+            // rest. The user will see the missing secret in the project
+            // detail page and can retry from there.
+            triggerDeploy(projectId);
+          });
         })
         .catch(function () { nextBtn.disabled = false; nextBtn.textContent = 'Deploy'; showAlert('Network error.'); });
+    }
+  });
+
+  // ---------- Auto-deploy: AI scan + create + deploy + live progress ----------
+  function deriveSubdomain(repoUrl) {
+    // Pick the trailing repo name from a Git URL: "https://github.com/foo/bar.git" -> "bar"
+    var s = String(repoUrl).trim();
+    s = s.replace(/\.git$/, '').replace(/\/+$/, '');
+    var idx = s.lastIndexOf('/');
+    if (idx >= 0) s = s.slice(idx + 1);
+    // Sanitize: lowercase, alnum + dashes only, max 30 chars
+    s = s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+    return s.slice(0, 30) || 'app';
+  }
+
+  function autoStage(name, state) {
+    // state: 'doing' | 'done' | 'fail'
+    var el = document.querySelector('#wiz-auto-steps [data-stage="' + name + '"]');
+    if (!el) return;
+    el.style.opacity = '1';
+    el.style.color = state === 'fail' ? '#ef4444' : state === 'done' ? '#10b981' : 'var(--text)';
+    var prefix = state === 'fail' ? 'X ' : state === 'done' ? 'OK ' : '... ';
+    var rest = el.textContent.replace(/^(OK |X |\.\.\. )/, '');
+    el.textContent = prefix + rest;
+  }
+  function autoLog(line) {
+    var el = document.getElementById('wiz-auto-log');
+    el.textContent += line;
+    el.scrollTop = el.scrollHeight;
+  }
+  function autoSetStage(text) {
+    document.getElementById('wiz-auto-stage').textContent = text;
+  }
+  function autoFinish(success, projectId, subdomain) {
+    document.getElementById('wiz-auto-dot').style.background = success ? 'var(--success)' : 'var(--error)';
+    autoSetStage(success ? 'Deployed' : 'Failed');
+    var openBtn = document.getElementById('wiz-auto-open');
+    var detailBtn = document.getElementById('wiz-auto-detail');
+    var closeBtn = document.getElementById('wiz-auto-close');
+    if (success) {
+      openBtn.style.display = '';
+      openBtn.href = 'https://' + subdomain + '.rofihosted.space';
+      detailBtn.style.display = '';
+      detailBtn.onclick = function () { window.location.href = '/projects?id=' + projectId; };
+    }
+    closeBtn.style.display = '';
+    closeBtn.onclick = function () {
+      hideWizard();
+      loadProjects();
+    };
+  }
+
+  document.getElementById('wiz-auto-deploy').addEventListener('click', async function () {
+    var repo = document.getElementById('wiz-repo').value.trim();
+    var branch = document.getElementById('wiz-branch').value.trim() || 'main';
+    if (!repo) { showAlert('Paste a repo URL first.'); return; }
+    if (!/^https:\/\//i.test(repo)) {
+      showAlert('Repo URL must start with https://');
+      return;
+    }
+
+    // Reset and reveal panel
+    var auto = document.getElementById('wiz-auto');
+    document.getElementById('wiz-auto-log').textContent = '';
+    document.getElementById('wiz-auto-open').style.display = 'none';
+    document.getElementById('wiz-auto-detail').style.display = 'none';
+    document.getElementById('wiz-auto-close').style.display = 'none';
+    document.getElementById('wiz-auto-dot').style.background = 'var(--accent)';
+    auto.style.display = '';
+    var t0 = Date.now();
+    var elapsedTimer = setInterval(function () {
+      document.getElementById('wiz-auto-elapsed').textContent =
+        Math.round((Date.now() - t0) / 1000) + 's';
+    }, 1000);
+
+    document.querySelectorAll('#wiz-auto-steps > div').forEach(function (el) {
+      el.style.opacity = '0.4';
+      el.style.color = '';
+      el.textContent = el.textContent.replace(/^(OK |X |\.\.\. )/, '');
+    });
+
+    try {
+      // ONE call to the server-side orchestrator: analyze + create + deploy.
+      autoStage('analyze', 'doing');
+      autoSetStage('Analyzing repo...');
+      autoLog('[server] POST /api/projects/auto-deploy ' + repo + ' (branch: ' + branch + ')\n');
+
+      var fd = new URLSearchParams();
+      fd.set('repo_url', repo);
+      fd.set('branch', branch);
+      var resp = await fetch('/api/projects/auto-deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: fd.toString(),
+      });
+      var j = await resp.json();
+      if (!j.ok) {
+        autoStage('analyze', 'fail');
+        var detail = j.err || 'unknown';
+        if (j.stderr) detail += ' \u2014 ' + j.stderr.replace(/\s+/g, ' ').slice(0, 250);
+        if (j.reason) detail += ' (' + j.reason + ')';
+        autoLog('[server] FAILED: ' + detail + '\n');
+        autoFinish(false);
+        clearInterval(elapsedTimer);
+        return;
+      }
+      autoLog('[server] project_id=' + j.project_id + ' subdomain=' + j.subdomain + ' ai_used=' + j.ai_used + ' runtime=' + j.runtime + '\n');
+      autoStage('analyze', 'done');
+      autoStage('create', 'done');
+      autoStage('deploy', 'doing');
+      autoSetStage('Cloning, installing, building...');
+
+      var projectId = j.project_id;
+      var subdomain = j.subdomain;
+      var streamUrl = j.stream_url || ('/api/projects/log-stream?id=' + projectId + '&kind=build');
+
+      // Stream the build log live.
+      var sse = new EventSource(streamUrl);
+      var doneSeen = false;
+      var sseTimeout = setTimeout(function () {
+        if (!doneSeen) {
+          autoLog('[deploy] still running after 5 minutes; check Logs tab.\n');
+          sse.close();
+          autoStage('deploy', 'done');
+          autoStage('live', 'doing');
+          autoSetStage('Deploy still running, check Logs tab');
+          autoFinish(true, projectId, subdomain);
+          clearInterval(elapsedTimer);
+        }
+      }, 5 * 60 * 1000);
+
+      sse.onmessage = function (ev) {
+        if (!ev.data) return;
+        autoLog(ev.data + '\n');
+        if (/=== build complete/i.test(ev.data) || /=== published/i.test(ev.data)) {
+          doneSeen = true;
+          sse.close();
+          clearTimeout(sseTimeout);
+          autoStage('deploy', 'done');
+          autoStage('live', 'done');
+          autoSetStage('Deployed!');
+          autoFinish(true, projectId, subdomain);
+          clearInterval(elapsedTimer);
+        } else if (/=== build failed/i.test(ev.data)) {
+          doneSeen = true;
+          sse.close();
+          clearTimeout(sseTimeout);
+          autoStage('deploy', 'fail');
+          autoSetStage('Build failed - check the log');
+          autoFinish(false, projectId, subdomain);
+          clearInterval(elapsedTimer);
+        }
+      };
+      sse.onerror = function () {
+        sse.close();
+        if (!doneSeen) {
+          // SSE may close when build finishes; verify via status.
+          setTimeout(function () {
+            fetch('/api/projects/status?id=' + projectId)
+              .then(function (r) { return r.json(); })
+              .then(function (s) {
+                if (s.ok) {
+                  autoStage('deploy', 'done');
+                  autoStage('live', 'done');
+                  autoSetStage('Deployed!');
+                  autoFinish(true, projectId, subdomain);
+                } else {
+                  autoStage('deploy', 'fail');
+                  autoFinish(false, projectId, subdomain);
+                }
+                clearTimeout(sseTimeout);
+                clearInterval(elapsedTimer);
+              });
+          }, 800);
+        }
+      };
+    } catch (err) {
+      autoLog('[error] ' + (err.message || err) + '\n');
+      autoStage('analyze', 'fail');
+      autoFinish(false);
+      clearInterval(elapsedTimer);
     }
   });
 
@@ -1037,6 +1411,19 @@ RH.loadCurrentUser();
     // Resources panel: fill in the project-specific bits.
     var dbPathEl = document.getElementById('d-res-db-path');
     if (dbPathEl) dbPathEl.textContent = '~/data/dbs/' + p.id + '.db';
+
+    // DB mode banner: switch heading + helper text by p.db_mode.
+    var dbHeadingEl = document.getElementById('d-res-db-heading');
+    var dbModeTextEl = document.getElementById('d-res-db-mode-text');
+    var mode = (p.db_mode || 'sqlite');
+    if (dbHeadingEl) dbHeadingEl.textContent = mode === 'postgres' ? 'Postgres (bring your own)' : 'SQLite database';
+    if (dbModeTextEl) {
+      if (mode === 'postgres') {
+        dbModeTextEl.innerHTML = 'This project uses your <code>DATABASE_URL</code> secret. The auto-injected SQLite URI is shadowed at every spawn. Update the secret in the Env vars tab to rotate.';
+      } else {
+        dbModeTextEl.innerHTML = 'Zero-config SQLite. To switch to Postgres, set the <code>DATABASE_URL</code> secret to a <code>postgres://</code> URL and restart the project.';
+      }
+    }
     var authBaseEl = document.getElementById('d-res-auth-base');
     if (authBaseEl) authBaseEl.textContent = 'https://' + p.subdomain + '.rofihosted.space';
     document.querySelectorAll('.d-res-auth-host').forEach(function (el) {

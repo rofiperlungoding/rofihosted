@@ -12,8 +12,8 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rofihosted.space">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=39">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=39">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=40">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=40">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   /* ---- reset basics ---- */
@@ -273,7 +273,8 @@
     All written in Zig, under 18 MB.
   </p>
   <div class="hero-actions">
-    <a class="btn btn-accent btn-lg" href="https://app.rofihosted.space"><i class="icon-rocket"></i><span>Open console</span></a>
+    <a class="btn btn-accent btn-lg" href="/signup"><i class="icon-rocket"></i><span>Sign up</span></a>
+    <a class="btn btn-lg" href="https://app.rofihosted.space"><i class="icon-login"></i><span>Sign in</span></a>
     <a class="btn btn-lg" href="#how"><i class="icon-info"></i><span>How it works</span></a>
   </div>
 
@@ -486,7 +487,7 @@
   </div>
 </footer>
 
-<script src="https://rofihosted.space/theme.js?v=39"></script>
+<script src="https://rofihosted.space/theme.js?v=40"></script>
 <script>
   // Live stats from public APIs
   function fmtNum(n) {
@@ -515,8 +516,8 @@
       }
     });
 
-  // /v1/system/info is admin-only, but a public stat endpoint exists at /v1/public/stats? not yet.
-  // For now we wire what's available without auth.
+  // Live stats from /v1/public/stats. Degrades to placeholder '--' on
+  // 4xx/5xx, network failure, or missing fields.
   fetch('https://app.rofihosted.space/v1/public/stats', { mode: 'cors' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .catch(function () { return null; })

@@ -220,6 +220,36 @@ pub const TOOLS = [_]Tool{
         \\{"type":"object","properties":{"target":{"type":"string","enum":["local","r2"],"description":"local or r2"}},"required":["target"],"additionalProperties":false}
         ,
     },
+
+    // ---- developer experience (Phase 3) ----
+    .{
+        .name = "auto_deploy",
+        .description = "One-click deploy from a public Git repo URL. Server analyzes the repo (AI-augmented when available, deterministic fallback otherwise), derives a subdomain, creates the project, and starts the build. Returns the project_id plus an SSE log_stream URL the caller can subscribe to for live progress.",
+        .input_schema =
+        \\{"type":"object","properties":{"repo_url":{"type":"string","description":"https://... git URL, no inline credentials"},"branch":{"type":"string","description":"Default branch name; if it does not exist the server falls back to the repo's actual default"},"subdomain_hint":{"type":"string","description":"Preferred subdomain; sanitized + suffixed if necessary"}},"required":["repo_url"],"additionalProperties":false}
+        ,
+    },
+    .{
+        .name = "tail_build_log",
+        .description = "Read the most recent N lines of a project's build.log and report whether the build has reached a terminal state. Sets complete=true when the tail contains '=== build complete', '=== published', or '=== build failed'.",
+        .input_schema =
+        \\{"type":"object","properties":{"project_id":{"type":"string"},"max_lines":{"type":"integer","description":"Default 200, max 2000"}},"required":["project_id"],"additionalProperties":false}
+        ,
+    },
+    .{
+        .name = "get_db_url",
+        .description = "Return the project's effective DATABASE_URL. For db_mode=sqlite the auto-injected file URI is returned. For db_mode=postgres the secret is read from the vault and returned masked (postgres://***:***@host:port/dbname); the raw value is never exposed via this tool.",
+        .input_schema =
+        \\{"type":"object","properties":{"project_id":{"type":"string"}},"required":["project_id"],"additionalProperties":false}
+        ,
+    },
+    .{
+        .name = "set_db_url",
+        .description = "Set or clear a project's DATABASE_URL secret and flip db_mode accordingly. A non-empty postgres:// or postgresql:// URL stores the secret and sets db_mode=postgres. An empty or null value clears the secret and reverts to db_mode=sqlite (auto-injected SQLite). The project must be restarted for the change to take effect.",
+        .input_schema =
+        \\{"type":"object","properties":{"project_id":{"type":"string"},"url":{"type":["string","null"],"description":"postgres URL or empty/null to clear"}},"required":["project_id"],"additionalProperties":false}
+        ,
+    },
 };
 
 /// Build the JSON-RPC `initialize` response body. The caller wraps this

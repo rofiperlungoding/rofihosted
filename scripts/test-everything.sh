@@ -428,6 +428,44 @@ for asset in /theme.css /theme.js /icons.css; do
 done
 
 # -----------------------------------------------------------------------------
+sect "PHASE 3 - DEVELOPER EXPERIENCE"
+
+# Apex root (unauth) serves the marketing landing, not the login page.
+APEX=$(curl -sm 8 -L -o /dev/null -w '%{http_code}' "https://rofihosted.space/")
+[ "$APEX" = "200" ] && pass "apex / returns 200" || fail "apex / returns 200" "got $APEX"
+APEX_BODY=$(curl -sm 8 -L "https://rofihosted.space/")
+echo "$APEX_BODY" | grep -qi "rofihosted" && pass "apex contains 'rofihosted'" || fail "apex contains 'rofihosted'" ""
+echo "$APEX_BODY" | grep -qi "Sign up" && pass "apex shows Sign up CTA" || fail "apex shows Sign up CTA" ""
+
+# /v1/public/stats has the Phase 3 fields.
+PSTATS=$(curl -sm 5 "$BASE/v1/public/stats")
+echo "$PSTATS" | grep -q '"projects_running"' && pass "public stats: projects_running field" || fail "public stats: projects_running" "$PSTATS"
+echo "$PSTATS" | grep -q '"total_users"' && pass "public stats: total_users field" || fail "public stats: total_users" "$PSTATS"
+echo "$PSTATS" | grep -q '"version_short"' && pass "public stats: version_short field" || fail "public stats: version_short" "$PSTATS"
+echo "$PSTATS" | grep -q '"uptime_days"' && pass "public stats: uptime_days field" || fail "public stats: uptime_days" "$PSTATS"
+
+# /api/me exposes Phase 3 quota fields (tested via legacy operator cookie).
+ME=$(curl -sm 5 -b "$CJ" "$BASE/api/me")
+echo "$ME" | grep -q '"max_projects"' && pass "/api/me exposes max_projects" || fail "/api/me exposes max_projects" "$ME"
+
+# Auto-deploy endpoint exists and rejects bad URLs synchronously.
+BAD=$(curl -sm 8 -b "$CJ" -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "repo_url=ssh://nope" "$BASE/api/projects/auto-deploy")
+echo "$BAD" | grep -q '"err":"bad_repo_url"' && pass "auto-deploy rejects ssh://" || fail "auto-deploy rejects ssh://" "$BAD"
+
+NOAT=$(curl -sm 8 -b "$CJ" -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "repo_url=https://user:pass@github.com/x/y" "$BASE/api/projects/auto-deploy")
+echo "$NOAT" | grep -q '"err":"bad_repo_url"' && pass "auto-deploy blocks credentials in URL" || fail "auto-deploy blocks credentials in URL" "$NOAT"
+
+# MCP discovery / tools/list contains the new Phase 3 tools.
+MCP_TOOLS=$(curl -sm 8 -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE/mcp")
+echo "$MCP_TOOLS" | grep -q '"name":"auto_deploy"' && pass "mcp tools/list contains auto_deploy" || fail "mcp tools/list contains auto_deploy" "$MCP_TOOLS"
+echo "$MCP_TOOLS" | grep -q '"name":"tail_build_log"' && pass "mcp tools/list contains tail_build_log" || fail "mcp tools/list contains tail_build_log" "$MCP_TOOLS"
+echo "$MCP_TOOLS" | grep -q '"name":"get_db_url"' && pass "mcp tools/list contains get_db_url" || fail "mcp tools/list contains get_db_url" "$MCP_TOOLS"
+echo "$MCP_TOOLS" | grep -q '"name":"set_db_url"' && pass "mcp tools/list contains set_db_url" || fail "mcp tools/list contains set_db_url" "$MCP_TOOLS"
+
+# -----------------------------------------------------------------------------
 sect "SUMMARY"
 
 TOTAL=$((PASS + FAIL))

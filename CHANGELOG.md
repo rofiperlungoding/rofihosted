@@ -6,6 +6,57 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added: Multi-tenant Phase 3 - Developer Experience
+
+The platform tightens its grip on the developer-experience side. A solo dev can paste a repo URL and have the project running, with database, in under three minutes. MCP and CLI mirror the dashboard so AI assistants can ship code without opening a browser.
+
+**One-click auto-deploy from a repo URL:**
+- New `POST /api/projects/auto-deploy` endpoint orchestrates analyze + create + deploy server-side. Body: `repo_url`, optional `branch` and `subdomain_hint`.
+- Server validates the URL (https only, no embedded credentials, &le; 512 chars), runs `analyzeRepoCore` (AI-augmented) with deterministic fallback to `previewRepoCore` when AI is disabled or quota-exhausted.
+- `deriveAutoSubdomain` lowercases + sanitizes the analyzer's name suggestion, applies a 4-char hex suffix when the result would be too short or hit the reserved list (app/www/dashboard/status/api/files), retries once on collision.
+- Project gets stamped with caller's `owner_id` (admin keys may pass `owner_id=` to assign on behalf of a tenant; absence leaves the project unowned per legacy admin convention).
+- Wizard step 1 has the existing "Auto-deploy from repo" button rewired to a single fetch + a single SSE follow against `/api/projects/log-stream?id=...&kind=build`. Build markers (`=== build complete`, `=== published`, `=== build failed`) advance the four stage indicator (analyze / create / deploy / live).
+- Tenant quota gate runs server-side (`max_projects`) plus client-side (button disabled with tooltip) so the UI never lies about availability.
+
+**DB wizard step:**
+- New `Project.db_mode` field on the registry, default `.sqlite`, persists through JSONL load/save with backwards-compat default for legacy projects (no migration).
+- Wizard inserts a "Database" step (between Runtime and Env vars) with a `.scope-chips` toggle: SQLite (zero config) or Bring your own Postgres. Static projects skip the step entirely.
+- Postgres path: validates `postgres://` / `postgresql://` URL, posts `db_mode=postgres` on create, then writes the URL into the project's encrypted secrets vault as `DATABASE_URL` before kicking off the deploy. Supervisor's existing override logic picks the secret over the auto-injected SQLite URI.
+- Resources tab gains a per-project banner showing the active mode and pointing to the right escape hatch.
+
+**Public landing wired to the apex:**
+- `handleRoot` now serves `public.html` for unauth requests at `/`, redirects authed users to the console (`/projects` for tenants, `/` console for admins).
+- `/v1/public/stats` response shape extended (`projects_running`, `total_users`, `uptime_days`, `version_short`) without breaking existing callers. Short SHA is cached 5 minutes in-process to avoid spawning a `git rev-parse` subprocess per request.
+- Hero now leads with Sign up + Sign in dual CTA. Stats strip degrades to `--` placeholders on any failure.
+
+**Developer-facing MCP tools (4 new):**
+- `auto_deploy {repo_url, branch?, subdomain_hint?}` mirrors the HTTP endpoint; tenant ownership enforced; admin keys may pass `owner_id`.
+- `tail_build_log {project_id, max_lines?}` returns trailing log lines plus a `complete` flag derived from terminal markers.
+- `get_db_url {project_id}` returns the effective `DATABASE_URL`. SQLite mode returns the `file:` URI; postgres mode returns a masked form (`postgres://***:***@host:port/dbname`); the raw secret is never exposed via this tool.
+- `set_db_url {project_id, url}` toggles modes. Empty/null clears the secret and reverts to sqlite. Non-empty stores the secret and flips db_mode to postgres.
+- All four respect the existing tenant scoping in `PROJECT_TOOLS`.
+
+**CLI 0.3.0:**
+- `rh deploy <repo-url> [--branch=main] [--sub=name]` is now the primary deploy form. Calls `/api/projects/auto-deploy`, opens the SSE stream, renders a TTY-friendly 4-stage indicator on stderr, exits 0 on `=== published`, 1 on `=== build failed`, 2 on 5-minute timeout. Pipes log lines to stdout for `tee`.
+- Existing `rh deploy <dir> <sub>` zip-upload flow is preserved as a secondary path for users who don't want a Git remote.
+- New `rh db url <sub>` reads the effective DATABASE_URL (masked when postgres). `rh db url <sub> <postgres-url>` sets the secret + flips db_mode. `rh db url <sub> --clear` reverts to sqlite.
+- `rh whoami --json` for scripting; existing `rh whoami` keeps human-readable output.
+- `rh --version` reads from package.json so help and version stay in sync.
+
+**API surface (additive):**
+- `apiProjectsCreate` and `apiProjectsUpdate` now honor a `db_mode` form field (default sqlite, parses via `projects.DbMode.fromString`).
+- `/api/me` exposes `max_projects` and `max_rss_mb` so the dashboard can grey out the New project button when a tenant hits their quota.
+
+Cache busters bumped v=39 -> v=40 across all 20 templates.
+
+Smoke tests: 96/96 -> 108/108 (12 new checks for apex landing, public stats shape, /api/me quota, auto-deploy URL validation, MCP tools/list contents).
+
+Note for the operator: `~/test-everything.sh` lives on the phone outside the rsync set (`self-update.sh` only mirrors `zig/hp-server/`). After this release, scp the new test script:
+
+```sh
+scp scripts/test-everything.sh hp:~/test-everything.sh
+```
+
 ### Added: Zero-config DATABASE_URL + Resources tab (Phase 2.9 - dev experience)
 
 Tenants no longer need to know about hp-server's storage layout to use it. Wizard creates a project, pick the runtime, click deploy - it just works.

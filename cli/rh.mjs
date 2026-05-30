@@ -168,8 +168,12 @@ async function cmdSignup() {
   }
 }
 
-async function cmdWhoami({ base, apiKey }) {
+async function cmdWhoami({ base, apiKey }, args = []) {
   const j = await api(base, apiKey, '/v1/whoami');
+  if (args && args.includes('--json')) {
+    console.log(JSON.stringify(j));
+    return;
+  }
   console.log(JSON.stringify(j, null, 2));
 }
 
@@ -378,14 +382,35 @@ async function detectRuntime(dir) {
 }
 
 async function cmdDeploy({ base, apiKey }, args) {
-  // Parse args: rh deploy <dir> <sub> [--detect|--static]
+  // Detect overload: if the first positional arg looks like an HTTPS Git URL,
+  // route to the repo-URL flow. Else fall through to the legacy zip-upload
+  // path. (We accept .git suffix or plain github/gitlab/bitbucket URLs.)
   const positional = args.filter(a => !a.startsWith('--'));
+  const first = positional[0] || '';
+  const isRepoUrl = /^https:\/\/.*\.git$/.test(first) ||
+                    /^https:\/\/(github|gitlab|bitbucket)\.com\/.+\/.+/.test(first);
+  if (isRepoUrl) {
+    if (positional.length > 1) {
+      // The user gave both a URL and a subdomain - we accept the URL but use
+      // the second positional as a subdomain hint.
+      console.log(`note: 'rh deploy <repo-url> <sub>' is shorthand; subdomain is now a hint, server may suffix it.`);
+    }
+    const branchFlag = (args.find(a => a.startsWith('--branch=')) || '').slice('--branch='.length);
+    const subFlag = (args.find(a => a.startsWith('--sub=')) || '').slice('--sub='.length);
+    return cmdDeployRepo({ base, apiKey }, {
+      repo_url: first,
+      branch: branchFlag || 'main',
+      subdomain_hint: subFlag || positional[1] || '',
+    });
+  }
+
+  // Legacy: rh deploy <dir> <sub> [--detect|--static]
   const flags = args.filter(a => a.startsWith('--'));
   const [dir, sub] = positional;
-  if (!dir || !sub) fail('usage: rh deploy <directory> <subdomain> [--detect|--static]');
+  if (!dir || !sub) fail('usage:\n  rh deploy <repo-url> [--branch=main] [--sub=name]\n  rh deploy <directory> <subdomain> [--detect|--static]');
 
   const stat = await fs.stat(dir).catch(() => null);
-  if (!stat || !stat.isDirectory()) fail(`not a directory: ${dir}`);
+  if (!stat || !stat.isDirectory()) fail(`not a directory and not a recognized https Git URL: ${dir}`);
 
   // Default to detection if neither flag given
   const forceStatic = flags.includes('--static');
@@ -456,6 +481,116 @@ async function cmdDeploy({ base, apiKey }, args) {
   const j = await res.json();
   if (!j.ok) fail(`upload failed: ${j.err || JSON.stringify(j)}`);
   ok(`deployed: https://${sub}.rofihosted.space`);
+}
+
+// One-click deploy from a public Git repo URL. Posts to the server-side
+// orchestrator (`/api/projects/auto-deploy`), then opens the SSE log stream
+// to render a 4-stage progress indicator. Mirrors the dashboard flow.
+async function cmdDeployRepo({ base, apiKey }, { repo_url, branch, subdomain_hint }) {
+  if (!/^https:\/\//i.test(repo_url)) fail('repo URL must start with https://');
+
+  const isTty = process.stderr.isTTY;
+  const stages = ['analyze', 'create', 'deploy', 'live'];
+  const state = { analyze: 'pending', create: 'pending', deploy: 'pending', live: 'pending' };
+  const renderStages = () => {
+    if (!isTty) return; // CI: emit one line per stage transition instead.
+    const labels = stages.map(s => {
+      const mark = state[s] === 'done' ? '\u2713' : state[s] === 'fail' ? 'X' : state[s] === 'running' ? '>' : '-';
+      return `[${s.toUpperCase()} ${mark}]`;
+    });
+    process.stderr.write(`\r${labels.join(' ')}        \r`);
+  };
+  const setStage = (s, v) => {
+    state[s] = v;
+    if (!isTty) console.error(`[${s}] ${v}`);
+    renderStages();
+  };
+
+  setStage('analyze', 'running');
+  const fd = new URLSearchParams();
+  fd.set('repo_url', repo_url);
+  if (branch) fd.set('branch', branch);
+  if (subdomain_hint) fd.set('subdomain_hint', subdomain_hint);
+
+  // The auto-deploy endpoint is on the dashboard host, not /v1/. We use the
+  // admin API key with an X-API-Key header for auth (admin keys synthesize a
+  // legacy admin identity per Phase 2.1 changes).
+  const resp = await fetch(`${base}/api/projects/auto-deploy`, {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: fd.toString(),
+  });
+  const j = await resp.json().catch(() => ({}));
+  if (!j.ok) {
+    setStage('analyze', 'fail');
+    if (isTty) process.stderr.write('\n');
+    fail(`auto-deploy failed: ${j.err || resp.status}${j.stderr ? ' \u2014 ' + j.stderr.slice(0, 300) : ''}`);
+  }
+  setStage('analyze', 'done');
+  setStage('create', 'done');
+  setStage('deploy', 'running');
+
+  if (isTty) process.stderr.write('\n');
+  console.error(`project_id=${j.project_id} subdomain=${j.subdomain} ai_used=${j.ai_used} runtime=${j.runtime}`);
+
+  // Stream the build log via SSE. Node 18+ has the WHATWG fetch reader.
+  const sseUrl = `${base}${j.stream_url || `/api/projects/log-stream?id=${j.project_id}&kind=build`}`;
+  const sseResp = await fetch(sseUrl, { headers: { 'X-API-Key': apiKey, Accept: 'text/event-stream' } });
+  if (!sseResp.ok || !sseResp.body) {
+    setStage('deploy', 'fail');
+    fail(`could not open log stream (status ${sseResp.status})`);
+  }
+
+  let exitCode = 2; // timeout default
+  const timeoutMs = 5 * 60 * 1000;
+  const reader = sseResp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  const startedAt = Date.now();
+
+  const advance = (line) => {
+    if (line.startsWith('data: ')) {
+      const payload = line.slice(6);
+      console.log(payload);
+      if (/=== build complete/i.test(payload) || /=== published/i.test(payload)) {
+        setStage('deploy', 'done');
+        setStage('live', 'done');
+        exitCode = 0;
+        return true;
+      }
+      if (/=== build failed/i.test(payload)) {
+        setStage('deploy', 'fail');
+        exitCode = 1;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trimEnd();
+      buf = buf.slice(idx + 1);
+      if (advance(line)) {
+        try { reader.cancel(); } catch {}
+        if (isTty) process.stderr.write('\n');
+        if (exitCode === 0) {
+          ok(`deployed: https://${j.subdomain}.rofihosted.space`);
+        }
+        process.exit(exitCode);
+      }
+    }
+  }
+  // Timeout
+  setStage('deploy', 'running');
+  setStage('live', 'pending');
+  if (isTty) process.stderr.write('\n');
+  console.error(`timeout: build still running after ${timeoutMs / 1000}s. Tail with: rh tail ${j.subdomain} build`);
+  process.exit(2);
 }
 
 async function cmdLs({ base, apiKey }) {
@@ -611,6 +746,73 @@ async function cmdRedeploy({ base, apiKey }, args) {
   ok(`deploy started for ${project.subdomain}. Tail with: rh logs ${project.subdomain}`);
 }
 
+// rh db url <sub>            -> show effective DATABASE_URL (masked when postgres)
+// rh db url <sub> <postgres> -> set DATABASE_URL secret + flip db_mode=postgres
+// rh db url <sub> --clear    -> remove DATABASE_URL + revert db_mode=sqlite
+async function cmdDb({ base, apiKey }, args) {
+  const [sub_cmd, sub, ...rest] = args;
+  if (sub_cmd !== 'url' || !sub) {
+    fail('usage:\n  rh db url <subdomain>\n  rh db url <subdomain> <postgres-url>\n  rh db url <subdomain> --clear');
+  }
+  const project = await findProject(base, apiKey, sub);
+  const arg2 = rest[0];
+
+  // Read mode
+  if (!arg2) {
+    // Look up the project record (already have it from findProject) and the
+    // secret if mode is postgres. The project listing exposes db_mode.
+    if ((project.db_mode || 'sqlite') === 'sqlite') {
+      console.log(`db_mode: sqlite`);
+      console.log(`url:     file:/data/data/com.termux/files/home/data/dbs/${project.id}.db`);
+      console.log(`(injected as DATABASE_URL automatically; ROFI_DB_PATH also set.)`);
+      return;
+    }
+    // Postgres mode: hit the project's secrets endpoint for the value, then mask it.
+    const sl = await api(base, apiKey, `/api/projects/secrets/list?id=${project.id}`);
+    const has = (sl.keys || []).includes('DATABASE_URL');
+    if (!has) {
+      console.log(`db_mode: postgres`);
+      console.log(`url:     (none set in vault yet - run: rh db url ${project.subdomain} <postgres-url>)`);
+      return;
+    }
+    // We don't have a "get one secret value" endpoint exposed publicly (by
+    // design). The dashboard masks via the MCP get_db_url tool. Best the CLI
+    // can do without sniffing the vault is acknowledge that a value exists.
+    console.log(`db_mode: postgres`);
+    console.log(`url:     (DATABASE_URL is set in the project's encrypted vault; not retrievable from the CLI.)`);
+    console.log(`hint:    rotate via:  rh db url ${project.subdomain} '<new-postgres-url>'`);
+    return;
+  }
+
+  // Mutate
+  if (arg2 === '--clear') {
+    // Delete the secret then flip db_mode back to sqlite via /api/projects/update.
+    await api(base, apiKey, '/api/projects/secrets/delete', {
+      method: 'POST',
+      ...form({ project_id: project.id, key: 'DATABASE_URL' }),
+    }).catch(() => {});
+    await api(base, apiKey, '/api/projects/update', {
+      method: 'POST',
+      ...form({ id: project.id, db_mode: 'sqlite' }),
+    });
+    ok(`${project.subdomain}: db_mode reverted to sqlite. Restart for env to apply.`);
+    return;
+  }
+
+  if (!/^postgres(ql)?:\/\//i.test(arg2)) {
+    fail('postgres URL must start with postgres:// or postgresql:// (or pass --clear to revert)');
+  }
+  await api(base, apiKey, '/api/projects/secrets/set', {
+    method: 'POST',
+    ...form({ project_id: project.id, key: 'DATABASE_URL', value: arg2 }),
+  });
+  await api(base, apiKey, '/api/projects/update', {
+    method: 'POST',
+    ...form({ id: project.id, db_mode: 'postgres' }),
+  });
+  ok(`${project.subdomain}: DATABASE_URL stored in vault, db_mode=postgres. Restart for env to apply.`);
+}
+
 async function cmdTail({ base, apiKey }, args) {
   const [sub, kind = 'runtime'] = args;
   if (!sub) fail('usage: rh tail <subdomain> [runtime|build]');
@@ -699,13 +901,25 @@ async function cmdMcpConfig({ base }) {
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
 
+  if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+    // Read version from the bundled package.json so the CLI doesn't drift.
+    try {
+      const pkgUrl = new URL('./package.json', import.meta.url);
+      const pkg = JSON.parse(await fs.readFile(pkgUrl, 'utf8'));
+      console.log(pkg.version);
+    } catch {
+      console.log('0.3.0');
+    }
+    return;
+  }
+
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(`rh - rofihosted CLI`);
     console.log();
     console.log(`Account & system:`);
     console.log(`  rh signup                      sign up for a new tenant account`);
     console.log(`  rh login                       save API key (interactive)`);
-    console.log(`  rh whoami                      show current API key identity`);
+    console.log(`  rh whoami [--json]             show current API key identity`);
     console.log(`  rh status                      hp-server vitals`);
     console.log(`  rh power                       charger and battery status`);
     console.log(`  rh update                      pull latest commit and rebuild`);
@@ -714,7 +928,8 @@ async function main() {
     console.log();
     console.log(`Projects:`);
     console.log(`  rh ls                          list all projects`);
-    console.log(`  rh deploy <dir> <sub>          zip and upload as static project`);
+    console.log(`  rh deploy <repo-url>           one-click deploy from a public Git repo`);
+    console.log(`  rh deploy <dir> <sub>          (legacy) zip and upload as static project`);
     console.log(`  rh redeploy <sub>              re-clone the repo and rebuild`);
     console.log(`  rh start <sub>                 start a project`);
     console.log(`  rh stop <sub>                  stop a project`);
@@ -727,6 +942,9 @@ async function main() {
     console.log(`  rh secret set <sub> <key> [v]  set a secret (prompts if v omitted)`);
     console.log(`  rh secret rm <sub> <key>       remove a secret`);
     console.log(`  rh sql <sub> "<query>"         run SQL against the project's SQLite DB`);
+    console.log(`  rh db url <sub>                show effective DATABASE_URL (masked)`);
+    console.log(`  rh db url <sub> <postgres>     set DATABASE_URL secret + flip db_mode`);
+    console.log(`  rh db url <sub> --clear        remove DATABASE_URL + revert to sqlite`);
     console.log();
     console.log(`Security:`);
     console.log(`  rh ban <ip> [reason]           manually block an IP`);
@@ -774,6 +992,7 @@ async function main() {
     ban: cmdBan,
     unban: cmdUnban,
     mcp: cmdMcpConfig,
+    db: cmdDb,
   };
   const handler = handlers[cmd];
   if (!handler) fail(`unknown command: ${cmd}. Run 'rh help' for the list.`);
