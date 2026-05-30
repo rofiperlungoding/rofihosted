@@ -1,200 +1,210 @@
-# Disaster Recovery
+# Recovery (cold boot, watchdog, OOM)
 
-This document covers what to do when the Sharp Aquos S40P device that runs
-rofihosted dies, gets stolen, breaks, or otherwise becomes unreachable.
+Sharp Aquos Sense4 Plus is the only piece of hardware running rofihosted, and the battery is failing — pulling the charger reliably bootloops the device. This document covers what happens between "phone went dark" and "site is serving traffic again."
 
-## Known device quirks
+## TL;DR
 
-The device has a faulty charging circuit. It bootloops the moment AC power
-is removed if it's currently powered on. To shut down cleanly, you must:
+The phone reboots, Termux:Boot fires `~/.termux/boot/01-server.sh`, that script starts hp-server + cloudflared + watchdog + sshd, hp-server's `restartPersisted()` brings every project that was `running` at last shutdown back online, and the watchdog keeps everything alive from then on. Hp-server itself watches the watchdog (`watchdogSentinelLoop`), so a dead watchdog is also self-healing.
 
-1. Plug the charger in
-2. Hold power, choose Shutdown
-3. Wait until fully off
-4. Then unplug
+End-to-end: ~15 to 30 seconds from kernel boot to "first request served."
 
-To boot it back up, you must:
+## The recovery chain
 
-1. Plug the charger in first
-2. Press power
-3. Wait for Android to load before doing anything else
-
-The battery itself is fine; the issue is at the charging IC level. The
-in-process `powermon` module on hp-server alerts via Telegram the second
-plug status changes from CHARGING/FULL to DISCHARGING/NOT_CHARGING, so you
-get notified in seconds and can plug the cable back before the device
-loses power.
-
-## What gets lost when the phone dies
-
-| Asset                                | Where it lives                        | Replaceable from        |
-|--------------------------------------|---------------------------------------|-------------------------|
-| hp-server source code                | github.com/rofiperlungoding/rofihosted| GitHub                  |
-| hp-server compiled binary            | `~/zig/hp-server/zig-out/bin/`        | rebuild from source     |
-| Project registry                     | `~/.hp-server-projects.jsonl`         | NOT replaceable, backup |
-| Per-project data DB                  | `~/data/dbs/<id>.db`                  | NOT replaceable, backup |
-| Per-project secrets vault            | `~/data/projects/<id>/secrets.bin`    | NOT replaceable, backup |
-| Per-project working tree (build)     | `~/data/projects/<id>/`               | re-clone from repo URL  |
-| Auth pepper                          | `~/.hp-server-secret.bin`             | regenerate (logs out)   |
-| Cloudflare tunnel credentials        | `~/.cloudflared/<tunnel-id>.json`     | recreate via cloudflared|
-| Cloudflare tunnel certificate        | `~/.cloudflared/cert.pem`             | re-login via cloudflared|
-
-The first three rows are the only assets that are truly irreplaceable: the
-project registry, the per-project DBs, and the encrypted secrets vaults.
-Those are what backups should target.
-
-## Backup strategy
-
-### Option A: rsync to your laptop (manual, reliable)
-
-When the phone is reachable on LAN:
-
-```sh
-# from your laptop
-mkdir -p ~/rofihosted-backups/$(date +%Y%m%d)
-rsync -av --include='/.hp-server-projects.jsonl' \
-         --include='/.hp-server-creds.txt' \
-         --include='/.hp-server-secret.bin' \
-         --include='/.hp-server-blocklist.txt' \
-         --include='/data/' \
-         --include='/data/dbs/***' \
-         --include='/data/projects/' \
-         --include='/data/projects/*/' \
-         --include='/data/projects/*/secrets.bin' \
-         --exclude='*' \
-         hp:/data/data/com.termux/files/home/ ~/rofihosted-backups/$(date +%Y%m%d)/
+```
+power on
+  v
+Android 12 boot
+  v
+Termux:Boot package fires
+  v
+~/.termux/boot/01-server.sh                        (`boot_script_present`)
+  | export env from ~/.hp-server.env
+  | termux-wake-lock
+  | sshd
+  | hp-server (Zig binary)                         (uptime_seconds)
+  | cloudflared --tunnel run                       (`cloudflared_running`)
+  | ~/watchdog.sh (long-lived loop)                (`watchdog_running`)
+  | ~/backup.sh (one-shot at boot)
+  v
+hp-server.main()
+  | supervisor.restartPersisted()                  (`projects_running`)
+  | digestLoop, policyLoop, embeddings, dbcache
+  | watchdogSentinelLoop (re-spawns watchdog if it dies)
+  | hourlyBackupLoop
+  v
+serving traffic
 ```
 
-This grabs everything irreplaceable and skips the working trees (which
-re-clone from GitHub on demand).
+Every node in that chain is reflected in `GET /v1/system/recovery` so the smoke test can assert all of it.
 
-### Option B: trigger from /shell (works from anywhere)
+## Components
 
-Once the built-in shell is up, run from `app.rofihosted.space/shell`:
+### Termux:Boot
 
-```sh
-mkdir -p ~/backups
-ts=$(date +%Y%m%d-%H%M%S)
-tar czf ~/backups/rofihosted-$ts.tar.gz \
-  ~/.hp-server-projects.jsonl \
-  ~/.hp-server-creds.txt \
-  ~/.hp-server-secret.bin \
-  ~/.hp-server-blocklist.txt \
-  ~/data/dbs/ \
-  $(find ~/data/projects -name 'secrets.bin' 2>/dev/null) 2>/dev/null
-ls -la ~/backups/
+- Package: `com.termux.boot` from F-Droid.
+- Granted "Run on boot" permission once during install.
+- Runs every script in `~/.termux/boot/` at OS boot. The only file there is `01-server.sh`.
+- If this is missing (uninstalled, permission revoked) the entire chain stops at the kernel. There is no fallback.
+
+### `~/.termux/boot/01-server.sh`
+
+The master boot script. Idempotent — every step checks `pgrep` first so re-running it during a hot reboot is safe. Sequence:
+
+1. Append to `~/logs/boot.log`. The mtime on this file is what `/v1/system/recovery.boot_log_recent_unix` reports.
+2. Source `~/.hp-server.env` so children inherit credentials and API keys.
+3. `termux-wake-lock` to prevent Android's aggressive sleep killing background services.
+4. `sshd` (port 8022, key-only).
+5. `hp-server` (Zig binary at `~/zig/hp-server/zig-out/bin/hp-server`).
+6. `cloudflared tunnel run` via `proot` (so DNS + CA paths resolve correctly under Bionic).
+7. `~/watchdog.sh` if not already running.
+8. One-shot `~/backup.sh` if `BACKUP_PASSPHRASE` is set.
+
+### `~/watchdog.sh`
+
+Bash loop, 30 s interval. Five checks per tick:
+
+| # | Check | Action on failure |
+|---|---|---|
+| 1 | `pgrep -f 'hp-server$'` | Spawn fresh hp-server |
+| 2 | `curl /health` succeeds | After 3 consecutive failures, force-restart hp-server (catches deadlocks pgrep misses) |
+| 3 | hp-server RSS &le; 384 MB | SIGTERM, then respawn (lets writebuf flush before Android OOM kills it) |
+| 4 | `pgrep -f 'cloudflared.*tunnel'` | Spawn cloudflared |
+| 5 | `~/data/.tunnel-restart-requested` flag | Restart cloudflared (hp-server's tunnel-health watchdog drops the flag when the tunnel goes dark) |
+
+### `watchdogSentinelLoop` (inside hp-server)
+
+What kept the watchdog alive before? Nothing — if the watchdog itself died, no one was watching. So hp-server now also watches the watchdog. Every 90 seconds:
+
+- `pgrep -f 'watchdog\.sh'`
+- If exit code != 0 (no match), respawn it via `setsid nohup ~/watchdog.sh > ~/logs/watchdog.log 2>&1 < /dev/null &`
+
+This forms a loop: hp-server watches watchdog, watchdog watches hp-server. The only way both die simultaneously is a kernel-level event (panic, OOM hitting both processes in the same scan). At that point Termux:Boot picks up the pieces on next cold boot.
+
+### `supervisor.restartPersisted()`
+
+Walks `~/.hp-server-projects.jsonl` at hp-server boot. For every project with `status == "running"` at last shutdown:
+
+1. Read its secrets vault.
+2. Inject `PORT`, `HOST`, `NODE_ENV`, `DATABASE_URL`, etc. (Phase 2.9 zero-config env).
+3. `sh -c <start_cmd>` with stdout/stderr piped to `~/data/projects/<id>/logs/runtime.log`.
+
+Static projects don't need a process — they're just files under `current/`, served by hp-server's HTTP layer.
+
+This is why a clean reboot leaves every project online without operator intervention.
+
+## Verifying recovery is wired correctly
+
+`GET /v1/system/recovery` (admin scope):
+
+```json
+{
+  "ok": true,
+  "boot_script_present": true,
+  "watchdog_script_present": true,
+  "watchdog_running": true,
+  "cloudflared_running": true,
+  "boot_log_recent_unix": 1780125425,
+  "uptime_seconds": 12347,
+  "projects_running": 2,
+  "projects_total": 5
+}
 ```
 
-Then download via the `/files` page or scp from your laptop.
+Smoke test (`scripts/test-everything.sh` "BOOT RECOVERY CHAIN" section) asserts each `*_present` and `*_running` field is true. If any are false, a real cold boot will leave the platform broken.
 
-## Recovery on a brand new device
+## Reboot drill (manual full test)
 
-Assume new phone, fresh Termux install, no apps yet.
+1. Save current uptime as baseline:
 
-### 1. Install Termux + dependencies
+   ```sh
+   curl -sm 5 -H "X-API-Key: $HP_ADMIN_KEY" \
+     https://app.rofihosted.space/v1/system/recovery
+   ```
+
+2. Trigger a reboot. From the phone or a connected SSH session:
+
+   ```sh
+   # On phone
+   reboot
+   # Or via API (requires admin scope, will hang at 524)
+   curl -sm 10 -H "X-API-Key: $HP_ADMIN_KEY" -X POST \
+     "https://app.rofihosted.space/api/system/exec" \
+     -H "Content-Type: application/json" \
+     -d '{"cmd":"reboot","timeout_ms":5000}'
+   ```
+
+3. Wait 60-120 seconds. Cloudflared takes longest to come back (named tunnel registration).
+
+4. Re-check:
+
+   ```sh
+   curl -sm 5 -H "X-API-Key: $HP_ADMIN_KEY" \
+     https://app.rofihosted.space/v1/system/recovery
+   ```
+
+   - `uptime_seconds` should be a small number (< 200).
+   - `boot_log_recent_unix` should be very recent.
+   - `watchdog_running` and `cloudflared_running` must be true.
+   - `projects_running` should match what was running before reboot.
+
+5. Run smoke test for full coverage:
+
+   ```sh
+   ssh hp 'bash ~/test-everything.sh 2>&1 | tail -10'
+   ```
+
+   The "BOOT RECOVERY CHAIN" section should be all green.
+
+## Failure modes and recovery paths
+
+| Failure | Recovery layer that catches it | Time to recover |
+|---|---|---|
+| hp-server crashes (segfault, panic) | `watchdog.sh` step 1 | &le; 30 s |
+| hp-server hangs (deadlock, infinite loop) | `watchdog.sh` step 2 | &le; 90 s |
+| hp-server leaks RAM | `watchdog.sh` step 3 | &le; 30 s after threshold |
+| cloudflared crashes | `watchdog.sh` step 4 | &le; 30 s |
+| cloudflared connected but no traffic | `watchdog.sh` step 5 (via hp-server flag) | 2-5 min |
+| `watchdog.sh` dies | `watchdogSentinelLoop` in hp-server | &le; 90 s |
+| Both watchdog + hp-server die | next cold boot via Termux:Boot | depends on operator |
+| Phone power off / battery yanked | `01-server.sh` on next power-on | 60-120 s after kernel up |
+| Termux:Boot uninstalled | None — operator must reinstall | manual |
+| `~/.hp-server.env` deleted | hp-server boots without auth keys; data still safe; operator must restore from backup | minutes |
+| Disk full | hp-server logs warnings, no automatic recovery; backups will fail | operator must clear |
+| Cloudflare account disabled / DNS broken | None — outside the device | external |
+
+## Things that are NOT auto-recovered
+
+- **Termux:Boot uninstalled.** If the operator removes Termux:Boot or revokes its boot permission, the entire chain stops at the kernel. There is no software fallback.
+- **Cloudflare credentials expired or rotated.** The named tunnel uses long-lived credentials at `~/.cloudflared/`. If those are revoked, cloudflared fails to register. Operator must run `scripts/cf-login.sh` again.
+- **`~/.hp-server.env` deleted.** hp-server boots in a degraded mode (no AI, no Telegram, no R2 backup, possibly no auth) but doesn't crash. The operator restores from the latest age-encrypted backup.
+- **Pepper file deleted.** `~/.hp-server-secret.bin` rotation invalidates every session and every secret encrypted at rest. There is no automatic recovery — restore from a backup that has the matching pepper, or do a clean reset.
+- **Disk full.** Every layer logs warnings, none can free space on its own. Hourly backup will fail; smoke test will show it.
+
+## Re-installing the recovery chain from scratch
+
+If the phone is wiped or the operator is rebuilding from a backup:
 
 ```sh
-pkg update && pkg upgrade -y
-pkg install -y git openssh openssl-tool curl unzip nodejs python proot termux-api
+# 1. Install Termux + Termux:Boot from F-Droid
+# 2. pkg install openssh nodejs zig curl git rclone age termux-api
+# 3. Clone the repo
+git clone https://github.com/rofiperlungoding/rofihosted.git ~/rofihosted-src
+
+# 4. Copy boot script
+cp ~/rofihosted-src/scripts/boot-all.sh ~/.termux/boot/01-server.sh
+chmod +x ~/.termux/boot/01-server.sh
+
+# 5. Restore env + secrets from latest backup
+age -d -i ~/.age-key ~/backups/latest.tar.age | tar -xf - -C ~
+
+# 6. Build the binary
+cd ~/zig/hp-server && ~/rebuild.sh
+
+# 7. Run boot script once manually to verify
+bash ~/.termux/boot/01-server.sh
+
+# 8. Reboot to confirm Termux:Boot fires
+reboot
 ```
 
-(termux-api needs the Termux:API APK from F-Droid for battery status to work.)
-
-### 2. Install Zig
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/rofiperlungoding/rofihosted/main/scripts/install-zig-014.sh | sh
-```
-
-### 3. Clone the source
-
-```sh
-git clone https://github.com/rofiperlungoding/rofihosted ~/zig
-cd ~/zig/hp-server
-```
-
-### 4. Restore the irreplaceable data
-
-Unpack the most recent backup:
-
-```sh
-cd ~
-tar xzf /path/to/rofihosted-YYYYMMDD-HHMMSS.tar.gz
-```
-
-This drops `.hp-server-*` files in `$HOME` and rebuilds `~/data/dbs/` and
-the per-project `secrets.bin` files.
-
-### 5. Re-create the Cloudflare tunnel
-
-```sh
-~/scripts/install-cloudflared.sh
-~/scripts/cf-login.sh        # opens browser, sign in to Cloudflare
-~/scripts/recreate-tunnel.sh # creates rofihosted-tunnel and rotates DNS
-```
-
-### 6. Build hp-server
-
-```sh
-~/rebuild.sh
-```
-
-### 7. Start the watchdog
-
-```sh
-~/scripts/watchdog.sh &
-```
-
-The watchdog spawns hp-server, hp-server reads the registry, and supervisor
-auto-starts every project marked `running`. Project working trees that are
-gone get re-cloned on the next deploy.
-
-### 8. Verify
-
-```sh
-~/verify-everything.sh
-```
-
-Should show 30/30 PASS plus the project list from before.
-
-## What to do RIGHT NOW
-
-1. Set up Telegram bot via `scripts/set-telegram.sh` so charger-disconnect
-   alerts actually reach you.
-2. Run option A or B above weekly. Set a calendar reminder.
-3. Keep at least one charger cable that works permanently with the device.
-   Buy a spare; this is the single point of failure.
-4. Consider a UPS or battery pack between mains and the phone so brief
-   power outages don't kill it.
-
-## What hp-server already does for you
-
-- `powermon` polls battery_status every 30s and fires Telegram alerts on
-  charger-disconnect.
-- On disconnect, hp-server runs `sync` to flush filesystem buffers before
-  the device potentially bootloops.
-- SQLite uses WAL mode + atomic rename writes for the registry, so a
-  sudden power loss doesn't corrupt the project list (worst case: loses
-  the last few seconds of changes).
-- Watchdog (`scripts/watchdog.sh`) auto-restarts hp-server if it crashes
-  and respawns cloudflared if the tunnel dies.
-- supervisor.zig writes a pidfile per project so child processes get
-  reaped cleanly across hp-server restarts.
-
-## Failure modes and what they look like
-
-**Charger cable dies overnight**: device bootloops, all projects offline
-until you replace the cable. Telegram pings you instantly when status
-flips to DISCHARGING. Backup is fine; just plug in and reboot.
-
-**Phone storage corrupts**: rare, but if `~/data/dbs/<id>.db` becomes
-unreadable, the project's auth + app data is gone. Restore from latest
-backup. Project source code and Cloudflare config are unaffected.
-
-**Phone gets stolen / lost**: replace device, follow recovery steps above.
-Cloudflare tunnel credentials let attackers proxy traffic through your
-account, so revoke the tunnel from Cloudflare dashboard immediately.
-
-**Cloudflare account compromised**: revoke tunnel, revoke API tokens,
-rotate `~/.cloudflared/cert.pem` and tunnel JSON, re-issue, redeploy.
-Project data on the phone is unaffected.
+Time-to-restore is usually 15-30 minutes including the Zig build.

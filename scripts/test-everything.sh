@@ -466,6 +466,27 @@ echo "$MCP_TOOLS" | grep -q '"name":"get_db_url"' && pass "mcp tools/list contai
 echo "$MCP_TOOLS" | grep -q '"name":"set_db_url"' && pass "mcp tools/list contains set_db_url" || fail "mcp tools/list contains set_db_url" "$MCP_TOOLS"
 
 # -----------------------------------------------------------------------------
+sect "BOOT RECOVERY CHAIN"
+
+# /v1/system/recovery exposes each layer of the cold-boot recovery stack.
+RECOV=$(curl -sm 8 -H "X-API-Key: $KEY" "$BASE/v1/system/recovery")
+echo "$RECOV" | grep -q '"ok":true' && pass "recovery endpoint reachable" || { fail "recovery endpoint reachable" "$RECOV"; }
+
+# Each recovery layer must report alive. If any of these are false, a real
+# cold boot will leave the platform broken.
+echo "$RECOV" | grep -q '"boot_script_present":true' && pass "boot: ~/.termux/boot/01-server.sh present" || fail "boot script missing" "$RECOV"
+echo "$RECOV" | grep -q '"watchdog_script_present":true' && pass "boot: ~/watchdog.sh present" || fail "watchdog script missing" "$RECOV"
+echo "$RECOV" | grep -q '"watchdog_running":true' && pass "boot: watchdog.sh process alive" || fail "watchdog NOT running" "$RECOV"
+echo "$RECOV" | grep -q '"cloudflared_running":true' && pass "boot: cloudflared tunnel alive" || fail "cloudflared NOT running" "$RECOV"
+
+# Termux:Boot package installed (only checkable on phone).
+if pm list packages 2>/dev/null | grep -q 'package:com.termux.boot'; then
+    pass "boot: Termux:Boot package installed"
+else
+    warn "boot: Termux:Boot package check skipped (not on phone)"
+fi
+
+# -----------------------------------------------------------------------------
 sect "SUMMARY"
 
 TOTAL=$((PASS + FAIL))

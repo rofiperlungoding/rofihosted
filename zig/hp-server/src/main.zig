@@ -233,6 +233,12 @@ pub fn main() !void {
     const backup_thread = try std.Thread.spawn(.{}, hourlyBackupLoop, .{});
     backup_thread.detach();
 
+    // Watchdog sentinel: re-spawns ~/watchdog.sh if it dies. Belt + suspenders
+    // for the recovery chain so a dead watchdog doesn't silently lose the
+    // hp-server / cloudflared liveness checks.
+    const wd_sentinel = try std.Thread.spawn(.{}, watchdogSentinelLoop, .{});
+    wd_sentinel.detach();
+
     const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path, uptime_path, &store_mutex });
     rotator.detach();
 
@@ -3254,6 +3260,92 @@ fn apiSystemPower(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     }, .{});
 }
 
+// =================================================================
+// RECOVERY: liveness chain status (the "everything came back up" check).
+// =================================================================
+// Reports each layer of the cold-boot recovery stack:
+//   1. boot_script_present  -> ~/.termux/boot/01-server.sh exists
+//   2. watchdog_script_present -> ~/watchdog.sh exists
+//   3. watchdog_running      -> pgrep -f watchdog.sh succeeds
+//   4. cloudflared_running   -> pgrep -f cloudflared.*tunnel succeeds
+//   5. boot_log_recent_unix  -> mtime of ~/logs/boot.log (0 if never booted)
+//   6. uptime_seconds        -> hp-server's own uptime
+//   7. projects_running      -> count of projects in .running state
+//
+// Each field is a fact the operator (or smoke test) can assert on. Used to
+// answer "if I yank the charger and the phone reboots, will rofihosted
+// come back?" by reading what actually came up after the last cold boot.
+fn apiSystemRecovery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = req;
+
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const boot_script = try std.fmt.allocPrint(res.arena, "{s}/.termux/boot/01-server.sh", .{home});
+    const watchdog_script = try std.fmt.allocPrint(res.arena, "{s}/watchdog.sh", .{home});
+    const boot_log = try std.fmt.allocPrint(res.arena, "{s}/logs/boot.log", .{home});
+
+    const boot_script_present = blk: {
+        std.fs.accessAbsolute(boot_script, .{}) catch break :blk false;
+        break :blk true;
+    };
+    const watchdog_script_present = blk: {
+        std.fs.accessAbsolute(watchdog_script, .{}) catch break :blk false;
+        break :blk true;
+    };
+
+    var boot_log_recent_unix: i64 = 0;
+    if (std.fs.openFileAbsolute(boot_log, .{})) |f| {
+        defer f.close();
+        if (f.stat()) |st| {
+            boot_log_recent_unix = @divTrunc(st.mtime, std.time.ns_per_s);
+        } else |_| {}
+    } else |_| {}
+
+    // pgrep helpers. pgrep returns 0 if at least one match.
+    const watchdog_running = pgrepMatches(res.arena, "watchdog\\.sh");
+    const cloudflared_running = pgrepMatches(res.arena, "cloudflared.*tunnel");
+
+    // Count running projects from snapshot.
+    var projects_running_count: usize = 0;
+    var projects_total: usize = 0;
+    {
+        app.projects.mutex.lock();
+        defer app.projects.mutex.unlock();
+        projects_total = app.projects.projects.items.len;
+        for (app.projects.projects.items) |p| {
+            if (p.status == .running) projects_running_count += 1;
+        }
+    }
+
+    const uptime_seconds: i64 = std.time.timestamp() - app.started_at;
+
+    try res.json(.{
+        .ok = true,
+        .boot_script_present = boot_script_present,
+        .watchdog_script_present = watchdog_script_present,
+        .watchdog_running = watchdog_running,
+        .cloudflared_running = cloudflared_running,
+        .boot_log_recent_unix = boot_log_recent_unix,
+        .uptime_seconds = uptime_seconds,
+        .projects_running = projects_running_count,
+        .projects_total = projects_total,
+    }, .{});
+}
+
+/// Return true iff `pgrep -f <pattern>` exits 0 (at least one match).
+fn pgrepMatches(allocator: std.mem.Allocator, pattern: []const u8) bool {
+    var argv = [_][]const u8{ "pgrep", "-f", pattern };
+    var child = std.process.Child.init(&argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return false;
+    const term = child.wait() catch return false;
+    return switch (term) {
+        .Exited => |c| c == 0,
+        else => false,
+    };
+}
+
 fn apiSystemBackup(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
     // Optional: ?target=local|r2 (default both: local always, r2 if rclone configured)
@@ -3858,6 +3950,14 @@ fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const 
             return;
         }
         return apiSystemBackup(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/v1/system/recovery")) {
+        if (!rec.hasScope(.admin)) {
+            res.status = 403;
+            try res.json(.{ .ok = false, .err = "scope_required", .scope = "admin" }, .{});
+            return;
+        }
+        return apiSystemRecovery(app, req, res);
     }
 
     // Project management endpoints (admin scope). These mirror /api/projects/*
@@ -6150,6 +6250,85 @@ fn hourlyBackupLoop() void {
         }
 
         std.Thread.sleep(60 * 60 * std.time.ns_per_s); // 1 hour
+    }
+}
+
+// =================================================================
+// WATCHDOG SENTINEL (watchdog of the watchdog)
+// =================================================================
+//
+// `watchdog.sh` keeps hp-server + cloudflared alive. But what keeps the
+// watchdog alive? If the watchdog dies for any reason (e.g. operator's
+// `pkill -9` against the wrong target, OS killing it under low memory,
+// shell exits when Termux gets compacted) then we silently lose the
+// recovery layer. The next hp-server crash would be permanent.
+//
+// This loop checks every 90 seconds whether the watchdog is running and
+// re-spawns it from `~/watchdog.sh` if it's gone. Belt + suspenders + a
+// third belt: hp-server self-respawns the watchdog, watchdog self-respawns
+// hp-server, both come back from cold boot via Termux:Boot.
+fn watchdogSentinelLoop() void {
+    // Wait 60s after boot so the boot script has time to start the watchdog
+    // before we check (and avoid double-starting it).
+    std.Thread.sleep(60 * std.time.ns_per_s);
+    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const allocator = std.heap.page_allocator;
+    const script = std.fmt.allocPrint(allocator, "{s}/watchdog.sh", .{home}) catch return;
+    defer allocator.free(script);
+
+    while (true) {
+        // Skip the check if watchdog.sh doesn't exist on disk yet (fresh
+        // setup, partial install). Reschedule for later.
+        std.fs.accessAbsolute(script, .{}) catch {
+            std.Thread.sleep(5 * 60 * std.time.ns_per_s);
+            continue;
+        };
+
+        // pgrep -f 'watchdog\.sh'. Exit code 0 = at least one match, 1 = none.
+        var argv = [_][]const u8{ "pgrep", "-f", "watchdog\\.sh" };
+        var child = std.process.Child.init(&argv, allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        const alive: bool = blk: {
+            child.spawn() catch break :blk true; // err on the side of "alive" to avoid spam-respawn
+            const term = child.wait() catch break :blk true;
+            switch (term) {
+                .Exited => |c| break :blk c == 0,
+                else => break :blk true,
+            }
+        };
+
+        if (!alive) {
+            std.log.warn("watchdog.sh not running, respawning", .{});
+            // setsid nohup ~/watchdog.sh > ~/logs/watchdog.log 2>&1 < /dev/null &
+            // We use the same invocation the boot script uses.
+            const log_path = std.fmt.allocPrint(allocator, "{s}/logs/watchdog.log", .{home}) catch {
+                std.Thread.sleep(90 * std.time.ns_per_s);
+                continue;
+            };
+            defer allocator.free(log_path);
+            const cmd = std.fmt.allocPrint(
+                allocator,
+                "setsid nohup {s} >> {s} 2>&1 < /dev/null &",
+                .{ script, log_path },
+            ) catch {
+                std.Thread.sleep(90 * std.time.ns_per_s);
+                continue;
+            };
+            defer allocator.free(cmd);
+            var argv2 = [_][]const u8{ "sh", "-c", cmd };
+            var spawn_child = std.process.Child.init(&argv2, allocator);
+            spawn_child.stdin_behavior = .Ignore;
+            spawn_child.stdout_behavior = .Ignore;
+            spawn_child.stderr_behavior = .Ignore;
+            spawn_child.spawn() catch |e| {
+                std.log.warn("watchdog respawn failed: {}", .{e});
+            };
+            _ = spawn_child.wait() catch {};
+        }
+
+        std.Thread.sleep(90 * std.time.ns_per_s);
     }
 }
 
