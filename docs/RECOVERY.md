@@ -6,7 +6,9 @@ Sharp Aquos Sense4 Plus is the only piece of hardware running rofihosted, and th
 
 The phone reboots, Termux:Boot fires `~/.termux/boot/01-server.sh`, that script starts hp-server + cloudflared + watchdog + sshd, hp-server's `restartPersisted()` brings every project that was `running` at last shutdown back online, and the watchdog keeps everything alive from then on. Hp-server itself watches the watchdog (`watchdogSentinelLoop`), so a dead watchdog is also self-healing.
 
-End-to-end: ~15 to 30 seconds from kernel boot to "first request served."
+End-to-end: ~15 to 30 seconds from kernel boot to "first request served" — *if* Termux:Boot fires.
+
+If the OEM kills Termux:Boot before it can fire (Sharp, Xiaomi, Realme, Oppo, Vivo, Huawei, Honor are notorious for this), the **termux-job-scheduler fallback** at `~/recovery-job.sh` re-runs the boot script every 15 minutes after boot. Worst-case recovery is therefore 15 minutes regardless of OEM behavior, with no operator intervention.
 
 ## The recovery chain
 
@@ -15,16 +17,21 @@ power on
   v
 Android 12 boot
   v
-Termux:Boot package fires
+Termux:Boot fires (best case)                      (`boot_log_recent_unix` updates)
+  | If OEM kills Termux:Boot before it fires,
+  | the termux-job-scheduler fallback below
+  | takes over within 15 minutes
   v
 ~/.termux/boot/01-server.sh                        (`boot_script_present`)
   | export env from ~/.hp-server.env
   | termux-wake-lock
+  | wait_for_network (max 90s, ping 1.1.1.1)
   | sshd
   | hp-server (Zig binary)                         (uptime_seconds)
   | cloudflared --tunnel run                       (`cloudflared_running`)
   | ~/watchdog.sh (long-lived loop)                (`watchdog_running`)
   | ~/backup.sh (one-shot at boot)
+  | telegram boot notification (optional)
   v
 hp-server.main()
   | supervisor.restartPersisted()                  (`projects_running`)
@@ -33,6 +40,17 @@ hp-server.main()
   | hourlyBackupLoop
   v
 serving traffic
+
+   PARALLEL FALLBACK
+   v
+Android JobScheduler (system-level, persisted)
+  | Every 15 min, fires recovery-job.sh
+  v
+~/recovery-job.sh
+  | If hp-server or cloudflared not running:
+  |   bash ~/.termux/boot/01-server.sh
+  v
+Recovery within 15 minutes regardless of Termux:Boot status
 ```
 
 Every node in that chain is reflected in `GET /v1/system/recovery` so the smoke test can assert all of it.
@@ -91,6 +109,27 @@ Walks `~/.hp-server-projects.jsonl` at hp-server boot. For every project with `s
 Static projects don't need a process — they're just files under `current/`, served by hp-server's HTTP layer.
 
 This is why a clean reboot leaves every project online without operator intervention.
+
+### `~/recovery-job.sh` + termux-job-scheduler
+
+The bullet-proof fallback layer. Sharp Aquos S40P (and many OEM Android skins: Xiaomi MIUI, Realme, Oppo ColorOS, Vivo Funtouch, Huawei EMUI, Honor MagicOS) aggressively kill third-party `RECEIVE_BOOT_COMPLETED` receivers, even with battery optimization disabled. When that happens, Termux:Boot never fires and the entire chain is broken.
+
+This script runs every 15 minutes via Android's native `JobScheduler` (the system-level scheduler that even OEM skins can't disable). The job is registered persisted, so it survives reboots without needing to be re-registered.
+
+```sh
+termux-job-scheduler --script ~/recovery-job.sh \
+  --period-ms 900000 --persisted true
+```
+
+Verify with:
+
+```sh
+termux-job-scheduler --pending
+```
+
+The script itself is a one-liner check: if `hp-server` or `cloudflared` aren't running, it re-runs `~/.termux/boot/01-server.sh` (which is idempotent — every spawn step checks `pgrep` first). Output goes to `~/logs/recovery-job.log`.
+
+Worst-case recovery time after cold boot is therefore 15 minutes regardless of whether Termux:Boot fires.
 
 ## Verifying recovery is wired correctly
 
@@ -167,8 +206,9 @@ Smoke test (`scripts/test-everything.sh` "BOOT RECOVERY CHAIN" section) asserts 
 | cloudflared connected but no traffic | `watchdog.sh` step 6 (via hp-server flag) | 2-5 min |
 | `watchdog.sh` dies | `watchdogSentinelLoop` in hp-server | &le; 90 s |
 | Both watchdog + hp-server die | next cold boot via Termux:Boot | depends on operator |
-| Phone power off / battery yanked | `01-server.sh` on next power-on | 60-120 s after kernel up |
-| Termux:Boot uninstalled | None — operator must reinstall | manual |
+| Phone power off / battery yanked | `01-server.sh` on next power-on (best case) OR `recovery-job.sh` (within 15 min) | 60-120 s after kernel up, OR up to 15 min if Termux:Boot is suppressed |
+| Termux:Boot uninstalled OR suppressed by OEM | `recovery-job.sh` | 15 min |
+| `~/recovery-job.sh` not registered with JobScheduler | None — operator must register manually | indefinite |
 | `~/.hp-server.env` deleted | hp-server boots without auth keys; data still safe; operator must restore from backup | minutes |
 | Disk full | hp-server logs warnings, no automatic recovery; backups will fail | operator must clear |
 | Cloudflare account disabled / DNS broken | None — outside the device | external |
@@ -204,6 +244,12 @@ git clone https://github.com/rofiperlungoding/rofihosted.git ~/rofihosted-src
 # 4. Copy boot script
 cp ~/rofihosted-src/scripts/boot-all.sh ~/.termux/boot/01-server.sh
 chmod +x ~/.termux/boot/01-server.sh
+
+# 4b. Copy recovery-job script + register with JobScheduler
+cp ~/rofihosted-src/scripts/recovery-job.sh ~/recovery-job.sh
+chmod +x ~/recovery-job.sh
+termux-job-scheduler --script ~/recovery-job.sh \
+  --period-ms 900000 --persisted true
 
 # 5. Restore env + secrets from latest backup
 age -d -i ~/.age-key ~/backups/latest.tar.age | tar -xf - -C ~
