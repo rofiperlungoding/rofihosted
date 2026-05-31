@@ -30,6 +30,11 @@ if [ -f ~/.hp-server.env ]; then
 fi
 
 CHECK_INTERVAL=30
+# Aggressive interval for the first 2 minutes after watchdog boot. Detects
+# crashed services much faster during the recovery window when the platform
+# is most fragile (post-cold-boot, post-OS-update, post-rebuild).
+FAST_INTERVAL=5
+FAST_DURATION=120
 RESTART_FLAG=~/data/.tunnel-restart-requested
 HEALTH_URL="http://127.0.0.1:8080/health"
 CLOUDFLARED_METRICS="http://127.0.0.1:20241/metrics"
@@ -107,15 +112,28 @@ start_cloudflared() {
   fi
 }
 
-log "watchdog booted, interval=${CHECK_INTERVAL}s, max_rss=${MAX_RSS_MB}MB, http_check=on, tunnel_check=on"
+log "watchdog booted, interval=${CHECK_INTERVAL}s (first ${FAST_DURATION}s @ ${FAST_INTERVAL}s), max_rss=${MAX_RSS_MB}MB, http_check=on, tunnel_check=on"
+
+# Track watchdog uptime so we know when to switch from FAST_INTERVAL to
+# CHECK_INTERVAL.
+WD_START=$(date +%s)
+current_interval() {
+  now=$(date +%s)
+  if [ $((now - WD_START)) -lt "$FAST_DURATION" ]; then
+    echo "$FAST_INTERVAL"
+  else
+    echo "$CHECK_INTERVAL"
+  fi
+}
 
 while true; do
+  INTERVAL=$(current_interval)
   # 1. hp-server liveness (process)
   if ! pgrep -f 'hp-server$' > /dev/null 2>&1; then
     log "hp-server NOT running, restarting"
     start_hp_server
     http_fail_streak=0
-    sleep "$CHECK_INTERVAL"
+    sleep "$INTERVAL"
     continue
   fi
 
@@ -148,7 +166,7 @@ while true; do
     log "cloudflared NOT running, restarting"
     start_cloudflared
     tunnel_fail_streak=0
-    sleep "$CHECK_INTERVAL"
+    sleep "$INTERVAL"
     continue
   fi
 
@@ -183,5 +201,5 @@ while true; do
     tunnel_fail_streak=0
   fi
 
-  sleep "$CHECK_INTERVAL"
+  sleep "$INTERVAL"
 done

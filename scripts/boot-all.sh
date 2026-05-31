@@ -57,15 +57,21 @@ else
   echo "[boot] sshd already running"
 fi
 
-# 2. hp-server (Zig binary). Watchdog is responsible for keeping it alive.
+# 2. hp-server + cloudflared + watchdog spawn IN PARALLEL.
+# Sequential spawn was costing ~10s of unnecessary serialization. The three
+# services are independent; the watchdog handles ordering issues internally
+# (it'll respawn anything missing within 30s). Saving these 10s shrinks the
+# Termux:Boot fast-path recovery window.
+
+# 2a. hp-server (Zig binary). Watchdog is responsible for keeping it alive.
 if ! pgrep -f 'hp-server$' > /dev/null; then
   setsid nohup ~/zig/hp-server/zig-out/bin/hp-server > ~/logs/hp-server.log 2>&1 < /dev/null &
-  echo "[boot] hp-server started"
+  echo "[boot] hp-server spawn issued"
 else
   echo "[boot] hp-server already running"
 fi
 
-# 3. Cloudflare Tunnel
+# 2b. Cloudflare Tunnel (in parallel with hp-server)
 if ! pgrep -f 'cloudflared.*tunnel' > /dev/null; then
   if [ -f ~/.cloudflared/config.yml ]; then
     setsid nohup proot \
@@ -73,27 +79,26 @@ if ! pgrep -f 'cloudflared.*tunnel' > /dev/null; then
       -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/cert.pem" \
       cloudflared tunnel --no-autoupdate --edge-ip-version 4 run \
       > ~/logs/cloudflared.log 2>&1 < /dev/null &
-    echo "[boot] cloudflared NAMED tunnel starting"
+    echo "[boot] cloudflared NAMED tunnel spawn issued"
   else
     setsid nohup proot \
       -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt" \
       -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/cert.pem" \
       cloudflared tunnel --no-autoupdate --edge-ip-version 4 \
       --url http://localhost:8080 > ~/logs/cloudflared.log 2>&1 < /dev/null &
-    echo "[boot] cloudflared QUICK tunnel starting"
+    echo "[boot] cloudflared QUICK tunnel spawn issued"
   fi
 fi
 
-# 4. Watchdog (long-lived, restarts services if they die). Spawned LAST so
-# the things it watches (hp-server, cloudflared) are already up.
+# 2c. Watchdog (long-lived, respawns dead services)
 if ! pgrep -f 'watchdog\.sh' > /dev/null; then
   if [ -x ~/watchdog.sh ]; then
     setsid nohup ~/watchdog.sh > ~/logs/watchdog.log 2>&1 < /dev/null &
-    echo "[boot] watchdog started"
+    echo "[boot] watchdog spawn issued"
   fi
 fi
 
-# 5. Daily backup at 03:00 (handled by separate cron-like loop or termux-job-scheduler)
+# 3. Daily backup at 03:00 (handled by separate cron-like loop or termux-job-scheduler)
 # Trigger a one-shot backup at boot if BACKUP_PASSPHRASE is set
 if [ -n "${BACKUP_PASSPHRASE:-}" ] && [ -x ~/backup.sh ]; then
   setsid nohup ~/backup.sh > ~/logs/backup.log 2>&1 < /dev/null &
@@ -102,7 +107,7 @@ fi
 
 echo "[boot] services kicked at $(date)"
 
-# 6. Telegram boot notification (optional, only if TG_BOT_TOKEN + TG_CHAT_ID set).
+# 4. Telegram boot notification (optional, only if TG_BOT_TOKEN + TG_CHAT_ID set).
 # Sends the operator a "rofihosted booted" message so they know cold-boot
 # recovery is in flight without having to refresh the dashboard. The send is
 # done in the background so a network blip doesn't slow the boot down.
