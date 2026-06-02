@@ -503,7 +503,7 @@ fn writeSqlString(writer: anytype, s: []const u8) !void {
     try writer.writeByte('\'');
 }
 
-/// Background loop: sync every 5 minutes.
+/// Background loop: sync every 5 minutes + WAL checkpoint.
 pub fn syncLoop(cache: *Cache) void {
     // First sync 30s after boot to let the JSONL file accumulate
     std.Thread.sleep(30 * std.time.ns_per_s);
@@ -513,6 +513,18 @@ pub fn syncLoop(cache: *Cache) void {
             break :blk 0;
         };
         if (rows > 0) std.log.info("dbcache: synced {d} new rows", .{rows});
+        
+        // Checkpoint WAL to reduce file size and improve query performance
+        cache.checkpointWal() catch |err| {
+            std.log.warn("dbcache WAL checkpoint failed: {}", .{err});
+        };
+        
         std.Thread.sleep(5 * 60 * std.time.ns_per_s);
     }
+}
+
+/// Run PRAGMA wal_checkpoint(TRUNCATE) to merge WAL into main DB and truncate WAL file.
+fn checkpointWal(cache: *Cache) !void {
+    const sql = "PRAGMA wal_checkpoint(TRUNCATE);";
+    _ = try cache.execSqlCapture(cache.allocator, sql);
 }
