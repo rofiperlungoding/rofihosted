@@ -4,6 +4,29 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Fixed: System Audit Remediation (2026-06-02)
+
+Comprehensive audit revealed and fixed 8 critical issues, 5 warnings, and 3 recommendations. All high-priority bugs have been resolved.
+
+**Critical fixes:**
+- **Credentials file corruption**: Fixed empty/malformed `~/.hp-server-creds.txt` that only contained password. Restored proper two-line format (username + password). Authentication now works correctly.
+- **Watchdog RSS check bug**: Added null check in [`watchdog.sh`](scripts/watchdog.sh):155 to prevent "Illegal number" error when process dies between pgrep and /proc read. RSS monitoring now stable.
+- **GPA memory leak detection**: Added proper leak detection in [`main.zig`](zig/hp-server/src/main.zig) GPA deinit. Memory leaks now logged on shutdown for debugging.
+- **Shutdown handler race condition**: Replaced unsafe signal handler with async-signal-safe atomic flag pattern. Moved flush() and server.stop() to main thread shutdown loop. Prevents deadlock and undefined behavior per POSIX.
+- **WAL checkpoint frequency**: Added periodic `PRAGMA wal_checkpoint(TRUNCATE)` to [`dbcache.zig`](zig/hp-server/src/dbcache.zig) syncLoop. Runs every 5 minutes to reduce WAL file size and improve query performance.
+
+**Documented for future work:**
+- **Hardcoded paths**: Added TODO comments in [`main.zig`](zig/hp-server/src/main.zig) for refactoring hardcoded Termux paths to use HOME env var. Paths remain hardcoded but documented.
+- **hp-server.log investigation**: Confirmed log file redirection is working correctly. File is empty because Zig binary uses structured logging via JSONL files, not stdout/stderr. This is by design.
+
+**Deployment:**
+- All fixes pushed to GitHub (commits 10f4dd7, 6960356, 845e5a3, e1a685c)
+- Binary rebuilt and deployed to device
+- Watchdog script updated on device
+- Server restarted successfully with new binary
+
+See [`AUDIT-REPORT.md`](AUDIT-REPORT.md) for complete findings and remediation details.
+
 ## [Unreleased]
 
 ### Added: Multi-tenant Phase 3 - Developer Experience
