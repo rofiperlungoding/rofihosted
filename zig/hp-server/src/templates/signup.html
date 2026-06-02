@@ -3,124 +3,309 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
-<title>Sign up - rofihosted</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=40">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=40">
+<meta name="theme-color" content="#f0ede5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<title>Sign up &middot; rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a1a1a'/><text x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-weight='400' font-size='20' fill='%23f0ede5'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=41">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=41">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
-  body { display: grid; place-items: center; min-height: 100vh; padding: 2rem 1.2rem; }
-  .signup-card {
-    width: 100%; max-width: 460px;
-    background: var(--surface); border: 1px solid var(--border-soft);
-    border-radius: 14px; padding: 2.2rem 2rem; box-shadow: var(--shadow);
+  body {
+    display: grid;
+    grid-template-columns: 1fr;
+    min-height: 100vh;
   }
-  .brand-row { display: flex; align-items: center; gap: .65rem; margin-bottom: 1.6rem; }
-  .brand-row .mark { width: 36px; height: 36px; border-radius: 8px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-weight: 700; font-size: 1.05rem; }
-  .brand-row .brand-text { font-weight: 700; font-size: 1.08rem; letter-spacing: -.012em; color: var(--text); }
-  h1 { font-size: 1.45rem; font-weight: 700; margin: 0 0 .3rem; letter-spacing: -.022em; }
-  .lead { color: var(--text-2); font-size: .9rem; margin: 0 0 1.6rem; line-height: 1.55; }
+  @media (min-width: 900px) {
+    body { grid-template-columns: 1fr 1fr; }
+  }
+
+  .auth-form-side {
+    display: grid; place-items: center;
+    padding: 2.5rem 1.5rem;
+    min-height: 100vh;
+  }
+  .auth-form-wrap { width: 100%; max-width: 440px; }
+
+  .auth-editorial {
+    display: none;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 3rem 3rem 2.5rem;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 100vh;
+    position: relative;
+    overflow: hidden;
+  }
+  .auth-editorial::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(45deg, transparent 0 28px, rgba(240, 237, 229, .025) 28px 29px),
+      repeating-linear-gradient(-45deg, transparent 0 28px, rgba(240, 237, 229, .025) 28px 29px);
+    pointer-events: none;
+  }
+  .auth-editorial > * { position: relative; z-index: 1; }
+  @media (min-width: 900px) { .auth-editorial { display: flex; } }
+  .auth-brand-row {
+    display: flex; align-items: baseline; gap: .15rem;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 1.1rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--paper);
+  }
+  .auth-brand-row .slash { font-family: var(--serif); font-style: italic; font-weight: 400; }
+
+  .editorial-list {
+    border-top: 1px solid rgba(240, 237, 229, .15);
+    margin: auto 0;
+  }
+  .editorial-list .row {
+    display: grid; grid-template-columns: 1fr auto;
+    padding: 1rem 0;
+    border-bottom: 1px solid rgba(240, 237, 229, .15);
+    font-size: .92rem;
+    color: var(--paper);
+    align-items: center;
+  }
+  .editorial-list .row .tag {
+    font-size: .76rem;
+    color: rgba(240, 237, 229, .55);
+    letter-spacing: .04em;
+  }
+  .editorial-headline {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: clamp(1.5rem, 2.8vw, 2.2rem);
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    margin: 0 0 1.6rem;
+  }
+  .editorial-headline u {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: .15em;
+  }
+
+  .auth-foot {
+    font-size: .76rem;
+    color: rgba(240, 237, 229, .55);
+    letter-spacing: .04em;
+    display: flex; justify-content: space-between;
+    flex-wrap: wrap; gap: .5rem;
+  }
+  .auth-foot a { color: rgba(240, 237, 229, .85); }
+
+  .top-actions { position: fixed; top: 1rem; right: 1rem; z-index: 10; }
+  .auth-mark {
+    display: inline-flex; align-items: baseline; gap: .15rem;
+    font-family: var(--sans);
+    font-weight: 700; font-size: 1rem;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--text);
+    margin-bottom: 2rem;
+  }
+  .auth-mark .slash { font-family: var(--serif); font-style: italic; font-weight: 400; }
+
+  h1.auth-title {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 1.85rem;
+    letter-spacing: -0.028em;
+    line-height: 1.1;
+    margin: 0 0 .5rem;
+  }
+  .auth-lead {
+    color: var(--text-2);
+    font-size: .92rem;
+    margin: 0 0 1.8rem;
+    line-height: 1.6;
+    font-family: var(--serif);
+    font-style: italic;
+  }
 
   .invite-status {
-    display: flex; align-items: center; gap: .55rem;
-    padding: .65rem .9rem; border-radius: 8px;
-    background: var(--surface-2); border: 1px solid var(--border-soft);
-    font-size: .82rem; margin-bottom: 1.4rem;
+    display: flex; align-items: center; gap: .6rem;
+    padding: .7rem .95rem;
+    border-radius: 12px;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    font-size: .85rem;
+    margin-bottom: 1.4rem;
   }
-  .invite-status .pill { font-family: ui-monospace, monospace; font-size: .78rem; }
-  .invite-status.ok { background: rgba(16,185,129,.08); border-color: rgba(16,185,129,.3); color: #10b981; }
-  .invite-status.err { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.3); color: #ef4444; }
+  .invite-status .pill {
+    font-family: var(--mono);
+    font-size: .78rem;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 100px;
+    padding: .15rem .55rem;
+  }
+  .invite-status.ok {
+    background: var(--success-soft);
+    border-color: var(--success-soft);
+    color: var(--success);
+  }
+  .invite-status.err {
+    background: var(--error-soft);
+    border-color: var(--error-soft);
+    color: var(--error);
+  }
 
-  .form-row { display: flex; flex-direction: column; gap: .35rem; margin-bottom: 1rem; }
-  .form-row label { font-size: .78rem; font-weight: 500; color: var(--text-2); }
-  .form-row input, .form-row textarea {
-    background: var(--surface-2); border: 1px solid var(--border);
-    border-radius: 7px; padding: .65rem .85rem;
-    color: var(--text); font: inherit; font-size: .9rem;
-    transition: border-color .15s, background .15s;
+  form { display: flex; flex-direction: column; gap: 1.1rem; }
+  .form-row { display: flex; flex-direction: column; }
+  .form-row label {
+    font-size: .76rem;
+    font-weight: 500;
+    color: var(--text-2);
+    margin-bottom: .4rem;
+    letter-spacing: .005em;
   }
-  .form-row input:focus, .form-row textarea:focus {
-    outline: none; border-color: var(--accent); background: var(--surface);
-  }
-  .form-row .hint { font-size: .73rem; color: var(--text-3); margin-top: .15rem; }
-  .form-row textarea { resize: vertical; min-height: 70px; font-family: inherit; }
-
-  .submit-row {
-    display: flex; flex-direction: column; gap: .6rem; margin-top: 1.6rem;
-  }
-  .submit-row button.btn-accent {
-    text-decoration: none; display: inline-flex; align-items: center; justify-content: center;
-    gap: .5rem; height: 44px; padding: 0 1.3rem;
-    background: var(--accent); border: 1px solid var(--accent); color: var(--accent-fg);
-    border-radius: 8px; font-size: .92rem; font-weight: 600; cursor: pointer;
-    transition: background .15s;
-  }
-  .submit-row button.btn-accent:hover { background: var(--accent-2); border-color: var(--accent-2); }
-  .submit-row button.btn-accent:disabled { opacity: .55; cursor: not-allowed; }
-  .submit-row a, .submit-row a:link, .submit-row a:visited {
-    text-decoration: none !important; text-align: center; font-size: .82rem;
+  .form-row label .opt {
     color: var(--text-3);
+    font-weight: 400;
+    margin-left: .25rem;
   }
-  .submit-row a:hover { color: var(--text); }
+  .form-row textarea {
+    width: 100%;
+    padding: .7rem .95rem;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    color: var(--text);
+    font: inherit;
+    font-size: .92rem;
+    resize: vertical;
+    min-height: 84px;
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  .form-row textarea:focus {
+    outline: none;
+    border-color: var(--ink);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    background: var(--paper-2);
+  }
+  .form-row .hint {
+    font-size: .76rem;
+    color: var(--text-3);
+    margin-top: .4rem;
+    line-height: 1.5;
+  }
+
+  .submit-row { margin-top: 1rem; display: flex; flex-direction: column; gap: .8rem; }
 
   .alert {
-    padding: .7rem 1rem; border-radius: 8px; font-size: .82rem;
+    padding: .8rem 1.1rem;
+    border-radius: 12px;
+    font-size: .85rem;
     margin-bottom: 1rem;
   }
-  .alert.error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); color: #ef4444; }
-  .alert.success { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.3); color: #10b981; }
+  .alert.error {
+    background: var(--error-soft);
+    border: 1px solid var(--error-soft);
+    color: var(--error);
+  }
+  .alert.success {
+    background: var(--success-soft);
+    border: 1px solid var(--success-soft);
+    color: var(--success);
+  }
+
+  .meta {
+    margin-top: 1.4rem;
+    text-align: left;
+    color: var(--text-3);
+    font-size: .85rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1.3rem;
+  }
+  .meta a {
+    color: var(--text);
+    border-bottom: 1px solid transparent;
+    transition: border-color .12s ease;
+  }
+  .meta a:hover { border-bottom-color: var(--ink); }
 </style>
 </head>
 <body>
-<div class="signup-card">
-  <div class="brand-row">
-    <span class="mark">r</span>
-    <span class="brand-text">rofihosted</span>
-  </div>
-  <h1>Create your account</h1>
-  <p class="lead">Sign up to deploy your projects on a phone-based PaaS. With an invite code you're in instantly. Without one, the operator approves manually.</p>
-
-  <div id="invite-status" class="invite-status" style="display:none"></div>
-  <div id="form-alert" class="alert error" style="display:none"></div>
-
-  <form id="signup-form" autocomplete="off">
-    <div class="form-row">
-      <label for="invite_code">Invite code <span style="color:var(--text-3); font-weight:400">(optional)</span></label>
-      <input id="invite_code" name="invite_code" type="text" placeholder="RH-XXXX-XXXX" autocomplete="off" maxlength="14" style="font-family:ui-monospace,monospace; letter-spacing:.04em; text-transform:uppercase">
-      <p class="hint">Got one from the operator? Paste it here for instant approval.</p>
-    </div>
-    <div class="form-row">
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" required pattern="[a-zA-Z][a-zA-Z0-9_-]{2,31}" minlength="3" maxlength="32">
-      <p class="hint">3-32 chars, alphanumeric plus _ and -. This is your subdomain prefix and login name.</p>
-    </div>
-    <div class="form-row">
-      <label for="email">Email</label>
-      <input id="email" name="email" type="email" required>
-      <p class="hint">For account recovery and approval notifications.</p>
-    </div>
-    <div class="form-row">
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password">
-      <p class="hint">8+ characters. Use a passphrase or password manager.</p>
-    </div>
-    <div class="form-row" id="reason-row" style="display:none">
-      <label for="signup_reason">Why do you want to use rofihosted?</label>
-      <textarea id="signup_reason" name="signup_reason" placeholder="Building a side project. Tinkering. Experimenting with self-hosting..."></textarea>
-      <p class="hint">Helps the operator decide. A sentence or two is enough.</p>
-    </div>
-
-    <div class="submit-row">
-      <button type="submit" class="btn-accent" id="submit-btn">
-        <i class="icon-rocket"></i><span id="submit-label">Sign up</span>
-      </button>
-      <a href="https://app.rofihosted.space/login">Already have an account? Sign in</a>
-    </div>
-  </form>
+<div class="top-actions">
+  <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+    <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
 </div>
 
+<aside class="auth-editorial">
+  <a href="/" class="auth-brand-row">ROFIHO<span class="slash">/</span>STED</a>
+  <div style="margin: auto 0;">
+    <h2 class="editorial-headline">Deploy from a <u>Git URL</u> in thirty seconds.</h2>
+    <div class="editorial-list">
+      <div class="row"><span>Paste a Git URL</span><span class="tag">Step 1</span></div>
+      <div class="row"><span>Pick a subdomain</span><span class="tag">Step 2</span></div>
+      <div class="row"><span>Watch the build log</span><span class="tag">Step 3</span></div>
+      <div class="row"><span>Live on <span style="font-family:var(--mono); font-size:.85em">.rofihosted.space</span></span><span class="tag">Done</span></div>
+    </div>
+  </div>
+  <div class="auth-foot">
+    <span>&copy; 2026 rofihosted</span>
+    <span><a href="https://github.com/rofiperlungoding/rofihosted">Source</a></span>
+  </div>
+</aside>
+
+<main class="auth-form-side">
+  <div class="auth-form-wrap">
+    <a href="/" class="auth-mark">ROFIHO<span class="slash">/</span>STED</a>
+    <h1 class="auth-title">Create your account.</h1>
+    <p class="auth-lead">Got an invite code? You're in instantly. Otherwise, the operator approves manually within a day.</p>
+
+    <div id="invite-status" class="invite-status" style="display:none"></div>
+    <div id="form-alert" class="alert error" style="display:none"></div>
+
+    <form id="signup-form" autocomplete="off">
+      <div class="form-row">
+        <label for="invite_code">Invite code <span class="opt">(optional)</span></label>
+        <input class="input" id="invite_code" name="invite_code" type="text" placeholder="RH-XXXX-XXXX" autocomplete="off" maxlength="14" style="font-family:var(--mono); letter-spacing:.04em; text-transform:uppercase">
+        <p class="hint">Got one from the operator? Paste it here for instant approval.</p>
+      </div>
+      <div class="form-row">
+        <label for="username">Username</label>
+        <input class="input" id="username" name="username" type="text" required pattern="[a-zA-Z][a-zA-Z0-9_-]{2,31}" minlength="3" maxlength="32">
+        <p class="hint">3 to 32 chars, alphanumeric plus _ and -. This becomes your subdomain prefix.</p>
+      </div>
+      <div class="form-row">
+        <label for="email">Email</label>
+        <input class="input" id="email" name="email" type="email" required>
+        <p class="hint">For account recovery and approval notifications.</p>
+      </div>
+      <div class="form-row">
+        <label for="password">Password</label>
+        <input class="input" id="password" name="password" type="password" required minlength="8" autocomplete="new-password">
+        <p class="hint">Eight or more characters. Use a passphrase or a password manager.</p>
+      </div>
+      <div class="form-row" id="reason-row" style="display:none">
+        <label for="signup_reason">Why do you want to use rofihosted?</label>
+        <textarea id="signup_reason" name="signup_reason" placeholder="Building a side project. Tinkering. Experimenting with self-hosting..."></textarea>
+        <p class="hint">Helps the operator decide. A sentence or two is enough.</p>
+      </div>
+
+      <div class="submit-row">
+        <button type="submit" class="btn btn-accent btn-lg" id="submit-btn" style="width:100%">
+          <span id="submit-label">Sign up</span>
+          <i class="icon-arrow-right"></i>
+        </button>
+      </div>
+    </form>
+
+    <div class="meta">
+      Already have an account? <a href="https://app.rofihosted.space/login">Sign in</a>
+    </div>
+  </div>
+</main>
+
+<script src="https://rofihosted.space/theme.js?v=41"></script>
 <script>
 (function(){
   var inviteInput = document.getElementById('invite_code');
@@ -131,14 +316,12 @@
   var alertEl = document.getElementById('form-alert');
   var form = document.getElementById('signup-form');
 
-  // Pre-fill invite code from query string.
   var params = new URLSearchParams(location.search);
   var fromQuery = params.get('invite');
   if (fromQuery) {
     inviteInput.value = fromQuery.toUpperCase();
     setTimeout(checkInvite, 100);
   }
-
   inviteInput.addEventListener('input', function(){ inviteInput.value = inviteInput.value.toUpperCase(); });
   inviteInput.addEventListener('blur', checkInvite);
 
@@ -162,11 +345,7 @@
 
   function checkInvite() {
     var code = inviteInput.value.trim();
-    if (!code) {
-      hideInviteStatus();
-      setMode(false);
-      return;
-    }
+    if (!code) { hideInviteStatus(); setMode(false); return; }
     fetch('/signup/check-invite?code=' + encodeURIComponent(code))
       .then(function(r){ return r.json(); })
       .then(function(j){
@@ -205,12 +384,8 @@
     }).then(function(r){ return r.json(); }).then(function(j){
       submitBtn.disabled = false;
       if (j.ok) {
-        // Redirect: invite -> dashboard, self -> pending page.
-        if (j.status === 'active') {
-          location.href = 'https://app.rofihosted.space/';
-        } else {
-          location.href = '/signup/pending';
-        }
+        if (j.status === 'active') location.href = 'https://app.rofihosted.space/';
+        else location.href = '/signup/pending';
       } else {
         var msg = j.err || 'signup failed';
         if (msg === 'username_taken') msg = 'That username is already taken.';
@@ -232,6 +407,5 @@
   });
 })();
 </script>
-<script src="https://rofihosted.space/theme.js?v=40"></script>
 </body>
 </html>

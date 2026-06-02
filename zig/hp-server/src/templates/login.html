@@ -1,90 +1,193 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
-<title>Sign in</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=40">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=40">
+<meta name="theme-color" content="#f0ede5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<title>Sign in &middot; rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a1a1a'/><text x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-weight='400' font-size='20' fill='%23f0ede5'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=41">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=41">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
-  a, a:link, a:visited, a:hover { text-decoration: none !important; }
-  a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus,
-  button.btn, button.btn:hover, button.btn:focus {
-    text-decoration: none !important;
-    display: inline-flex !important;
-    align-items: center; justify-content: center;
-    gap: .5rem; height: 38px; padding: 0 1.05rem;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; font: inherit; font-size: .87rem; font-weight: 500;
-    color: var(--text); cursor: pointer; white-space: nowrap;
-    box-shadow: var(--shadow);
-    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+  body {
+    display: grid;
+    grid-template-columns: 1fr;
+    min-height: 100vh;
+    padding: 0;
   }
-  a.btn:hover, button.btn:hover { background: var(--surface-2); border-color: var(--text-3); }
-  a.btn:active, button.btn:active { transform: scale(.98); }
-  a.btn-accent, a.btn-accent:link, a.btn-accent:visited, a.btn-accent:hover,
-  button.btn-accent, button.btn-accent:hover {
-    background: var(--accent) !important;
-    border-color: var(--accent) !important;
-    color: var(--accent-fg) !important;
+  @media (min-width: 900px) {
+    body { grid-template-columns: 1fr 1fr; }
   }
-  a.btn-accent:hover, button.btn-accent:hover { background: var(--accent-2) !important; border-color: var(--accent-2) !important; }
-  a.btn-lg, button.btn-lg { height: 46px; padding: 0 1.5rem; font-size: .95rem; }
-  a.btn [class^="icon-"], a.btn svg, button.btn [class^="icon-"], button.btn svg { font-size: 13px; vertical-align: 0; flex-shrink: 0; }
 
-  body { display: grid; place-items: center; padding: 1.5rem; }
-  .panel-wrap { width: 100%; max-width: 400px; }
-  .top-actions { position: fixed; top: 1rem; right: 1rem; }
-  .login-brand { display: flex; flex-direction: column; align-items: center; gap: 1rem; margin-bottom: 2rem; text-align: center; }
-  .login-brand .brand-mark { width: 44px; height: 44px; border-radius: 11px; font-size: 1.2rem; }
-  .login-brand h1 { margin: 0; font-size: 1.45rem; font-weight: 700; letter-spacing: -0.025em; }
-  .login-brand p { margin: .35rem 0 0; color: var(--text-3); font-size: .87rem; }
-  .login-host { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; }
+  /* Right pane: form */
+  .auth-form-side {
+    display: grid; place-items: center;
+    padding: 2rem 1.5rem;
+    min-height: 100vh;
+  }
+  .auth-form-wrap { width: 100%; max-width: 380px; }
 
-  .panel { padding: 1.6rem; }
-  form { display: flex; flex-direction: column; gap: 1rem; }
+  /* Left pane: editorial (hidden on small screens) */
+  .auth-editorial {
+    display: none;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 3rem 3rem 2.5rem;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 100vh;
+    position: relative;
+    overflow: hidden;
+  }
+  .auth-editorial::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(45deg, transparent 0 28px, rgba(240, 237, 229, .025) 28px 29px),
+      repeating-linear-gradient(-45deg, transparent 0 28px, rgba(240, 237, 229, .025) 28px 29px);
+    pointer-events: none;
+  }
+  .auth-editorial > * { position: relative; z-index: 1; }
+  @media (min-width: 900px) { .auth-editorial { display: flex; } }
+  .auth-brand-row {
+    display: flex; align-items: baseline; gap: .15rem;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 1.1rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--paper);
+  }
+  .auth-brand-row .slash {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+  }
+  .auth-quote {
+    max-width: 28rem;
+    margin: auto 0;
+  }
+  .auth-quote h2 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: clamp(1.6rem, 3vw, 2.4rem);
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    color: var(--paper);
+    margin: 0 0 1rem;
+  }
+  .auth-quote h2 u {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: .15em;
+  }
+  .auth-quote p {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    color: rgba(240, 237, 229, .72);
+    font-size: 1rem;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .auth-foot {
+    font-size: .76rem;
+    color: rgba(240, 237, 229, .55);
+    letter-spacing: .04em;
+    display: flex; justify-content: space-between;
+    flex-wrap: wrap; gap: .5rem;
+  }
+  .auth-foot a { color: rgba(240, 237, 229, .85); }
+  .auth-foot a:hover { color: var(--paper); }
+
+  /* Form side */
+  .top-actions { position: fixed; top: 1rem; right: 1rem; z-index: 10; }
+  .auth-mark {
+    display: inline-flex; align-items: baseline; gap: .15rem;
+    font-family: var(--sans);
+    font-weight: 700; font-size: 1rem;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--text);
+    margin-bottom: 2.5rem;
+  }
+  .auth-mark .slash { font-family: var(--serif); font-style: italic; font-weight: 400; }
+
+  h1.auth-title {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 1.85rem;
+    letter-spacing: -0.028em;
+    line-height: 1.1;
+    margin: 0 0 .5rem;
+  }
+  .auth-host {
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--text-3);
+    margin-bottom: 2rem;
+    display: block;
+  }
+
+  form { display: flex; flex-direction: column; gap: 1.05rem; }
   .form-row { display: flex; flex-direction: column; }
-  .submit-row { margin-top: .5rem; }
+  .submit-row { margin-top: .8rem; }
 
   .error {
     background: var(--error-soft);
     border: 1px solid var(--error-soft);
     color: var(--error);
-    padding: .7rem 1rem;
-    border-radius: 8px;
-    font-size: .82rem;
+    padding: .8rem 1.1rem;
+    border-radius: 12px;
+    font-size: .85rem;
     display: flex; align-items: center; gap: .55rem;
     margin-bottom: 1rem;
   }
   .error [class^="icon-"] { font-size: 14px; vertical-align: 0; }
 
-  .meta { margin-top: 1.5rem; text-align: center; color: var(--text-3); font-size: .78rem; }
-  .meta a { color: var(--text-2); transition: color .12s ease; }
-  .meta a:hover { color: var(--text); }
+  .meta {
+    margin-top: 2rem;
+    text-align: left;
+    color: var(--text-3);
+    font-size: .85rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1.4rem;
+  }
+  .meta a {
+    color: var(--text);
+    border-bottom: 1px solid transparent;
+    transition: border-color .12s ease;
+  }
+  .meta a:hover { border-bottom-color: var(--ink); }
 </style>
 </head>
 <body>
 <div class="top-actions">
   <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
-    <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-    <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
   </button>
 </div>
 
-<div class="panel-wrap">
-  <div class="login-brand">
-    <span class="brand-mark">r</span>
-    <div>
-      <h1>Sign in to continue</h1>
-      <p><span class="login-host" id="host"></span></p>
-    </div>
+<aside class="auth-editorial">
+  <a href="/" class="auth-brand-row">ROFIHO<span class="slash">/</span>STED</a>
+  <div class="auth-quote">
+    <h2>A personal <u>cloud</u>, running on one phone.</h2>
+    <p>Sign in to deploy projects, manage secrets, and watch build logs stream in real time.</p>
   </div>
+  <div class="auth-foot">
+    <span>&copy; 2026 rofihosted</span>
+    <span><a href="https://github.com/rofiperlungoding/rofihosted">Source</a> &middot; <a href="https://app.rofihosted.space/api">API</a></span>
+  </div>
+</aside>
 
-  <div class="panel">
+<main class="auth-form-side">
+  <div class="auth-form-wrap">
+    <a href="/" class="auth-mark">ROFIHO<span class="slash">/</span>STED</a>
+    <h1 class="auth-title">Sign in.</h1>
+    <span class="auth-host" id="host"></span>
+
     <div id="err" class="error" style="display:none">
       <i class="icon-exclamation"></i>
       <span>Invalid username or password.</span>
@@ -107,24 +210,20 @@
         </button>
       </div>
     </form>
-  </div>
 
-  <div class="meta">
-    <a href="https://rofihosted.space">return to home</a>
+    <div class="meta">
+      No account? <a href="/signup">Sign up</a> &nbsp;&middot;&nbsp; <a href="/">Return home</a>
+    </div>
   </div>
-</div>
+</main>
 
-<script src="https://rofihosted.space/theme.js?v=40"></script>
+<script src="https://rofihosted.space/theme.js?v=41"></script>
 <script>
   (function () {
-    const params = new URLSearchParams(location.search);
-    if (params.get('error') === '1') {
-      document.getElementById('err').style.display = '';
-    }
-    const next = params.get('next');
-    if (next && next.startsWith('/')) {
-      document.getElementById('next').value = next;
-    }
+    var params = new URLSearchParams(location.search);
+    if (params.get('error') === '1') document.getElementById('err').style.display = '';
+    var next = params.get('next');
+    if (next && next.startsWith('/')) document.getElementById('next').value = next;
     document.getElementById('host').textContent = location.host;
   })();
 </script>

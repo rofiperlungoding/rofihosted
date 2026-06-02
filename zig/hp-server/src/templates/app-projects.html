@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f0ede5" media="(prefers-color-scheme: light)">
 <title>Projects / rofihosted</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23a78bfa'/><text x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23fff'>r</text></svg>">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=40">
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=40">
-<link rel="stylesheet" href="https://rofihosted.space/app.css?v=40">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a1a1a'/><text x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-weight='400' font-size='20' fill='%23f0ede5'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=41">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=41">
+<link rel="stylesheet" href="https://rofihosted.space/app.css?v=41">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   .projects-grid {
@@ -26,7 +26,7 @@
     transition: border-color .15s, box-shadow .15s;
     cursor: pointer;
   }
-  .project-card:hover { border-color: var(--accent); box-shadow: 0 4px 20px rgba(167,139,250,.08); }
+  .project-card:hover { border-color: var(--accent); box-shadow: 0 4px 20px var(--accent-soft); }
   .project-card .pname { font-size: .95rem; font-weight: 600; color: var(--text); letter-spacing: -.01em; }
   .project-card .psub { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .74rem; color: var(--accent); }
   .project-card .pmeta { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
@@ -152,7 +152,7 @@
               <h3 style="margin:0; font-size:.92rem; font-weight:600; color:var(--text)"><i class="icon-database" style="font-size:.85em; margin-right:.35em; color:var(--accent)"></i><span id="d-res-db-heading">SQLite database</span></h3>
               <a class="btn btn-sm" href="#" id="d-res-db-open">Open SQL runner</a>
             </div>
-            <div id="d-res-db-mode-banner" style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.6rem .85rem; margin-bottom:.7rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
+            <div id="d-res-db-mode-banner" style="background:var(--accent-soft); border:1px solid var(--rule); border-radius:8px; padding:.6rem .85rem; margin-bottom:.7rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
               <span id="d-res-db-mode-text">Zero-config SQLite. To switch to Postgres, set the <code>DATABASE_URL</code> secret to a postgres:// URL.</span>
             </div>
             <p class="hint" style="margin:.2rem 0 .6rem">Per-project SQLite at <code id="d-res-db-path">~/data/dbs/&lt;id&gt;.db</code>, mode 0600. Auto-created on first connect. No size limit beyond available phone storage.</p>
@@ -404,7 +404,7 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
               <span><i class="icon-cloud-upload"></i> Bring your own Postgres</span>
             </label>
           </div>
-          <div id="wiz-db-sqlite-info" style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.7rem .9rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
+          <div id="wiz-db-sqlite-info" style="background:var(--accent-soft); border:1px solid var(--rule); border-radius:8px; padding:.7rem .9rem; font-size:.78rem; color:var(--text-2); line-height:1.5">
             <strong style="color:var(--accent)">SQLite is auto-injected.</strong> Your project will receive these env vars at runtime. No setup needed.
             <ul style="margin:.5rem 0 0 1rem; padding:0; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.74rem; color:var(--text)">
               <li><code>DATABASE_URL=file:&lt;path&gt;</code> &mdash; auto-recognized by Drizzle, Prisma, Knex, SQLAlchemy</li>
@@ -421,7 +421,7 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
         <!-- Step 4: Environment variables -->
         <div id="wiz-s3" style="display:none">
           <p style="font-size:.82rem; color:var(--text-2); margin:0 0 1rem">Add environment variables (encrypted at rest). You can add more later in project settings.</p>
-          <div style="background:rgba(167,139,250,.08); border:1px solid rgba(167,139,250,.3); border-radius:8px; padding:.7rem .9rem; margin-bottom:1rem; font-size:.78rem; color:var(--text-2)">
+          <div style="background:var(--accent-soft); border:1px solid var(--rule); border-radius:8px; padding:.7rem .9rem; margin-bottom:1rem; font-size:.78rem; color:var(--text-2)">
             <strong style="color:var(--accent)">Already auto-injected for you:</strong> <code>PORT</code>, <code>HOST</code>, <code>NODE_ENV=production</code>, <code>DATABASE_URL</code> (per-project SQLite), <code>ROFI_DB_PATH</code>, <code>ROFI_AUTH_BASE</code>, <code>ROFI_PUBLIC_URL</code>. Add only secrets your code reads beyond those.
           </div>
           <div id="wiz-env-list"></div>
@@ -508,8 +508,8 @@ schedule: 0 9 * * *  command: python3 generate_report.py</code></pre>
   </div>
 </div>
 
-<script src="https://rofihosted.space/theme.js?v=40"></script>
-<script src="https://rofihosted.space/app.js?v=40"></script>
+<script src="https://rofihosted.space/theme.js?v=41"></script>
+<script src="https://rofihosted.space/app.js?v=41"></script>
 <script>
 RH.loadCurrentUser();
 

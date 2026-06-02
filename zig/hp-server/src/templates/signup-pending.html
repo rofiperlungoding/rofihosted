@@ -3,40 +3,81 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
-<title>Awaiting approval - rofihosted</title>
-<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=40">
-<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=40">
+<meta name="theme-color" content="#f0ede5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<title>Awaiting approval &middot; rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a1a1a'/><text x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-weight='400' font-size='20' fill='%23f0ede5'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=41">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=41">
 <script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   body { display: grid; place-items: center; min-height: 100vh; padding: 2rem 1.2rem; }
-  .card {
-    width: 100%; max-width: 460px; text-align: center;
-    background: var(--surface); border: 1px solid var(--border-soft);
-    border-radius: 14px; padding: 2.6rem 2rem; box-shadow: var(--shadow);
+  .pending-wrap { width: 100%; max-width: 540px; text-align: left; }
+  .pending-mark {
+    display: inline-flex; align-items: baseline; gap: .15rem;
+    font-family: var(--sans);
+    font-weight: 700; font-size: 1rem;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--text);
+    margin-bottom: 3rem;
   }
-  .icon-orb {
-    width: 60px; height: 60px; margin: 0 auto 1.2rem;
-    border-radius: 50%; background: var(--accent-soft);
-    display: grid; place-items: center; color: var(--accent);
-    font-size: 1.6rem;
+  .pending-mark .slash { font-family: var(--serif); font-style: italic; font-weight: 400; }
+  .pending-label {
+    font-size: .72rem; font-weight: 500;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 1rem;
   }
-  h1 { font-size: 1.4rem; font-weight: 700; margin: 0 0 .5rem; letter-spacing: -.022em; }
-  p { color: var(--text-2); font-size: .9rem; margin: 0 0 1rem; line-height: 1.6; }
-  .meta { font-size: .82rem; color: var(--text-3); margin-top: 1.4rem; }
-  .meta a, .meta a:link, .meta a:visited { text-decoration: none !important; color: var(--accent); }
-  .meta a:hover { color: var(--accent-2); }
+  h1 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    letter-spacing: -0.028em;
+    line-height: 1.05;
+    margin: 0 0 1.4rem;
+  }
+  h1 u {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: .15em;
+  }
+  p {
+    color: var(--text-2);
+    font-size: 1rem;
+    margin: 0 0 1rem;
+    line-height: 1.65;
+    font-family: var(--serif);
+    font-weight: 400;
+  }
+  .meta {
+    margin-top: 2.5rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1.4rem;
+    font-size: .88rem;
+    color: var(--text-3);
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .meta a {
+    color: var(--text);
+    border-bottom: 1px solid transparent;
+    transition: border-color .12s ease;
+  }
+  .meta a:hover { border-bottom-color: var(--ink); }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="icon-orb"><i class="icon-clock"></i></div>
-  <h1>Almost there.</h1>
+<div class="pending-wrap">
+  <a href="/" class="pending-mark">ROFIHO<span class="slash">/</span>STED</a>
+  <div class="pending-label">Account status</div>
+  <h1>Almost there. <u>Sit tight.</u></h1>
   <p>Your account is created and waiting for the operator to approve. This usually takes a few hours, sometimes a day.</p>
-  <p>You'll be able to log in and deploy projects as soon as it goes through. Check the email you signed up with for the approval notice.</p>
+  <p>You will be able to log in and deploy projects as soon as it goes through. Check the email you signed up with for the approval notice.</p>
   <div class="meta">
-    <a href="/">Back to homepage</a> &nbsp;-&nbsp; <a href="https://app.rofihosted.space/login">Try signing in</a>
+    <a href="/">Back to homepage</a>
+    <span style="color: var(--text-4)">&middot;</span>
+    <a href="https://app.rofihosted.space/login">Try signing in</a>
   </div>
 </div>
 </body>
