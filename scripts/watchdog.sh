@@ -152,7 +152,7 @@ while true; do
 
   # 3. hp-server RAM ceiling. Self-restart before Android OOM kills us.
   rss=$(hp_rss_mb)
-  if [ "$rss" -gt "$MAX_RSS_MB" ]; then
+  if [ -n "$rss" ] && [ "$rss" -gt "$MAX_RSS_MB" ]; then
     log "hp-server RSS=${rss}MB > ${MAX_RSS_MB}MB, restarting before OOM killer"
     # SIGTERM first so writebuf flushes; start_hp_server will pkill -SIGKILL fallback.
     pkill -SIGTERM -f 'hp-server$' 2>/dev/null || true
