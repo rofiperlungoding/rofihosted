@@ -40,6 +40,8 @@ const mcp = @import("mcp.zig");
 const users = @import("users.zig");
 const invites = @import("invites.zig");
 
+// Data paths: hardcoded for now, but documented for future portability work
+// TODO: Refactor to use HOME env var throughout the codebase
 const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
 const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
 const digests_path = "/data/data/com.termux/files/home/data/digests.jsonl";
@@ -103,7 +105,12 @@ fn shutdownHandler(_: c_int) callconv(.c) void {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    defer _ = gpa.deinit();
+    defer {
+        const leaked = gpa.deinit();
+        if (leaked == .leak) {
+            std.log.warn("memory leak detected on shutdown", .{});
+        }
+    }
     const allocator = gpa.allocator();
 
     std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data") catch {};
