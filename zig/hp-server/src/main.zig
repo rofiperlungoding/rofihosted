@@ -50,6 +50,7 @@ const policy_path = "/data/data/com.termux/files/home/data/policy.jsonl";
 const App = struct {
     allocator: std.mem.Allocator,
     started_at: i64,
+    shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     store_mutex: *std.Thread.Mutex,
     auth_cfg: *auth.Config,
     tg_cfg: telegram.Config,
@@ -90,16 +91,10 @@ const App = struct {
 var g_app: ?*App = null;
 
 fn shutdownHandler(_: c_int) callconv(.c) void {
-    std.log.info("hp-server: SIGTERM received, shutting down gracefully (build: self-update flow)", .{});
+    // Signal handlers must be async-signal-safe. We only set an atomic flag here.
+    // The actual shutdown work happens in the main thread's shutdown check loop.
     if (g_app) |app| {
-        // Flush buffered writes BEFORE httpz.stop() so we don't lose data
-        app.visit_buf.flush() catch |e| {
-            std.log.warn("shutdown: visit_buf flush failed: {}", .{e});
-        };
-        if (app.server_ptr) |ptr| {
-            const s: *httpz.Server(*App) = @ptrCast(@alignCast(ptr));
-            s.stop();
-        }
+        app.shutdown_requested.store(true, .seq_cst);
     }
 }
 
@@ -305,8 +300,29 @@ pub fn main() !void {
     const cron_thread = try std.Thread.spawn(.{}, cron.Manager.loop, .{cron_mgr});
     cron_thread.detach();
 
-    try server.listen();
-    std.log.info("hp-server: server.listen returned, exiting cleanly", .{});
+    // Spawn server in a separate thread so we can check shutdown flag
+    const server_thread = try std.Thread.spawn(.{}, serverListenThread, .{ &server, &app });
+    
+    // Main thread: check shutdown flag periodically
+    while (!app.shutdown_requested.load(.seq_cst)) {
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+    
+    // Shutdown requested - flush buffers and stop server
+    std.log.info("hp-server: shutdown requested, flushing buffers", .{});
+    app.visit_buf.flush() catch |e| {
+        std.log.warn("shutdown: visit_buf flush failed: {}", .{e});
+    };
+    server.stop();
+    server_thread.join();
+    std.log.info("hp-server: shutdown complete", .{});
+}
+
+fn serverListenThread(server: *httpz.Server(*App), app: *App) void {
+    _ = app;
+    server.listen() catch |e| {
+        std.log.err("server.listen failed: {}", .{e});
+    };
 }
 
 fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
