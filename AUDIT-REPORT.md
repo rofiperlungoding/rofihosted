@@ -306,16 +306,27 @@ while (!app.shutdown_requested.load(.seq_cst)) {
 ## ⚠️ WARNINGS
 
 ### 9. **No Backup Verification**
-**Severity:** MEDIUM  
-**Status:** OPERATIONAL GAP
+**Severity:** MEDIUM
+**Status:** ✅ FIXED (2026-06-02)
 
 **Problem:**
 - Backups run hourly to R2 ([`scripts/backup-r2.sh`](scripts/backup-r2.sh))
 - No automated restore testing
 - Cannot verify backups are actually restorable
 
-**Recommendation:**
-Add monthly restore drill to cron or manual checklist.
+**Fix Applied:**
+Created [`verify-backup.sh`](scripts/verify-backup.sh) script:
+- Downloads latest backup from R2 or checks local backup
+- Verifies tarball integrity with `tar -tzf`
+- Checks presence of 7 critical files
+- Validates SQLite database with `PRAGMA integrity_check`
+- Outputs JSON summary for monitoring integration
+- Can be run monthly via cron: `0 0 1 * * ~/verify-backup.sh r2`
+
+**Commits:** 428f547, 074236b
+**Verification:** Tested successfully on device. Backup verification now automated.
+
+**CRITICAL BUG DISCOVERED:** During verification testing, found that [`backup-quick.sh`](scripts/backup-quick.sh) was missing ALL user data (visits.jsonl, uptime.jsonl, logins.jsonl, audit.jsonl, users.jsonl, cache.db, embeddings.bin). Previous backups were only 10 files (~0MB), essentially useless for disaster recovery. Fixed in commit e5a5ff0. New backups are 20+ files (~18MB) with all critical data.
 
 ---
 
@@ -338,6 +349,49 @@ mrofidnS4nd4lJ3p!tn  # Visible in this report
 - File has mode 600 (good)
 - But still plaintext on disk
 - Consider bcrypt/argon2 hashing
+
+---
+
+### 10. **Backup Missing Critical Data**
+**Severity:** CRITICAL
+**Status:** ✅ FIXED (2026-06-02)
+
+**Problem:**
+- [`backup-quick.sh`](scripts/backup-quick.sh) only backed up 10 config files
+- Missing ALL user data: visits.jsonl, uptime.jsonl, logins.jsonl, audit.jsonl
+- Missing users.jsonl, invites.jsonl, cache.db, embeddings.bin
+- Previous backups were essentially useless for disaster recovery
+- Backup size was ~0MB instead of expected ~18MB
+
+**Fix Applied:**
+Updated [`backup-quick.sh`](scripts/backup-quick.sh) to include:
+```bash
+# Data files (JSONL logs)
+for f in \
+    "$HOME/data/visits.jsonl" \
+    "$HOME/data/uptime.jsonl" \
+    "$HOME/data/logins.jsonl" \
+    "$HOME/data/audit.jsonl" \
+    "$HOME/data/digests.jsonl" \
+    "$HOME/data/policy.jsonl" \
+    "$HOME/data/ai-calls.jsonl" \
+    "$HOME/data/scrub.jsonl" ; do
+    [ -e "$f" ] && files="$files $f"
+done
+
+# Main database
+[ -e "$HOME/data/cache.db" ] && files="$files $HOME/data/cache.db"
+[ -e "$HOME/data/embeddings.bin" ] && files="$files $HOME/data/embeddings.bin"
+```
+
+**Commit:** e5a5ff0
+**Verification:** New backup created and verified:
+- Size: 18MB (was ~0MB)
+- Files: 20+ critical files (was 10 config files)
+- All 7 critical files present: ✓
+- Database integrity: ✓ OK
+
+**Impact:** This was a **CRITICAL** bug. All previous backups were incomplete and would have failed disaster recovery. Issue discovered and fixed during backup verification implementation.
 
 ---
 
@@ -372,16 +426,30 @@ Called every 5 minutes in syncLoop after each sync operation.
 ---
 
 ### 12. **No Rate Limiting on SSH**
-**Severity:** MEDIUM  
-**Status:** SECURITY GAP
+**Severity:** MEDIUM
+**Status:** ✅ VERIFIED - Already Configured
 
 **Problem:**
 - SSH on port 8022 has no fail2ban
 - Brute force possible from LAN
 - Only key-based auth saves it
 
-**Recommendation:**
-Add fail2ban or iptables rate limiting.
+**Verification Result:**
+SSH daemon already has rate limiting configured by default:
+```bash
+$ sshd -T | grep -E 'maxauthtries|maxstartups|logingracetime'
+logingracetime 30
+maxauthtries 3
+maxstartups 10:30:100
+```
+
+**Analysis:**
+- `maxauthtries 3`: Maximum 3 authentication attempts per connection
+- `maxstartups 10:30:100`: Connection rate limiting (10 unauthenticated connections, 30% random drop, max 100)
+- `logingracetime 30`: 30 second timeout for authentication
+- Key-based authentication only (no password auth)
+
+**Conclusion:** SSH is adequately protected. No additional fail2ban needed for LAN-only access with key-based auth.
 
 ---
 

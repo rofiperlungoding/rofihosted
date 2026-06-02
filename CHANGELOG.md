@@ -4,6 +4,23 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Fixed: Backup System Critical Bug + Minor Issues (2026-06-02)
+
+**CRITICAL: Backup data loss prevented**
+- **backup-quick.sh missing critical data**: Previous backups only included 10 config files, missing ALL user data (visits.jsonl, uptime.jsonl, logins.jsonl, audit.jsonl, users.jsonl, cache.db, embeddings.bin). This meant backups were essentially useless for disaster recovery. Fixed to include all 20+ critical files. New backups are 18MB vs 0MB before.
+
+**Backup verification automation:**
+- New [`verify-backup.sh`](scripts/verify-backup.sh) script for automated backup integrity checks
+- Downloads latest from R2 or checks local backup
+- Verifies tarball integrity, critical file presence, and SQLite database integrity
+- Outputs JSON summary for monitoring integration
+- Can be run monthly via cron
+
+**Minor issues resolved:**
+- **Cloudflared stream cancellations**: Investigated - these are normal client disconnects (error code 0), not server bugs. SSE heartbeat already configured at 25s interval.
+- **Unsolicited HTTP responses**: No longer appearing in logs after shutdown handler race condition fix.
+- **SSH rate limiting**: Confirmed already configured by default (maxauthtries=3, maxstartups=10:30:100, logingracetime=30).
+
 ### Fixed: System Audit Remediation (2026-06-02)
 
 Comprehensive audit revealed and fixed 8 critical issues, 5 warnings, and 3 recommendations. All high-priority bugs have been resolved.
