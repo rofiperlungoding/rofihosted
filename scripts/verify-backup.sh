@@ -85,6 +85,16 @@ extract_dir="$TEMP_DIR/extract"
 mkdir -p "$extract_dir"
 tar -xzf "$backup_path" -C "$extract_dir" 2>/dev/null
 
+# Backup may have full paths (data/data/com.termux/files/home/) or relative paths
+# Find the actual root directory in the tarball
+if [ -d "$extract_dir/data/data/com.termux/files/home" ]; then
+    root_dir="$extract_dir/data/data/com.termux/files/home"
+    log "Backup uses full paths"
+else
+    root_dir="$extract_dir"
+    log "Backup uses relative paths"
+fi
+
 # Check for critical files
 critical_files=(
     ".hp-server-creds.txt"
@@ -99,7 +109,7 @@ critical_files=(
 missing=0
 found=0
 for f in "${critical_files[@]}"; do
-    if [ -f "$extract_dir/$f" ]; then
+    if [ -f "$root_dir/$f" ]; then
         found=$((found + 1))
         log "✓ Found: $f"
     else
@@ -109,9 +119,9 @@ for f in "${critical_files[@]}"; do
 done
 
 # Check database integrity if present
-if [ -f "$extract_dir/data/cache.db" ]; then
+if [ -f "$root_dir/data/cache.db" ]; then
     log "Checking SQLite database integrity..."
-    if sqlite3 "$extract_dir/data/cache.db" "PRAGMA integrity_check;" 2>/dev/null | grep -q "ok"; then
+    if sqlite3 "$root_dir/data/cache.db" "PRAGMA integrity_check;" 2>/dev/null | grep -q "ok"; then
         log "✓ Database integrity OK"
         db_ok=true
     else
