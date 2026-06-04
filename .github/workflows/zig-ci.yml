@@ -28,3 +28,7 @@ jobs:
       - name: Build (ReleaseFast)
         working-directory: zig/hp-server
         run: zig build -Doptimize=ReleaseFast
+
+      - name: Unit tests
+        working-directory: zig/hp-server
+        run: zig build test

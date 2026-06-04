@@ -366,6 +366,40 @@
     });
   }
 
+  // Device Fingerprinting
+  function collectFingerprint() {
+    try {
+      var data = {
+        userAgent: navigator.userAgent || '',
+        language: navigator.language || '',
+        languages: (navigator.languages || []).join(','),
+        platform: navigator.platform || '',
+        hardwareConcurrency: navigator.hardwareConcurrency || 0,
+        deviceMemory: navigator.deviceMemory || 0,
+        screenResolution: screen.width + 'x' + screen.height,
+        screenDepth: screen.colorDepth || 0,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+        timezoneOffset: new Date().getTimezoneOffset(),
+      };
+      
+      // Simple hash function (FNV-1a)
+      function hashString(str) {
+        var hash = 2166136261;
+        for (var i = 0; i < str.length; i++) {
+          hash ^= str.charCodeAt(i);
+          hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+        }
+        return (hash >>> 0).toString(16);
+      }
+      
+      var combined = JSON.stringify(data);
+      return hashString(combined);
+    } catch (e) {
+      console.error('Fingerprint error:', e);
+      return '';
+    }
+  }
+
   form.addEventListener('submit', function(e){
     e.preventDefault();
     alertEl.style.display = 'none';
@@ -376,6 +410,10 @@
     fd.set('password', form.password.value);
     if (form.invite_code.value.trim()) fd.set('invite_code', form.invite_code.value.trim());
     if (reasonRow.style.display !== 'none') fd.set('signup_reason', form.signup_reason.value.trim());
+    
+    // Add device fingerprint
+    var fingerprint = collectFingerprint();
+    if (fingerprint) fd.set('device_fingerprint', fingerprint);
 
     fetch('/signup/submit', {
       method: 'POST',
@@ -384,8 +422,14 @@
     }).then(function(r){ return r.json(); }).then(function(j){
       submitBtn.disabled = false;
       if (j.ok) {
-        if (j.status === 'active') location.href = 'https://app.rofihosted.space/';
-        else location.href = '/signup/pending';
+        // Check if email verification is required
+        if (j.verification_required) {
+          location.href = '/signup/verify?email=' + encodeURIComponent(j.email);
+        } else if (j.status === 'active') {
+          location.href = 'https://app.rofihosted.space/';
+        } else {
+          location.href = '/signup/pending';
+        }
       } else {
         var msg = j.err || 'signup failed';
         if (msg === 'username_taken') msg = 'That username is already taken.';
@@ -395,6 +439,8 @@
         else if (msg === 'invite_used') msg = 'That invite code has already been used.';
         else if (msg === 'invite_invalid') msg = 'Invite code is invalid.';
         else if (msg === 'invalid_email') msg = 'Please enter a valid email.';
+        else if (msg === 'ip_rate_limit') msg = j.message || 'Too many signup attempts from your network.';
+        else if (msg === 'device_limit') msg = j.message || 'This device has reached the signup limit.';
         alertEl.textContent = msg;
         alertEl.className = 'alert error';
         alertEl.style.display = '';

@@ -26,4 +26,22 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the server");
     run_step.dependOn(&run_cmd.step);
+
+    // Unit tests. Each listed file is a self-contained module whose tests do
+    // not touch the filesystem or network, so they run cleanly in CI.
+    const test_step = b.step("test", "Run unit tests");
+    const test_files = [_][]const u8{
+        "src/metrics_test.zig", // also pulls in metrics.zig's own tests
+        "src/signuplimit.zig",
+        "src/emailverify.zig",
+    };
+    for (test_files) |tf| {
+        const unit_test = b.addTest(.{
+            .root_source_file = b.path(tf),
+            .target = target,
+            .optimize = optimize,
+        });
+        const run_unit_test = b.addRunArtifact(unit_test);
+        test_step.dependOn(&run_unit_test.step);
+    }
 }

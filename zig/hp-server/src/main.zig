@@ -39,6 +39,10 @@ const detect = @import("detect.zig");
 const mcp = @import("mcp.zig");
 const users = @import("users.zig");
 const invites = @import("invites.zig");
+const fingerprint = @import("fingerprint.zig");
+const emailverify = @import("emailverify.zig");
+const signuplimit = @import("signuplimit.zig");
+const metrics = @import("metrics.zig");
 
 // Data paths: hardcoded for now, but documented for future portability work
 // TODO: Refactor to use HOME env var throughout the codebase
@@ -80,7 +84,11 @@ const App = struct {
     powermon: *powermon.PowerMon,
     users: *users.Manager,
     invites: *invites.Manager,
+    fingerprint: *fingerprint.Manager,
+    emailverify: *emailverify.Manager,
+    signuplimit: *signuplimit.Limiter,
     pepper: []const u8,
+    metrics_hub: *metrics.MetricsHub,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -137,6 +145,9 @@ pub fn main() !void {
     const visit_buf = try allocator.create(writebuf.Buffer);
     visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
     const rules_engine = try rules.Engine.init(allocator, blocklist);
+    // Metrics hub for cache observability
+    const metrics_hub = metrics.MetricsHub.init(allocator);
+
     const db_cache = try dbcache.Cache.init(allocator, visits_path);
     const db_pool = try dbpool.Pool.init(allocator, .{
         .db_path = dbcache.PATH,
@@ -145,6 +156,7 @@ pub fn main() !void {
         .max_response_bytes = 8 * 1024 * 1024,
     });
     db_cache.pool = db_pool;
+    db_cache.metrics_cache = &metrics_hub.dbcache;
     const hosted_mgr = try hosted.Manager.init(allocator);
     const pepper_slice = try allocator.dupe(u8, &pepper);
     const apikey_mgr = try apikey.Manager.init(allocator, pepper_slice);
@@ -158,6 +170,14 @@ pub fn main() !void {
     powermon_inst.* = powermon.PowerMon.init(allocator, tg_cfg, bus);
     const users_mgr = try users.Manager.init(allocator, pepper_slice);
     const invites_mgr = try invites.Manager.init(allocator);
+
+    // Anti-duplicate signup protection
+    const fp_mgr = try fingerprint.Manager.init(allocator, 2); // max 2 signups per device
+    const smtp_cfg = emailverify.SmtpConfig.fromEnv(allocator);
+    const ev_mgr = try emailverify.Manager.init(allocator, smtp_cfg, 15, 3); // 15 min expiry, 3 max attempts
+    const signup_limiter = try allocator.create(signuplimit.Limiter);
+    signup_limiter.* = signuplimit.Limiter.init(allocator, 3, 24); // max 3 signups per IP per 24h
+
     // Wire so auth.zig can validate v2 cookies transparently.
     auth_cfg.users_mgr = users_mgr;
     // First-boot: copy the legacy operator into users.zig as u_admin so the
@@ -200,7 +220,11 @@ pub fn main() !void {
         .powermon = powermon_inst,
         .users = users_mgr,
         .invites = invites_mgr,
+        .fingerprint = fp_mgr,
+        .emailverify = ev_mgr,
+        .signuplimit = signup_limiter,
         .pepper = pepper_slice,
+        .metrics_hub = metrics_hub,
     };
     g_app = &app;
 
@@ -302,12 +326,12 @@ pub fn main() !void {
 
     // Spawn server in a separate thread so we can check shutdown flag
     const server_thread = try std.Thread.spawn(.{}, serverListenThread, .{ &server, &app });
-    
+
     // Main thread: check shutdown flag periodically
     while (!app.shutdown_requested.load(.seq_cst)) {
         std.Thread.sleep(100 * std.time.ns_per_ms);
     }
-    
+
     // Shutdown requested - flush buffers and stop server
     std.log.info("hp-server: shutdown requested, flushing buffers", .{});
     app.visit_buf.flush() catch |e| {
@@ -619,6 +643,17 @@ fn handleRoot(app: *App, req: *httpz.Request, res: *httpz.Response, path: []cons
         res.body = @embedFile("templates/signup-pending.html");
         return;
     }
+    if (std.mem.eql(u8, path, "/signup/verify")) {
+        res.content_type = .HTML;
+        res.body = @embedFile("templates/signup-verification.html");
+        return;
+    }
+    if (std.mem.eql(u8, path, "/signup/verify-email")) {
+        return handleVerifyEmail(app, req, res);
+    }
+    if (std.mem.eql(u8, path, "/signup/resend-verification")) {
+        return handleResendVerification(app, req, res);
+    }
     return notFound(res);
 }
 
@@ -783,6 +818,7 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
     if (std.mem.eql(u8, path, "/api/tunnel/health")) return apiTunnelHealth(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock")) return apiGeoblockGet(app, res);
     if (std.mem.eql(u8, path, "/api/geoblock/update")) return apiGeoblockUpdate(app, req, res);
+    if (std.mem.eql(u8, path, "/metrics")) return apiMetrics(app, res);
 
     // Built-in shell + system info (replaces SSH for the operator)
     if (std.mem.eql(u8, path, "/api/system/exec")) return apiSystemExec(app, req, res);
@@ -2003,7 +2039,7 @@ fn runDigest(app: *App) !void {
     const window_hours: u32 = 24;
     const since = std.time.timestamp() - @as(i64, @intCast(window_hours)) * 3600;
 
-    var metrics = DigestMetrics{
+    var dm = DigestMetrics{
         .total_visits = 0,
         .self_visits = 0,
         .bot_visits = 0,
@@ -2022,39 +2058,39 @@ fn runDigest(app: *App) !void {
 
     for (visits) |v| {
         if (v.visited_at < since) continue;
-        metrics.total_visits += 1;
+        dm.total_visits += 1;
         if (v.ip.len > 0) ips.put(v.ip, {}) catch {};
-        if (std.mem.eql(u8, v.classification, "self")) metrics.self_visits += 1;
-        if (std.mem.eql(u8, v.classification, "bot")) metrics.bot_visits += 1;
+        if (std.mem.eql(u8, v.classification, "self")) dm.self_visits += 1;
+        if (std.mem.eql(u8, v.classification, "bot")) dm.bot_visits += 1;
         if (std.mem.eql(u8, v.classification, "scanner")) {
-            metrics.scanner_visits += 1;
+            dm.scanner_visits += 1;
             const gop = path_counts.getOrPut(v.path) catch continue;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             gop.value_ptr.* += 1;
         }
-        if (std.mem.eql(u8, v.classification, "unknown")) metrics.unknown_visits += 1;
+        if (std.mem.eql(u8, v.classification, "unknown")) dm.unknown_visits += 1;
         if (v.country.len > 0) {
             const gop = country_counts.getOrPut(v.country) catch continue;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             gop.value_ptr.* += 1;
         }
     }
-    metrics.distinct_ips = @intCast(ips.count());
+    dm.distinct_ips = @intCast(ips.count());
 
     for (uptime_records) |r| {
-        if (r.checked_at >= since and !r.ok) metrics.uptime_failures += 1;
+        if (r.checked_at >= since and !r.ok) dm.uptime_failures += 1;
     }
 
     const logins = security.readLoginAttempts(a, 500) catch &.{};
     for (logins) |la| {
         if (la.timestamp < since) continue;
-        if (la.success) metrics.successful_logins += 1 else metrics.failed_logins += 1;
+        if (la.success) dm.successful_logins += 1 else dm.failed_logins += 1;
     }
 
     const bl_snapshot = app.blocklist.snapshot(a) catch &.{};
     for (bl_snapshot) |b| {
         if (b.blocked_at >= since and std.mem.startsWith(u8, b.reason, "auto:")) {
-            metrics.auto_bans += 1;
+            dm.auto_bans += 1;
         }
     }
 
@@ -2063,17 +2099,17 @@ fn runDigest(app: *App) !void {
 
     const summary = ai.dailyDigest(app.ai_cfg, a, .{
         .window_hours = window_hours,
-        .total_visits = metrics.total_visits,
-        .self_visits = metrics.self_visits,
-        .bot_visits = metrics.bot_visits,
-        .scanner_visits = metrics.scanner_visits,
-        .unknown_visits = metrics.unknown_visits,
-        .distinct_ips = metrics.distinct_ips,
-        .auto_bans_24h = metrics.auto_bans,
-        .failed_logins_24h = metrics.failed_logins,
-        .successful_logins_24h = metrics.successful_logins,
+        .total_visits = dm.total_visits,
+        .self_visits = dm.self_visits,
+        .bot_visits = dm.bot_visits,
+        .scanner_visits = dm.scanner_visits,
+        .unknown_visits = dm.unknown_visits,
+        .distinct_ips = dm.distinct_ips,
+        .auto_bans_24h = dm.auto_bans,
+        .failed_logins_24h = dm.failed_logins,
+        .successful_logins_24h = dm.successful_logins,
         .uptime_probe_count = @intCast(uptime_records.len),
-        .uptime_failures = metrics.uptime_failures,
+        .uptime_failures = dm.uptime_failures,
         .top_scanner_paths = top_paths,
         .top_countries = top_countries,
     }) orelse return;
@@ -2082,7 +2118,7 @@ fn runDigest(app: *App) !void {
         .generated_at = std.time.timestamp(),
         .window_hours = window_hours,
         .summary = summary,
-        .metrics = metrics,
+        .metrics = dm,
     };
     store.appendJson(digests_path, rec) catch {};
     app.bus.publish(.digest_ready, .{ .timestamp = rec.generated_at, .summary = rec.summary });
@@ -2779,6 +2815,25 @@ fn apiDbCacheSync(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .target = "manual",
     });
     try res.json(.{ .ok = true, .rows_synced = rows }, .{});
+}
+// =================================================================
+// METRICS: Prometheus-compatible cache observability
+// =================================================================
+fn apiMetrics(app: *App, res: *httpz.Response) !void {
+    // Update gauge metrics with current state
+    const dbcache_stats = app.dbcache.snapshot();
+    app.metrics_hub.dbcache.size_bytes.set(@floatFromInt(dbcache_stats.row_count * 512)); // rough estimate
+    app.metrics_hub.dbcache.entry_count.set(@floatFromInt(dbcache_stats.row_count));
+
+    // Export in Prometheus text format
+    res.content_type = .TEXT;
+    res.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+
+    var buf = std.ArrayList(u8).init(app.allocator);
+    defer buf.deinit();
+
+    try app.metrics_hub.exportPrometheus(buf.writer());
+    res.body = try app.allocator.dupe(u8, buf.items);
 }
 
 // =================================================================
@@ -5427,6 +5482,7 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
     const password = form.get("password") orelse "";
     const invite_code_raw = std.mem.trim(u8, form.get("invite_code") orelse "", " \t");
     const reason = std.mem.trim(u8, form.get("signup_reason") orelse "", " \t");
+    const device_fp_raw = std.mem.trim(u8, form.get("device_fingerprint") orelse "", " \t");
 
     if (username.len == 0 or password.len == 0 or email.len == 0) {
         res.status = 400;
@@ -5439,11 +5495,52 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         return;
     }
 
+    // Extract IP address for rate limiting
+    const client_ip = req.header("x-forwarded-for") orelse
+        req.header("x-real-ip") orelse
+        "unknown";
+
+    // LAYER 1: IP Rate Limiting (max 3 signups per IP per 24h)
+    if (!app.signuplimit.canSignup(client_ip)) {
+        res.status = 429;
+        try res.json(.{ .ok = false, .err = "ip_rate_limit", .message = "Too many signup attempts from your network. Please try again in 24 hours." }, .{});
+
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = client_ip,
+            .action = "signup_blocked_ip_limit",
+            .target = username,
+            .detail = "",
+            .ok = false,
+        });
+        return;
+    }
+
+    // LAYER 2: Device Fingerprinting (max 2 signups per device)
+    if (device_fp_raw.len > 0) {
+        if (!app.fingerprint.canSignup(device_fp_raw)) {
+            res.status = 429;
+            try res.json(.{ .ok = false, .err = "device_limit", .message = "This device has reached the signup limit. Please contact support if you need assistance." }, .{});
+
+            audit.append(.{
+                .timestamp = std.time.timestamp(),
+                .actor = client_ip,
+                .action = "signup_blocked_device_limit",
+                .target = username,
+                .detail = device_fp_raw[0..@min(32, device_fp_raw.len)],
+                .ok = false,
+            });
+            return;
+        }
+    }
+
     var input = users.SignupInput{
         .username = username,
         .email = email,
         .password = password,
         .signup_reason = reason,
+        .device_fingerprint = if (device_fp_raw.len > 0) device_fp_raw else null,
+        .signup_ip = client_ip,
     };
 
     var initial_status: users.Status = .pending;
@@ -5482,6 +5579,20 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         return;
     };
 
+    // Record signup in rate limiter and fingerprint tracker
+    app.signuplimit.recordSignup(client_ip, username) catch {};
+    if (device_fp_raw.len > 0) {
+        app.fingerprint.recordSignup(
+            device_fp_raw,
+            username,
+            req.header("user-agent") orelse "unknown",
+            "", // screen_resolution - will be in fingerprint hash
+            "", // timezone
+            "", // canvas_hash
+            "", // webgl_hash
+        ) catch {};
+    }
+
     // Audit + bus event
     audit.append(.{
         .timestamp = std.time.timestamp(),
@@ -5498,9 +5609,28 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         .detail = user.username,
     });
 
-    // Telegram alert for pending self-signups so the operator notices
-    // immediately without polling the dashboard. Best-effort, skipped
-    // silently if Telegram isn't configured.
+    // LAYER 3: Email Verification (if SMTP configured and no invite code)
+    var needs_verification = false;
+    if (method != .invite and app.emailverify.smtp_config.isConfigured()) {
+        const code = app.emailverify.sendVerification(email, username) catch |e| blk: {
+            std.log.err("Failed to send verification email: {}", .{e});
+            // Don't fail signup, just log the error
+            break :blk "";
+        };
+        if (code.len > 0) {
+            needs_verification = true;
+            audit.append(.{
+                .timestamp = std.time.timestamp(),
+                .actor = "system",
+                .action = "email_verification_sent",
+                .target = user.id,
+                .detail = email,
+                .ok = true,
+            });
+        }
+    }
+
+    // Telegram alert for pending self-signups
     if (initial_status == .pending and app.tg_cfg.enabled()) {
         const tg_msg = std.fmt.allocPrint(
             app.allocator,
@@ -5508,8 +5638,9 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
                 "user: {s}\n" ++
                 "email: {s}\n" ++
                 "reason: {s}\n" ++
+                "ip: {s}\n" ++
                 "approve: https://app.rofihosted.space/admin/users",
-            .{ user.username, user.email, if (user.signup_reason.len > 0) user.signup_reason else "(none)" },
+            .{ user.username, user.email, if (user.signup_reason.len > 0) user.signup_reason else "(none)", client_ip },
         ) catch null;
         if (tg_msg) |m| {
             telegram.send(app.allocator, app.tg_cfg, m);
@@ -5517,14 +5648,18 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         }
     }
 
-    // Issue a session cookie so they don't have to log in again
-    auth.issueUserCookie(app.auth_cfg, user, res) catch {};
+    // Issue a session cookie if no verification needed
+    if (!needs_verification) {
+        auth.issueUserCookie(app.auth_cfg, user, res) catch {};
+    }
 
     try res.json(.{
         .ok = true,
         .id = user.id,
         .username = user.username,
         .status = user.status.label(),
+        .verification_required = needs_verification,
+        .email = if (needs_verification) email else "",
     }, .{});
 }
 
@@ -5542,6 +5677,145 @@ fn requireAdmin(app: *App, req: *httpz.Request, res: *httpz.Response) !?auth.Ide
         return null;
     }
     return ident;
+}
+
+fn handleVerifyEmail(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    res.content_type = .JSON;
+    res.header("Cache-Control", "no-store");
+
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+
+    const email = std.mem.trim(u8, form.get("email") orelse "", " \t");
+    const code = std.mem.trim(u8, form.get("code") orelse "", " \t");
+
+    if (email.len == 0 or code.len == 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_field" }, .{});
+        return;
+    }
+
+    // Verify the code
+    const valid = app.emailverify.verify(email, code) catch |e| {
+        res.status = 400;
+        const msg = switch (e) {
+            error.NotFound => "code_not_found",
+            error.Expired => "code_expired",
+            error.TooManyAttempts => "too_many_attempts",
+        };
+        try res.json(.{ .ok = false, .err = msg }, .{});
+
+        audit.append(.{
+            .timestamp = std.time.timestamp(),
+            .actor = email,
+            .action = "email_verification_failed",
+            .target = email,
+            .detail = @errorName(e),
+            .ok = false,
+        });
+        return;
+    };
+
+    if (!valid) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "invalid_code" }, .{});
+        return;
+    }
+
+    // Mark email as verified in users
+    app.users.verifyEmail(email) catch |e| {
+        res.status = 500;
+        std.log.err("Failed to verify email {s}: {}", .{ email, e });
+        try res.json(.{ .ok = false, .err = "server_error" }, .{});
+        return;
+    };
+
+    // Get the user to issue cookie
+    const user = app.users.findByEmail(email) orelse {
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "user_not_found" }, .{});
+        return;
+    };
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = email,
+        .action = "email_verification_success",
+        .target = user.id,
+        .detail = "",
+        .ok = true,
+    });
+
+    app.bus.publish(.anomaly_detected, .{
+        .timestamp = std.time.timestamp(),
+        .kind = "email_verified",
+        .detail = user.username,
+    });
+
+    // Issue session cookie
+    auth.issueUserCookie(app.auth_cfg, user, res) catch {};
+
+    try res.json(.{
+        .ok = true,
+        .status = user.status.label(),
+        .username = user.username,
+    }, .{});
+}
+
+fn handleResendVerification(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    res.content_type = .JSON;
+    res.header("Cache-Control", "no-store");
+
+    const form = req.formData() catch {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "bad_form" }, .{});
+        return;
+    };
+
+    const email = std.mem.trim(u8, form.get("email") orelse "", " \t");
+
+    if (email.len == 0) {
+        res.status = 400;
+        try res.json(.{ .ok = false, .err = "missing_email" }, .{});
+        return;
+    }
+
+    // Check if user exists
+    const user = app.users.findByEmail(email) orelse {
+        // Don't reveal if email exists or not
+        try res.json(.{ .ok = true, .message = "If the email exists, a new code has been sent." }, .{});
+        return;
+    };
+
+    // Don't resend if already verified
+    if (user.email_verified) {
+        try res.json(.{ .ok = true, .message = "Email already verified." }, .{});
+        return;
+    }
+
+    // Send new verification code
+    const code = app.emailverify.sendVerification(email, user.username) catch |e| {
+        std.log.err("Failed to resend verification to {s}: {}", .{ email, e });
+        res.status = 500;
+        try res.json(.{ .ok = false, .err = "send_failed" }, .{});
+        return;
+    };
+
+    audit.append(.{
+        .timestamp = std.time.timestamp(),
+        .actor = email,
+        .action = "email_verification_resent",
+        .target = user.id,
+        .detail = "",
+        .ok = true,
+    });
+
+    std.log.info("Resent verification code to {s}: {s}", .{ email, code });
+
+    try res.json(.{ .ok = true, .message = "Verification code sent." }, .{});
 }
 
 fn apiUsersList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {

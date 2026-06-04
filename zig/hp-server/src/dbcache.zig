@@ -26,6 +26,7 @@
 //!   - On sync: read from offset, parse new lines, batch INSERT, update offset
 //!   - Runs every 5 minutes via background loop
 const std = @import("std");
+const metrics = @import("metrics.zig");
 
 pub const PATH = "/data/data/com.termux/files/home/data/cache.db";
 const SQLITE_BIN = "sqlite3";
@@ -84,6 +85,8 @@ pub const Cache = struct {
     /// uses one-shot subprocess (it's a single 5-min batch, not latency-
     /// sensitive, and runs concurrently with reads via WAL).
     pool: ?*dbpool.Pool = null,
+    /// Optional metrics collection
+    metrics_cache: ?*metrics.CacheMetrics = null,
     /// Stats
     sync_count: u64 = 0,
     rows_synced: u64 = 0,
@@ -243,7 +246,13 @@ pub const Cache = struct {
         defer self.mutex.unlock();
 
         const start = std.time.milliTimestamp();
-        defer self.last_sync_duration_ms = std.time.milliTimestamp() - start;
+        defer {
+            const duration = std.time.milliTimestamp() - start;
+            self.last_sync_duration_ms = duration;
+            if (self.metrics_cache) |m| {
+                m.recordHit(@floatFromInt(duration));
+            }
+        }
 
         const last_offset = self.getMetaInt("last_offset") catch 0;
         const file = std.fs.openFileAbsolute(self.visits_jsonl_path, .{}) catch |err| switch (err) {
@@ -352,6 +361,12 @@ pub const Cache = struct {
         self.sync_count += 1;
         self.rows_synced += rows;
         self.last_sync_at = std.time.timestamp();
+
+        // Update metrics gauges
+        if (self.metrics_cache) |m| {
+            m.entry_count.set(@floatFromInt(self.rows_synced));
+        }
+
         return rows;
     }
 
@@ -368,6 +383,14 @@ pub const Cache = struct {
         path_contains: ?[]const u8,
         ip: ?[]const u8,
     ) !u64 {
+        const start = std.time.milliTimestamp();
+        defer {
+            if (self.metrics_cache) |m| {
+                const duration = std.time.milliTimestamp() - start;
+                m.recordHit(@floatFromInt(duration));
+            }
+        }
+
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -513,12 +536,12 @@ pub fn syncLoop(cache: *Cache) void {
             break :blk 0;
         };
         if (rows > 0) std.log.info("dbcache: synced {d} new rows", .{rows});
-        
+
         // Checkpoint WAL to reduce file size and improve query performance
-        cache.checkpointWal() catch |err| {
+        checkpointWal(cache) catch |err| {
             std.log.warn("dbcache WAL checkpoint failed: {}", .{err});
         };
-        
+
         std.Thread.sleep(5 * 60 * std.time.ns_per_s);
     }
 }

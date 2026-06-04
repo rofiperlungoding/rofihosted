@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f0ede5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<title>Verify Email &middot; rofihosted</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a1a1a'/><text x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-weight='400' font-size='20' fill='%23f0ede5'>r</text></svg>">
+<link rel="stylesheet" href="https://rofihosted.space/theme.css?v=41">
+<link rel="stylesheet" href="https://rofihosted.space/icons.css?v=41">
+<script>(function(){try{var t=localStorage.getItem('rofi.theme');if(!t){t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+  body {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    padding: 2rem 1.5rem;
+  }
+  .verify-wrap {
+    width: 100%;
+    max-width: 480px;
+  }
+  .top-actions {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 10;
+  }
+  .auth-mark {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .15rem;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 1rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text);
+    margin-bottom: 2rem;
+  }
+  .auth-mark .slash {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+  }
+  h1 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 1.85rem;
+    letter-spacing: -0.028em;
+    line-height: 1.1;
+    margin: 0 0 .5rem;
+  }
+  .lead {
+    color: var(--text-2);
+    font-size: .92rem;
+    margin: 0 0 1.8rem;
+    line-height: 1.6;
+    font-family: var(--serif);
+    font-style: italic;
+  }
+  .code-input-group {
+    display: flex;
+    gap: .5rem;
+    justify-content: center;
+    margin: 2rem 0;
+  }
+  .code-digit {
+    width: 3rem;
+    height: 3.5rem;
+    text-align: center;
+    font-size: 1.5rem;
+    font-weight: 600;
+    font-family: var(--mono);
+    border: 2px solid var(--rule);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--text);
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  .code-digit:focus {
+    outline: none;
+    border-color: var(--ink);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    background: var(--paper-2);
+  }
+  .alert {
+    padding: .8rem 1.1rem;
+    border-radius: 12px;
+    font-size: .85rem;
+    margin-bottom: 1rem;
+  }
+  .alert.error {
+    background: var(--error-soft);
+    border: 1px solid var(--error-soft);
+    color: var(--error);
+  }
+  .alert.success {
+    background: var(--success-soft);
+    border: 1px solid var(--success-soft);
+    color: var(--success);
+  }
+  .alert.info {
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    color: var(--text-2);
+  }
+  .submit-row {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: .8rem;
+  }
+  .resend-row {
+    text-align: center;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+  }
+  .resend-text {
+    font-size: .85rem;
+    color: var(--text-3);
+    margin-bottom: .8rem;
+  }
+  .countdown {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--text);
+  }
+  .meta {
+    margin-top: 1.4rem;
+    text-align: center;
+    color: var(--text-3);
+    font-size: .85rem;
+  }
+  .meta a {
+    color: var(--text);
+    border-bottom: 1px solid transparent;
+    transition: border-color .12s ease;
+  }
+  .meta a:hover {
+    border-bottom-color: var(--ink);
+  }
+</style>
+</head>
+<body>
+<div class="top-actions">
+  <button class="btn-icon theme-toggle" data-action="toggle-theme" aria-label="Toggle theme">
+    <svg class="sun-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    <svg class="moon-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
+</div>
+
+<main class="verify-wrap">
+  <a href="/" class="auth-mark">ROFIHO<span class="slash">/</span>STED</a>
+  <h1>Verify your email.</h1>
+  <p class="lead">We've sent a 6-digit code to your email. Enter it below to activate your account.</p>
+
+  <div id="alert" class="alert info" style="display:none"></div>
+
+  <form id="verify-form">
+    <div class="code-input-group">
+      <input type="text" class="code-digit" id="digit1" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="off" autofocus>
+      <input type="text" class="code-digit" id="digit2" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="off">
+      <input type="text" class="code-digit" id="digit3" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="off">
+      <input type="text" class="code-digit" id="digit4" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="off">
+      <input type="text" class="code-digit" id="digit5" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="off">
+      <input type="text" class="code-digit" id="digit6" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="off">
+    </div>
+
+    <div class="submit-row">
+      <button type="submit" class="btn btn-accent btn-lg" id="submit-btn" style="width:100%">
+        <span id="submit-label">Verify Email</span>
+        <i class="icon-arrow-right"></i>
+      </button>
+    </div>
+  </form>
+
+  <div class="resend-row">
+    <p class="resend-text">Didn't receive the code?</p>
+    <button type="button" class="btn btn-secondary" id="resend-btn">
+      <span id="resend-label">Resend Code</span>
+    </button>
+    <p class="resend-text" id="countdown-text" style="display:none; margin-top:.8rem">
+      Resend available in <span class="countdown" id="countdown">60</span>s
+    </p>
+  </div>
+
+  <div class="meta">
+    Need help? <a href="mailto:support@rofihosted.space">Contact support</a>
+  </div>
+</main>
+
+<script src="https://rofihosted.space/theme.js?v=41"></script>
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const email = params.get('email') || '';
+  
+  if (!email) {
+    location.href = '/signup';
+    return;
+  }
+
+  const form = document.getElementById('verify-form');
+  const submitBtn = document.getElementById('submit-btn');
+  const resendBtn = document.getElementById('resend-btn');
+  const alertEl = document.getElementById('alert');
+  const countdownText = document.getElementById('countdown-text');
+  const countdownEl = document.getElementById('countdown');
+  
+  const digits = [
+    document.getElementById('digit1'),
+    document.getElementById('digit2'),
+    document.getElementById('digit3'),
+    document.getElementById('digit4'),
+    document.getElementById('digit5'),
+    document.getElementById('digit6'),
+  ];
+
+  let resendCooldown = 0;
+  let cooldownInterval = null;
+
+  function showAlert(type, message) {
+    alertEl.className = 'alert ' + type;
+    alertEl.textContent = message;
+    alertEl.style.display = '';
+  }
+
+  function hideAlert() {
+    alertEl.style.display = 'none';
+  }
+
+  // Auto-focus next digit
+  digits.forEach((input, index) => {
+    input.addEventListener('input', function(e) {
+      const val = e.target.value;
+      if (val.length === 1 && /[0-9]/.test(val)) {
+        if (index < 5) {
+          digits[index + 1].focus();
+        } else {
+          // All digits filled, auto-submit
+          form.dispatchEvent(new Event('submit'));
+        }
+      }
+    });
+
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Backspace' && !e.target.value && index > 0) {
+        digits[index - 1].focus();
+      }
+    });
+
+    // Allow paste
+    input.addEventListener('paste', function(e) {
+      e.preventDefault();
+      const paste = (e.clipboardData || window.clipboardData).getData('text');
+      const nums = paste.replace(/\D/g, '').slice(0, 6);
+      nums.split('').forEach((num, i) => {
+        if (digits[i]) digits[i].value = num;
+      });
+      if (nums.length === 6) {
+        form.dispatchEvent(new Event('submit'));
+      }
+    });
+  });
+
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    hideAlert();
+    
+    const code = digits.map(d => d.value).join('');
+    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
+      showAlert('error', 'Please enter all 6 digits.');
+      return;
+    }
+
+    submitBtn.disabled = true;
+    
+    const fd = new URLSearchParams();
+    fd.set('email', email);
+    fd.set('code', code);
+
+    fetch('/signup/verify-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: fd.toString(),
+    }).then(r => r.json()).then(j => {
+      submitBtn.disabled = false;
+      if (j.ok) {
+        showAlert('success', 'Email verified! Redirecting...');
+        setTimeout(() => {
+          location.href = 'https://app.rofihosted.space/';
+        }, 1500);
+      } else {
+        let msg = j.err || 'Verification failed';
+        if (msg === 'code_not_found') msg = 'Code not found. Please request a new one.';
+        else if (msg === 'code_expired') msg = 'Code expired. Please request a new one.';
+        else if (msg === 'too_many_attempts') msg = 'Too many failed attempts. Please request a new code.';
+        else if (msg === 'invalid_code') msg = 'Invalid code. Please try again.';
+        showAlert('error', msg);
+        // Clear inputs on error
+        digits.forEach(d => d.value = '');
+        digits[0].focus();
+      }
+    }).catch(e => {
+      submitBtn.disabled = false;
+      showAlert('error', 'Network error: ' + e.message);
+    });
+  });
+
+  function startCooldown(seconds) {
+    resendCooldown = seconds;
+    resendBtn.disabled = true;
+    countdownText.style.display = '';
+    
+    if (cooldownInterval) clearInterval(cooldownInterval);
+    cooldownInterval = setInterval(() => {
+      resendCooldown--;
+      countdownEl.textContent = resendCooldown;
+      if (resendCooldown <= 0) {
+        clearInterval(cooldownInterval);
+        resendBtn.disabled = false;
+        countdownText.style.display = 'none';
+      }
+    }, 1000);
+  }
+
+  resendBtn.addEventListener('click', function() {
+    hideAlert();
+    resendBtn.disabled = true;
+    
+    const fd = new URLSearchParams();
+    fd.set('email', email);
+
+    fetch('/signup/resend-verification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: fd.toString(),
+    }).then(r => r.json()).then(j => {
+      if (j.ok) {
+        showAlert('success', j.message || 'Verification code sent!');
+        startCooldown(60);
+      } else {
+        resendBtn.disabled = false;
+        showAlert('error', j.err || 'Failed to resend code.');
+      }
+    }).catch(e => {
+      resendBtn.disabled = false;
+      showAlert('error', 'Network error: ' + e.message);
+    });
+  });
+
+  // Initial cooldown (prevent immediate resend)
+  startCooldown(60);
+})();
+</script>
+</body>
+</html>

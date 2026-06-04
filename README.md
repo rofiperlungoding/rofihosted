@@ -66,6 +66,7 @@ git push -> GitHub webhook (HMAC-verified) -> /v1/github/<id>
 ### Core platform
 - Single Zig 0.14 binary (httpz) on port 8080, ~17 MB binary, ~3 MB RSS idle, ~30 MB warm
 - Cookie-based session auth (HMAC-SHA256 with 32-byte random pepper, 7&nbsp;day TTL, HttpOnly + Secure + SameSite=Lax)
+- **Anti-duplicate signup protection**: 3-layer system (IP rate limiting, device fingerprinting, email verification) - see [docs/ANTI-DUPLICATE.md](docs/ANTI-DUPLICATE.md)
 - Per-IP token-bucket rate limiter
 - Request classifier: `self` / `unknown` / `bot` / `scanner` / `blocked`
 - Auto-ban (3 scanner hits in 10 min; 5 failed logins in 15 min)

@@ -104,6 +104,14 @@ pub const User = struct {
     approved_at: i64 = 0,
     last_login: i64 = 0,
 
+    // Email verification fields
+    email_verified: bool = false,
+    email_verified_at: i64 = 0,
+
+    // Anti-duplicate tracking
+    device_fingerprint: ?[]const u8 = null,
+    signup_ip: ?[]const u8 = null,
+
     pub fn isLoginable(self: User) bool {
         return self.status == .active or self.status == .pending;
     }
@@ -118,6 +126,8 @@ pub const SignupInput = struct {
     password: []const u8,
     invite_code: ?[]const u8 = null,
     signup_reason: []const u8 = "",
+    device_fingerprint: ?[]const u8 = null,
+    signup_ip: ?[]const u8 = null,
 };
 
 pub const Manager = struct {
@@ -210,6 +220,20 @@ pub const Manager = struct {
                 user.max_disk_mb = @intCast(@max(v.integer, 0));
             };
 
+            // Load new anti-duplicate fields (backward compatible)
+            if (obj.get("email_verified")) |v| if (v == .bool) {
+                user.email_verified = v.bool;
+            };
+            if (obj.get("email_verified_at")) |v| if (v == .integer) {
+                user.email_verified_at = v.integer;
+            };
+            if (obj.get("device_fingerprint")) |v| if (v == .string) {
+                user.device_fingerprint = try arena.dupe(u8, v.string);
+            };
+            if (obj.get("signup_ip")) |v| if (v == .string) {
+                user.signup_ip = try arena.dupe(u8, v.string);
+            };
+
             try self.users.append(user);
         }
     }
@@ -255,9 +279,23 @@ pub const Manager = struct {
             try w.print(",\"created_at\":{d},\"approved_at\":{d},\"last_login\":{d}", .{
                 u.created_at, u.approved_at, u.last_login,
             });
-            try w.print(",\"max_projects\":{d},\"max_rss_mb\":{d},\"max_disk_mb\":{d}}}\n", .{
+            try w.print(",\"max_projects\":{d},\"max_rss_mb\":{d},\"max_disk_mb\":{d}", .{
                 u.max_projects, u.max_rss_mb, u.max_disk_mb,
             });
+
+            // Write new anti-duplicate fields
+            try w.print(",\"email_verified\":{},\"email_verified_at\":{d}", .{
+                u.email_verified, u.email_verified_at,
+            });
+            if (u.device_fingerprint) |fp| {
+                try w.writeAll(",\"device_fingerprint\":");
+                try writeJsonString(w, fp);
+            }
+            if (u.signup_ip) |ip| {
+                try w.writeAll(",\"signup_ip\":");
+                try writeJsonString(w, ip);
+            }
+            try w.writeAll("}\n");
             try f.writeAll(buf.items);
         }
         try std.fs.renameAbsolute(tmp, PATH);
@@ -395,9 +433,14 @@ pub const Manager = struct {
             .signup_reason = arena.dupe(u8, input.signup_reason) catch return error.OutOfMemory,
             .created_at = std.time.timestamp(),
             .approved_at = if (initial_status == .active) std.time.timestamp() else 0,
+            // Email verification: verified if using invite code, otherwise needs verification
+            .email_verified = (method == .invite or method == .operator),
+            .email_verified_at = if (method == .invite or method == .operator) std.time.timestamp() else 0,
         };
         if (input.invite_code) |c| u.invite_code = arena.dupe(u8, c) catch null;
         if (approved_by) |a| u.approved_by = arena.dupe(u8, a) catch null;
+        if (input.device_fingerprint) |fp| u.device_fingerprint = arena.dupe(u8, fp) catch null;
+        if (input.signup_ip) |ip| u.signup_ip = arena.dupe(u8, ip) catch null;
 
         self.users.append(u) catch return error.OutOfMemory;
         self.rewriteToDisk() catch return error.IoError;
@@ -482,6 +525,37 @@ pub const Manager = struct {
             }
         }
         return error.NotFound;
+    }
+
+    /// Mark a user's email as verified. Called after successful email verification.
+    pub fn verifyEmail(self: *Manager, email: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        for (self.users.items, 0..) |u, i| {
+            if (std.mem.eql(u8, u.email, email)) {
+                self.users.items[i].email_verified = true;
+                self.users.items[i].email_verified_at = std.time.timestamp();
+                // Also activate if status was pending (waiting for verification)
+                if (self.users.items[i].status == .pending) {
+                    self.users.items[i].status = .active;
+                    self.users.items[i].approved_at = std.time.timestamp();
+                }
+                try self.rewriteToDisk();
+                return;
+            }
+        }
+        return error.NotFound;
+    }
+
+    /// Find user by email (for verification flow)
+    pub fn findByEmail(self: *Manager, email: []const u8) ?User {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.users.items) |u| {
+            if (std.mem.eql(u8, u.email, email)) return u;
+        }
+        return null;
     }
 
     /// First-boot migration: if no users exist yet, create the legacy
