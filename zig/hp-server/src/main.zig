@@ -783,13 +783,19 @@ fn handleConsole(app: *App, req: *httpz.Request, res: *httpz.Response, path: []c
     // pass through untouched so the rh CLI / automation keep working.
     if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
         if (surface == .admin and ident.role != .admin) {
-            // Tenants don't belong on the operator host.
-            try redirectAbs(res, "https://app.rofihosted.space", path);
+            // Tenants don't belong on the operator host. 302 (not cacheable).
+            const t = try std.fmt.allocPrint(res.arena, "https://app.rofihosted.space{s}", .{path});
+            res.status = 302;
+            res.header("Location", t);
+            res.body = "";
             return;
         }
         if (surface == .app and ident.role == .admin and !std.mem.startsWith(u8, path, "/api/")) {
-            // Operators live on the admin host; bounce page loads there.
-            try redirectAbs(res, "https://admin.rofihosted.space", path);
+            // Operators live on the admin host; bounce page loads there. 302.
+            const t = try std.fmt.allocPrint(res.arena, "https://admin.rofihosted.space{s}", .{path});
+            res.status = 302;
+            res.header("Location", t);
+            res.body = "";
             return;
         }
     }
