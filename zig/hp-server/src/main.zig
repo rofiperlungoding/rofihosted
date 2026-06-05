@@ -530,25 +530,31 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     // Dispatch by host
     if (std.mem.eql(u8, host, "www.rofihosted.space")) {
         try redirectAbs(res, "https://rofihosted.space", path);
-    } else if (std.mem.eql(u8, host, "dashboard.rofihosted.space")) {
-        try redirectAbs(res, "https://app.rofihosted.space", path);
     } else if (std.mem.eql(u8, host, "status.rofihosted.space")) {
-        const target = if (std.mem.eql(u8, path, "/")) "/status" else path;
-        try redirectAbs(res, "https://app.rofihosted.space", target);
+        try handleStatus(app, req, res, path);
+    } else if (std.mem.eql(u8, host, "admin.rofihosted.space")) {
+        try handleConsole(app, req, res, path, .admin);
+    } else if (std.mem.eql(u8, host, "app.rofihosted.space")) {
+        try handleConsole(app, req, res, path, .app);
+    } else if (std.mem.eql(u8, host, "dashboard.rofihosted.space")) {
+        try redirectAbs(res, "https://admin.rofihosted.space", path);
     } else if (std.mem.eql(u8, host, "api.rofihosted.space")) {
         const target = if (std.mem.eql(u8, path, "/")) "/api" else path;
-        try redirectAbs(res, "https://app.rofihosted.space", target);
+        try redirectAbs(res, "https://admin.rofihosted.space", target);
     } else if (std.mem.eql(u8, host, "files.rofihosted.space")) {
         const target = if (std.mem.eql(u8, path, "/")) "/files" else path;
-        try redirectAbs(res, "https://app.rofihosted.space", target);
-    } else if (std.mem.eql(u8, host, "app.rofihosted.space")) {
-        try handleApp(app, req, res, path);
+        try redirectAbs(res, "https://admin.rofihosted.space", target);
     } else {
         try handleRoot(app, req, res, path);
     }
 
     logVisitFull(app, req, ip, ua, host, method, res.status, cls);
 }
+
+/// Console surface: which subdomain the request came in on.
+///   .admin -> admin.rofihosted.space (operator only, full console)
+///   .app   -> app.rofihosted.space   (tenant console)
+const Surface = enum { admin, app };
 
 fn redirectAbs(res: *httpz.Response, base: []const u8, suffix: []const u8) !void {
     const target = try std.fmt.allocPrint(res.arena, "{s}{s}", .{ base, suffix });
@@ -609,6 +615,26 @@ fn handleRoot(app: *App, req: *httpz.Request, res: *httpz.Response, path: []cons
         res.body = @embedFile("templates/Simple-Line-Icons.woff2");
         return;
     }
+    if (std.mem.startsWith(u8, path, "/fonts/SFProDisplay-") and std.mem.endsWith(u8, path, ".woff2")) {
+        res.content_type = .BINARY;
+        res.header("Content-Type", "font/woff2");
+        res.header("Cache-Control", "public, max-age=2592000");
+        res.header("Access-Control-Allow-Origin", "*");
+        if (std.mem.eql(u8, path, "/fonts/SFProDisplay-400.woff2")) {
+            res.body = @embedFile("templates/fonts/SFProDisplay-400.woff2");
+        } else if (std.mem.eql(u8, path, "/fonts/SFProDisplay-500.woff2")) {
+            res.body = @embedFile("templates/fonts/SFProDisplay-500.woff2");
+        } else if (std.mem.eql(u8, path, "/fonts/SFProDisplay-600.woff2")) {
+            res.body = @embedFile("templates/fonts/SFProDisplay-600.woff2");
+        } else if (std.mem.eql(u8, path, "/fonts/SFProDisplay-700.woff2")) {
+            res.body = @embedFile("templates/fonts/SFProDisplay-700.woff2");
+        } else if (std.mem.eql(u8, path, "/fonts/SFProDisplay-800.woff2")) {
+            res.body = @embedFile("templates/fonts/SFProDisplay-800.woff2");
+        } else {
+            return notFound(res);
+        }
+        return;
+    }
     if (std.mem.eql(u8, path, "/")) {
         // Role-aware: authed users go to the console; everyone else gets the
         // marketing landing. This means the apex serves as both the public
@@ -616,7 +642,7 @@ fn handleRoot(app: *App, req: *httpz.Request, res: *httpz.Response, path: []cons
         if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
             res.status = 302;
             const target: []const u8 = if (ident.role == .admin)
-                "https://app.rofihosted.space/"
+                "https://admin.rofihosted.space/"
             else
                 "https://app.rofihosted.space/projects";
             res.header("Location", target);
@@ -658,10 +684,97 @@ fn handleRoot(app: *App, req: *httpz.Request, res: *httpz.Response, path: []cons
 }
 
 // =================================================================
+// PUBLIC STATUS - status.rofihosted.space
+// =================================================================
+fn handleStatus(app: *App, _: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
+    if (std.mem.eql(u8, path, "/health")) {
+        res.content_type = .TEXT;
+        res.body = "ok\n";
+        return;
+    }
+    if (std.mem.eql(u8, path, "/api/status")) return apiStatus(app, res);
+    // Everything else on this host renders the public status page.
+    res.content_type = .HTML;
+    res.header("Cache-Control", "no-store, must-revalidate");
+    res.body = @embedFile("templates/status-public.html");
+}
+
+/// Public status JSON. Built only from non-sensitive, real signals:
+/// the server is responding (so the web layer is up), the live tunnel
+/// state, and the latest uptime-probe result per target. No fabricated
+/// numbers - if there is no data, it says so.
+fn apiStatus(app: *App, res: *httpz.Response) !void {
+    res.content_type = .JSON;
+    res.header("Cache-Control", "no-store");
+    res.header("Access-Control-Allow-Origin", "*");
+
+    app.tunnel_status.mutex.lock();
+    const tstate = app.tunnel_status.state;
+    const tconns = app.tunnel_status.connections;
+    app.tunnel_status.mutex.unlock();
+    const tunnel_label: []const u8 = switch (tstate) {
+        .healthy => "operational",
+        .degraded => "degraded",
+        .offline => "down",
+        .unknown => "operational",
+    };
+
+    var records: []const store.UptimeRecord = &.{};
+    app.store_mutex.lock();
+    if (store.readLatestUptime(res.arena, uptime_path)) |recs| {
+        records = recs;
+    } else |_| {}
+    app.store_mutex.unlock();
+
+    // Overall severity: 0 operational, 1 degraded, 2 down.
+    var worst: u8 = 0;
+    if (std.mem.eql(u8, tunnel_label, "degraded")) worst = @max(worst, 1);
+    if (std.mem.eql(u8, tunnel_label, "down")) worst = @max(worst, 2);
+    for (records) |r| {
+        if (!r.ok) worst = @max(worst, 2);
+    }
+    const overall: []const u8 = switch (worst) {
+        0 => "operational",
+        1 => "degraded",
+        else => "down",
+    };
+
+    var buf = std.ArrayList(u8).init(res.arena);
+    const w = buf.writer();
+    try w.writeAll("{\"ok\":true,\"overall\":\"");
+    try w.writeAll(overall);
+    try w.print("\",\"updated_at\":{d},\"components\":[", .{std.time.timestamp()});
+    try w.writeAll("{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\",\"detail\":\"\"}");
+    try w.print(",{{\"group\":\"Core Platform\",\"name\":\"Edge tunnel\",\"status\":\"{s}\",\"detail\":\"{d} HA connections\"}}", .{ tunnel_label, tconns });
+    for (records) |r| {
+        const st: []const u8 = if (r.ok) "operational" else "down";
+        try w.writeAll(",{\"group\":\"Monitors\",\"name\":");
+        try writeStatusJsonStr(w, r.target);
+        try w.print(",\"status\":\"{s}\",\"latency_ms\":{d}}}", .{ st, r.latency_ms });
+    }
+    try w.writeAll("]}");
+    res.body = try buf.toOwnedSlice();
+}
+
+fn writeStatusJsonStr(w: anytype, s: []const u8) !void {
+    try w.writeByte('"');
+    for (s) |c| switch (c) {
+        '\\' => try w.writeAll("\\\\"),
+        '"' => try w.writeAll("\\\""),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
+        '\t' => try w.writeAll("\\t"),
+        0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => try w.print("\\u{x:0>4}", .{c}),
+        else => try w.writeByte(c),
+    };
+    try w.writeByte('"');
+}
+
+// =================================================================
 // PRIVATE CONSOLE - app.rofihosted.space
 // =================================================================
-fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
-    // Public sub-paths inside app.* (no auth needed)
+fn handleConsole(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8, surface: Surface) !void {
+    // Public sub-paths inside the console host (no auth needed)
     if (std.mem.eql(u8, path, "/login")) return handleLoginPage(app, req, res);
     if (std.mem.eql(u8, path, "/login/submit")) return handleLoginSubmit(app, req, res, "/");
     if (std.mem.eql(u8, path, "/logout")) return handleLogout(req, res);
@@ -673,6 +786,23 @@ fn handleApp(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const
 
     // Protected gate for everything else
     if (!try guard(app, req, res, path)) return;
+
+    // Surface (subdomain) access control. Defense-in-depth on top of the
+    // per-route role checks further down. Cookie-authed users get steered to
+    // the host that matches their role; API-key callers (no cookie identity)
+    // pass through untouched so the rh CLI / automation keep working.
+    if (auth.currentIdentity(app.auth_cfg, app.users, app.allocator, req)) |ident| {
+        if (surface == .admin and ident.role != .admin) {
+            // Tenants don't belong on the operator host.
+            try redirectAbs(res, "https://app.rofihosted.space", path);
+            return;
+        }
+        if (surface == .app and ident.role == .admin and !std.mem.startsWith(u8, path, "/api/")) {
+            // Operators live on the admin host; bounce page loads there.
+            try redirectAbs(res, "https://admin.rofihosted.space", path);
+            return;
+        }
+    }
 
     // Internal API for the console (consumed by JS)
     if (std.mem.eql(u8, path, "/api/me")) {
@@ -992,17 +1122,20 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
     // Try multi-user login first; fall back to legacy operator credentials.
     var ok: bool = false;
     var pending: bool = false;
+    var is_admin: bool = false;
     if (attempted_user.len > 0 and attempted_pass.len > 0) {
         if (app.users.verify(attempted_user, attempted_pass)) |user| {
             try auth.issueUserCookie(app.auth_cfg, user, res);
             ok = true;
             pending = (user.status == .pending);
+            is_admin = (user.role == .admin);
         } else |_| {
             // Multi-user verify failed; try legacy operator path.
             const snap = app.auth_cfg.snapshot();
             if (std.mem.eql(u8, attempted_user, snap.user) and std.mem.eql(u8, attempted_pass, snap.pass)) {
                 try auth.issueLegacyCookie(app.auth_cfg, res);
                 ok = true;
+                is_admin = true;
             }
         }
     }
@@ -1033,8 +1166,13 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
         }
     }
 
+    // Same-host base for staying put on errors (login page is served on both
+    // admin.* and app.*). cf strips the port already, but be safe.
+    const host_full = req.header("host") orelse "app.rofihosted.space";
+    const cur_host = if (std.mem.indexOfScalar(u8, host_full, ':')) |ci| host_full[0..ci] else host_full;
+
     if (!ok) {
-        const target = try std.fmt.allocPrint(res.arena, "https://app.rofihosted.space/login?error=1&next={s}", .{next});
+        const target = try std.fmt.allocPrint(res.arena, "https://{s}/login?error=1&next={s}", .{ cur_host, next });
         res.status = 302;
         res.header("Location", target);
         res.body = "";
@@ -1049,7 +1187,9 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
         return;
     }
 
-    const target = try std.fmt.allocPrint(res.arena, "https://app.rofihosted.space{s}", .{next});
+    // Role-aware: operators land on the admin host, tenants on the app host.
+    const host_base: []const u8 = if (is_admin) "https://admin.rofihosted.space" else "https://app.rofihosted.space";
+    const target = try std.fmt.allocPrint(res.arena, "{s}{s}", .{ host_base, next });
     res.status = 302;
     res.header("Location", target);
     res.body = "";
@@ -1058,7 +1198,7 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
 fn handleLogout(_: *httpz.Request, res: *httpz.Response) !void {
     try auth.logout(res);
     res.status = 302;
-    res.header("Location", "https://app.rofihosted.space/login");
+    res.header("Location", "https://rofihosted.space/");
     res.body = "";
 }
 

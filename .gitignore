@@ -65,3 +65,10 @@ unblock.sh
 gen-key.sh
 diag-*.sh
 rebuild-tenancy.sh
+
+# Source OTF fonts (large; only the subset woff2 in templates/fonts is shipped)
+San Francisco Pro Display/
+convert-fonts.py
+
+# Local design preview scratch (not part of the deployed product)
+preview/

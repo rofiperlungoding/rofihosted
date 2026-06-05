@@ -348,7 +348,7 @@ pub const ServeResult = struct {
 /// Subdomains reserved by the system. Even if ~/hosted/sites/<x>/current
 /// exists, these will never be served as static sites.
 const RESERVED_SUBDOMAINS = [_][]const u8{
-    "app", "www", "dashboard", "status", "api", "files",
+    "app", "www", "dashboard", "status", "api", "files", "admin",
 };
 
 /// Extract subdomain from a host like "blog.rofihosted.space". Returns null
