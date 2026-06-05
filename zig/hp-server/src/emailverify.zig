@@ -7,6 +7,7 @@
 //! are activated immediately (or go to pending approval if no invite).
 
 const std = @import("std");
+const mailer = @import("email.zig");
 
 pub const VerificationToken = struct {
     email: []const u8,
@@ -34,13 +35,27 @@ pub const SmtpConfig = struct {
     smtp_user: []const u8 = "",
     smtp_pass: []const u8 = "",
     use_tls: bool = true,
+    // Preferred transport: Brevo HTTP API. When set, we send via the API
+    // (clean JSON POST, no shell, no STARTTLS guessing) and ignore the raw
+    // SMTP fields below.
+    api_key: ?[]const u8 = null,
 
+    /// Configured when either the Brevo HTTP API key is present, or the raw
+    /// SMTP relay is fully specified. The HTTP API takes precedence.
     pub fn isConfigured(self: SmtpConfig) bool {
+        if (self.api_key) |k| {
+            if (k.len > 0) return true;
+        }
         return self.enabled and self.smtp_host.len > 0 and self.smtp_user.len > 0;
     }
 
     pub fn fromEnv(allocator: std.mem.Allocator) SmtpConfig {
         var cfg = SmtpConfig{};
+
+        // Brevo HTTP API key (preferred). Also accepts MAIL_FROM_* shared with email.zig.
+        if (std.process.getEnvVarOwned(allocator, "BREVO_API_KEY")) |v| {
+            cfg.api_key = v; // Leak intentionally for static config
+        } else |_| {}
 
         if (std.process.getEnvVarOwned(allocator, "ROFI_SMTP_ENABLED")) |v| {
             defer allocator.free(v);
@@ -64,11 +79,17 @@ pub const SmtpConfig = struct {
             cfg.smtp_pass = v; // Leak
         } else |_| {}
 
-        if (std.process.getEnvVarOwned(allocator, "ROFI_SMTP_FROM_EMAIL")) |v| {
+        // Sender identity: MAIL_FROM_* (shared with email.zig) wins, then the
+        // legacy ROFI_SMTP_FROM_* names.
+        if (std.process.getEnvVarOwned(allocator, "MAIL_FROM_EMAIL")) |v| {
+            cfg.from_email = v; // Leak
+        } else |_| if (std.process.getEnvVarOwned(allocator, "ROFI_SMTP_FROM_EMAIL")) |v| {
             cfg.from_email = v; // Leak
         } else |_| {}
 
-        if (std.process.getEnvVarOwned(allocator, "ROFI_SMTP_FROM_NAME")) |v| {
+        if (std.process.getEnvVarOwned(allocator, "MAIL_FROM_NAME")) |v| {
+            cfg.from_name = v; // Leak
+        } else |_| if (std.process.getEnvVarOwned(allocator, "ROFI_SMTP_FROM_NAME")) |v| {
             cfg.from_name = v; // Leak
         } else |_| {}
 
@@ -221,68 +242,97 @@ pub const Manager = struct {
     }
 
     fn sendEmail(self: *Manager, to: []const u8, username: []const u8, code: []const u8) !void {
-        // Build email body
-        var body_buf = std.ArrayList(u8).init(self.allocator);
-        defer body_buf.deinit();
-        const w = body_buf.writer();
+        // Preferred path: Brevo HTTP API (clean JSON POST, no shell, no
+        // STARTTLS guessing). Used whenever an API key is configured.
+        if (self.smtp_config.api_key) |key| {
+            if (key.len > 0) {
+                try self.sendViaApi(key, to, username, code);
+                return;
+            }
+        }
+        try self.sendViaSmtp(to, username, code);
+    }
 
-        try w.print(
-            \\Hi {s},
-            \\
-            \\Thanks for signing up for rofihosted!
-            \\
-            \\Your verification code is: {s}
-            \\
-            \\This code will expire in {d} minutes.
-            \\
-            \\If you didn't request this, please ignore this email.
-            \\
-            \\---
-            \\rofihosted
-            \\https://rofihosted.space
-            \\
-        , .{ username, code, self.expiry_minutes });
+    /// Send the verification email through the Brevo HTTP API.
+    fn sendViaApi(self: *Manager, key: []const u8, to: []const u8, username: []const u8, code: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
 
-        // Use curl to send email via SMTP
-        // This is a simple approach - for production you might want a proper SMTP library
-        var cmd_buf = std.ArrayList(u8).init(self.allocator);
-        defer cmd_buf.deinit();
-        const cmd_w = cmd_buf.writer();
+        const html = try renderVerificationHtml(a, username, code, self.expiry_minutes);
+        const text = try std.fmt.allocPrint(a, "Hi {s},\n\nYour rofihosted verification code is: {s}\n\n" ++
+            "This code expires in {d} minutes. If you didn't request this, ignore this email.\n\n" ++
+            "rofihosted\nhttps://rofihosted.space\n", .{ username, code, self.expiry_minutes });
 
-        const protocol = if (self.smtp_config.use_tls) "smtps" else "smtp";
-        try cmd_w.print(
-            \\curl --silent --show-error --url "{s}://{s}:{d}" \
-            \\  --mail-from "{s}" \
-            \\  --mail-rcpt "{s}" \
-            \\  --user "{s}:{s}" \
-            \\  --upload-file - <<EOF
-            \\From: {s} <{s}>
-            \\To: {s}
-            \\Subject: Verify your rofihosted account
-            \\
-            \\{s}
-            \\EOF
-        , .{
-            protocol,
-            self.smtp_config.smtp_host,
-            self.smtp_config.smtp_port,
-            self.smtp_config.from_email,
-            to,
-            self.smtp_config.smtp_user,
-            self.smtp_config.smtp_pass,
-            self.smtp_config.from_name,
-            self.smtp_config.from_email,
-            to,
-            body_buf.items,
+        const ecfg = mailer.Config{
+            .api_key = key,
+            .from_email = self.smtp_config.from_email,
+            .from_name = self.smtp_config.from_name,
+        };
+        const ok = mailer.send(self.allocator, ecfg, .{
+            .to_email = to,
+            .to_name = username,
+            .subject = "Your rofihosted verification code",
+            .html = html,
+            .text = text,
+        });
+        if (!ok) return error.SmtpFailed;
+    }
+
+    /// Raw SMTP fallback. Builds the message via argv + stdin (no shell, so no
+    /// injection) and selects the correct transport for the port: implicit TLS
+    /// (smtps) on 465, STARTTLS (smtp + --ssl-reqd) everywhere else.
+    fn sendViaSmtp(self: *Manager, to: []const u8, username: []const u8, code: []const u8) !void {
+        const cfg = self.smtp_config;
+
+        var msg = std.ArrayList(u8).init(self.allocator);
+        defer msg.deinit();
+        try msg.writer().print(
+            "From: {s} <{s}>\r\n" ++
+                "To: {s}\r\n" ++
+                "Subject: Your rofihosted verification code\r\n" ++
+                "MIME-Version: 1.0\r\n" ++
+                "Content-Type: text/plain; charset=UTF-8\r\n" ++
+                "\r\n" ++
+                "Hi {s},\r\n\r\n" ++
+                "Your rofihosted verification code is: {s}\r\n\r\n" ++
+                "This code expires in {d} minutes.\r\n" ++
+                "If you didn't request this, please ignore this email.\r\n\r\n" ++
+                "rofihosted\r\nhttps://rofihosted.space\r\n",
+            .{ cfg.from_name, cfg.from_email, to, username, code, self.expiry_minutes },
+        );
+
+        const use_implicit_tls = (cfg.smtp_port == 465);
+        const scheme = if (use_implicit_tls) "smtps" else "smtp";
+        const url = try std.fmt.allocPrint(self.allocator, "{s}://{s}:{d}", .{ scheme, cfg.smtp_host, cfg.smtp_port });
+        defer self.allocator.free(url);
+        const user_arg = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ cfg.smtp_user, cfg.smtp_pass });
+        defer self.allocator.free(user_arg);
+
+        var argv = std.ArrayList([]const u8).init(self.allocator);
+        defer argv.deinit();
+        try argv.appendSlice(&[_][]const u8{
+            "curl", "-sS", "--max-time", "15", "--url", url,
+        });
+        if (!use_implicit_tls and cfg.use_tls) try argv.append("--ssl-reqd");
+        try argv.appendSlice(&[_][]const u8{
+            "--mail-from",   cfg.from_email,
+            "--mail-rcpt",   to,
+            "--user",        user_arg,
+            "--upload-file", "-",
         });
 
-        // Execute command
-        var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd_buf.items }, self.allocator);
-        child.stdin_behavior = .Ignore;
+        var child = std.process.Child.init(argv.items, self.allocator);
+        child.stdin_behavior = .Pipe;
         child.stdout_behavior = .Ignore;
         child.stderr_behavior = .Ignore;
-
-        const term = try child.spawnAndWait();
+        try child.spawn();
+        if (child.stdin) |stdin| {
+            stdin.writeAll(msg.items) catch {};
+            stdin.close();
+            child.stdin = null;
+        }
+        const term = try child.wait();
         if (term != .Exited or term.Exited != 0) {
             return error.SmtpFailed;
         }
@@ -301,6 +351,51 @@ pub const Manager = struct {
         self.arena.deinit();
     }
 };
+
+/// Render the HTML verification email. The username is HTML-escaped; the code
+/// is always 6 numeric digits from generateCode, so it needs no escaping.
+/// Style mirrors the Anthropic-inspired palette used across the dashboard.
+fn renderVerificationHtml(allocator: std.mem.Allocator, username: []const u8, code: []const u8, expiry_minutes: u32) ![]const u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    const w = buf.writer();
+    try w.writeAll(
+        \\<!DOCTYPE html><html><body style="margin:0;background:#f5f4f0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;padding:40px 16px;">
+        \\<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+        \\<table role="presentation" width="460" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e3dd;">
+        \\<tr><td style="background:#141413;padding:24px 32px;"><span style="color:#ffffff;font-size:17px;font-weight:600;letter-spacing:-0.01em;">rofihosted</span></td></tr>
+        \\<tr><td style="padding:32px 32px 8px;"><h1 style="margin:0 0 10px;font-size:20px;color:#141413;font-weight:600;">Verify your email</h1>
+        \\<p style="margin:0;font-size:15px;line-height:1.6;color:#5c5b57;">Hi 
+    );
+    try writeHtmlEscaped(w, username);
+    try w.writeAll(
+        \\, enter this code to finish creating your account.</p></td></tr>
+        \\<tr><td style="padding:24px 32px;"><div style="background:#f5f4f0;border:1px solid #e5e3dd;border-radius:10px;padding:20px;text-align:center;">
+        \\<div style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:34px;font-weight:700;letter-spacing:8px;color:#141413;">
+    );
+    try w.writeAll(code);
+    try w.writeAll(
+        \\</div></div></td></tr>
+        \\<tr><td style="padding:0 32px 32px;"><p style="margin:0;font-size:13px;line-height:1.6;color:#8a8880;">This code expires in 
+    );
+    try w.print("{d}", .{expiry_minutes});
+    try w.writeAll(
+        \\ minutes. If you didn't request this, you can safely ignore this email.</p></td></tr>
+        \\<tr><td style="border-top:1px solid #e5e3dd;padding:18px 32px;"><span style="font-size:12px;color:#8a8880;">rofihosted.space</span></td></tr>
+        \\</table></td></tr></table></body></html>
+    );
+    return buf.toOwnedSlice();
+}
+
+fn writeHtmlEscaped(w: anytype, s: []const u8) !void {
+    for (s) |c| switch (c) {
+        '&' => try w.writeAll("&amp;"),
+        '<' => try w.writeAll("&lt;"),
+        '>' => try w.writeAll("&gt;"),
+        '"' => try w.writeAll("&quot;"),
+        '\'' => try w.writeAll("&#39;"),
+        else => try w.writeByte(c),
+    };
+}
 
 fn generateCode(allocator: std.mem.Allocator) ![]const u8 {
     // Generate a 6-digit numeric code

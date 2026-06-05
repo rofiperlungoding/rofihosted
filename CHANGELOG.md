@@ -4,6 +4,26 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Added: Transactional Email via Brevo HTTP API (2026-06-05)
+
+Wired up real email sending for the signup verification flow (anti-duplicate Layer 3).
+
+**New module:**
+- New [`email.zig`](zig/hp-server/src/email.zig): sends transactional email through the Brevo HTTP API (`POST https://api.brevo.com/v3/smtp/email`). The JSON body is piped to `curl` over stdin (`--data-binary @-`), same proven subprocess pattern as [`ai.zig`](zig/hp-server/src/ai.zig)/[`telegram.zig`](zig/hp-server/src/telegram.zig). Every interpolated field (recipient, subject, HTML) is JSON-escaped, so no untrusted data ever touches a shell command line.
+
+**Fixed in [`emailverify.zig`](zig/hp-server/src/emailverify.zig):**
+- **STARTTLS bug**: the old SMTP-over-curl path built `smtps://host:587`, but port 587 is STARTTLS (needs `smtp://` + `--ssl-reqd`); `smtps://` is implicit TLS on 465 only. Verification email sends against Brevo would have failed.
+- **Shell injection risk**: the old path interpolated email/username/body into a `sh -c` heredoc. Rewritten to build `curl` argv + pipe the message over stdin (no shell).
+- Sending now prefers the Brevo HTTP API when `BREVO_API_KEY` is set, with the (now safe) raw-SMTP relay as a fallback.
+- Verification emails are now styled HTML (Anthropic-inspired palette) with a plaintext alternative; the username is HTML-escaped.
+
+**Config:**
+- New env vars (loaded by `start-zig-server.sh`): `BREVO_API_KEY`, `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME`. `SmtpConfig.isConfigured()` now returns true when the API key is present, which is what gates the verification step in the signup handler.
+- New [`scripts/set-email.sh`](scripts/set-email.sh): upserts those three keys into `~/.hp-server.env` without clobbering other secrets, validates the key against `/v3/account`, and offers an optional live test send.
+- The `MAIL_FROM_EMAIL` must be a Brevo-verified sender (or an address on a domain authenticated in Brevo). On a fresh account the signup email is auto-verified; verify the `rofihosted.space` domain (SPF + DKIM in Cloudflare) to send from `noreply@rofihosted.space`.
+
+**Verification:** cross-compiled clean for `x86_64-linux-gnu` (Zig 0.14.0); `email.zig` (2) and `emailverify.zig` (6) unit tests pass; live send to the account confirmed (HTTP 201, messageId returned).
+
 ### Fixed: Backup System Critical Bug + Minor Issues (2026-06-02)
 
 **CRITICAL: Backup data loss prevented**
