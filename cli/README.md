@@ -1,14 +1,25 @@
-# rh - rofihosted CLI
+# rofihosted CLI
 
-Manage your phone-based hp-server from any laptop. No SSH required.
+Deploy and manage apps on your phone-powered server, straight from the terminal. No SSH required.
+
+The package installs **two** commands that do the same thing:
+
+- `rofihosted` - the full brand name (great for scripts, docs, and discoverability)
+- `rh` - a short alias for everyday typing
+
+Use whichever you like; this README uses the short `rh` form for brevity.
 
 ## Install
 
 ```sh
 cd cli
 npm install -g .
-# or for development:
+# or, once published:
+npm install -g rofihosted
+
+# for development (symlink both names):
 chmod +x rh.mjs
+ln -s "$PWD/rh.mjs" /usr/local/bin/rofihosted
 ln -s "$PWD/rh.mjs" /usr/local/bin/rh
 ```
 

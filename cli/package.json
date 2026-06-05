@@ -1,12 +1,40 @@
 {
-  "name": "rofihosted-cli",
+  "name": "rofihosted",
   "version": "0.3.0",
-  "description": "CLI for managing rofihosted projects from your laptop",
+  "description": "rofihosted CLI - deploy and manage apps on a phone-powered server (Termux/Android). One-click Git deploys, secrets, SQL, logs, and MCP, all from your terminal.",
   "bin": {
+    "rofihosted": "./rh.mjs",
     "rh": "./rh.mjs"
   },
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "rofihosted",
+    "hosting",
+    "deploy",
+    "deployment",
+    "cli",
+    "paas",
+    "self-hosted",
+    "homelab",
+    "termux",
+    "android",
+    "phone-server",
+    "zig",
+    "cloudflare-tunnel",
+    "git-deploy",
+    "mcp"
+  ],
+  "homepage": "https://rofihosted.space",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rofiperlungoding/rofihosted.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/rofiperlungoding/rofihosted/issues"
+  },
+  "author": "rofihosted",
   "engines": {
     "node": ">=18.0.0"
   }

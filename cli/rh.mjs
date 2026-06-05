@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// rh - rofihosted command line interface.
+// rofihosted - phone-powered hosting, from your terminal.
+// Installs two commands: `rofihosted` (full brand) and `rh` (short alias).
 //
 // Talks to https://app.rofihosted.space using an API key (admin scope).
 // Configure once with `rh login` (interactive) or by setting env vars:
@@ -939,7 +940,8 @@ async function main() {
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     banner();
-    console.log(`rh - rofihosted CLI`);
+    console.log(`rofihosted - phone-powered hosting, from your terminal`);
+    console.log(`usage: rofihosted <command>   (short alias: rh)`);
     console.log();
     console.log(`Account & system:`);
     console.log(`  rh signup                      sign up for a new tenant account`);
