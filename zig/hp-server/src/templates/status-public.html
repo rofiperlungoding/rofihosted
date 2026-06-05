@@ -40,6 +40,19 @@
   .bars i:hover { opacity: .6; }
   .bars-meta { display: flex; justify-content: space-between; margin-top: .45rem; font-size: .72rem; color: var(--text-3); }
   .bars-meta .pct { font-weight: 600; color: var(--text-2); }
+  .bars i { cursor: default; }
+  .tip { position: fixed; z-index: 100; pointer-events: none; background: #16191d; color: #f3f1ea;
+    border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: .6rem .75rem; font-size: .78rem;
+    line-height: 1.45; box-shadow: 0 10px 34px rgba(0,0,0,.35); opacity: 0; transition: opacity .1s; max-width: 230px; }
+  .tip.show { opacity: 1; }
+  .tip .td { font-weight: 700; color: #fff; margin-bottom: .25rem; }
+  .tip .ts { display: inline-flex; align-items: center; gap: .4rem; font-weight: 600; }
+  .tip .ts .d { width: 7px; height: 7px; border-radius: 50%; }
+  .tip .ts.op { color: #3fcc7e; } .tip .ts.op .d { background: #3fcc7e; }
+  .tip .ts.deg { color: #e8a83a; } .tip .ts.deg .d { background: #e8a83a; }
+  .tip .ts.down { color: #ec6464; } .tip .ts.down .d { background: #ec6464; }
+  .tip .ts.nd { color: #9aa0ab; } .tip .ts.nd .d { background: #6b7280; }
+  .tip .tl { color: #a7aebb; margin-top: .25rem; }
 
   .stfoot { margin-top: 2.5rem; text-align: center; color: var(--text-3); font-size: .8rem; padding-bottom: 1rem; }
   .stfoot a { color: var(--accent); }
@@ -73,12 +86,15 @@
   <div class="stfoot">Powered by a phone in a drawer &middot; <a href="https://rofihosted.space">rofihosted.space</a> &middot; refreshes every 60s</div>
 </div>
 </main>
+<div id="tip" class="tip"></div>
 
 <script>
   function rhT(){var d=document.documentElement;var n=d.getAttribute('data-theme')==='light'?'dark':'light';d.classList.add('t');d.setAttribute('data-theme',n);try{localStorage.setItem('rofi.theme',n);}catch(e){}}
   function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
   var TITLES={operational:'All Systems Operational',degraded:'Degraded Performance',down:'Service Disruption'};
+  var ST={from:0,to:0,lat:[]};
   function render(d){
+    ST={from:d.history_from||0,to:d.history_to||0,lat:d.history_lat||[]};
     var ov=document.getElementById('overall');
     var cls=d.overall==='down'?'down':(d.overall==='degraded'?'deg':'op');
     ov.className='overall '+cls;
@@ -98,7 +114,7 @@
         if(c.latency_ms!=null) detail=(detail?detail+' \u00b7 ':'')+c.latency_ms+' ms';
         var bars='';
         var hist=c.history||'';
-        for(var i=0;i<hist.length;i++){var ch=hist[i];var cl=ch==='d'?'d':(ch==='g'?'g':(ch==='n'?'n':''));bars+='<i class="'+cl+'"></i>';}
+        for(var i=0;i<hist.length;i++){var ch=hist[i];var cl=ch==='d'?'d':(ch==='g'?'g':(ch==='n'?'n':''));bars+='<i class="'+cl+'" data-i="'+i+'" data-s="'+ch+'"></i>';}
         var pct=(c.uptime!=null)?(c.uptime.toFixed(2)+'% uptime'):'';
         html+='<div class="cmp">'+
           '<div class="cmp-row"><div><div class="nm">'+esc(c.name)+'</div>'+(detail?'<div class="dt">'+detail+'</div>':'')+'</div>'+
@@ -117,6 +133,38 @@
     });
   }
   load(); setInterval(load,60000);
+
+  // Hover tooltip on uptime bars: time + status + latency for that bucket.
+  (function(){
+    var tip=document.getElementById('tip');
+    var groups=document.getElementById('groups');
+    var SMAP={u:['op','Operational'],d:['down','Outage'],g:['deg','Degraded'],n:['nd','No data recorded']};
+    groups.addEventListener('mouseover',function(e){
+      var b=e.target;
+      if(b.tagName!=='I'||!b.parentNode||!b.parentNode.classList.contains('bars'))return;
+      var i=+b.getAttribute('data-i');
+      var ch=b.getAttribute('data-s')||'n';
+      var slots=b.parentNode.children.length;
+      var t=(ST.from&&ST.to&&slots>1)?(ST.from+Math.round((ST.to-ST.from)*(i/(slots-1)))):0;
+      var lat=(ST.lat&&ST.lat[i]!=null)?ST.lat[i]:-1;
+      var s=SMAP[ch]||SMAP.n;
+      var when=t?new Date(t*1000).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+      tip.innerHTML=(when?'<div class="td">'+when+'</div>':'')+
+        '<div class="ts '+s[0]+'"><span class="d"></span>'+s[1]+'</div>'+
+        ((lat>=0&&ch!=='n')?'<div class="tl">'+lat+' ms response</div>':'');
+      tip.classList.add('show');
+    });
+    groups.addEventListener('mousemove',function(e){
+      if(!tip.classList.contains('show'))return;
+      var x=Math.min(e.clientX+12,window.innerWidth-240);
+      var y=e.clientY-tip.offsetHeight-10;
+      if(y<8)y=e.clientY+16;
+      tip.style.left=x+'px';tip.style.top=y+'px';
+    });
+    groups.addEventListener('mouseout',function(e){
+      if(e.target.tagName==='I')tip.classList.remove('show');
+    });
+  })();
 </script>
 </body>
 </html>

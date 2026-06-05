@@ -64,16 +64,25 @@ pub fn readLatestUptime(allocator: std.mem.Allocator, path: []const u8) ![]Uptim
     return out;
 }
 
-/// Build a recent uptime history for `target` as `slots` buckets, oldest to
-/// newest. Each byte is 'u' (up), 'd' (down), or 'n' (no data). Buckets span
-/// the actual time range of the available records; since the JSONL store is
-/// bounded, this is honestly "recent" history, and slots with no probe stay
-/// 'n'. Caller owns the returned slice (length == slots).
-pub fn readUptimeHistory(allocator: std.mem.Allocator, path: []const u8, target: []const u8, slots: usize) ![]u8 {
-    const out = try allocator.alloc(u8, slots);
-    @memset(out, 'n');
-    if (slots == 0) return out;
-    const all = readJsonl(UptimeRecord, allocator, path, 4096) catch return out;
+/// Detailed recent uptime history for `target`: per-bucket state + average
+/// latency, plus the real time range the buckets span. `states[i]` is
+/// 'u'/'d'/'g'/'n'; `lat[i]` is avg ms (or -1 when no data). Honest: buckets
+/// with no probe in range stay 'n'. Caller owns the returned slices.
+pub const UptimeHistory = struct {
+    states: []u8,
+    lat: []i64,
+    from: i64,
+    to: i64,
+};
+
+pub fn readUptimeHistory(allocator: std.mem.Allocator, path: []const u8, target: []const u8, slots: usize) !UptimeHistory {
+    const states = try allocator.alloc(u8, slots);
+    @memset(states, 'n');
+    const lat = try allocator.alloc(i64, slots);
+    for (lat) |*x| x.* = -1;
+    var res = UptimeHistory{ .states = states, .lat = lat, .from = 0, .to = 0 };
+    if (slots == 0) return res;
+    const all = readJsonl(UptimeRecord, allocator, path, 4096) catch return res;
 
     var min_t: i64 = std.math.maxInt(i64);
     var max_t: i64 = std.math.minInt(i64);
@@ -84,19 +93,33 @@ pub fn readUptimeHistory(allocator: std.mem.Allocator, path: []const u8, target:
         if (r.checked_at > max_t) max_t = r.checked_at;
         count += 1;
     }
-    if (count == 0) return out;
+    if (count == 0) return res;
+    res.from = min_t;
+    res.to = max_t;
     const span: i64 = if (max_t > min_t) max_t - min_t else 1;
+
+    const sum = try allocator.alloc(i64, slots);
+    @memset(sum, 0);
+    const cnt = try allocator.alloc(u32, slots);
+    @memset(cnt, 0);
     for (all) |r| {
         if (!std.mem.eql(u8, r.target, target)) continue;
         var idx: usize = @intCast(@divFloor((r.checked_at - min_t) * @as(i64, @intCast(slots - 1)), span));
         if (idx >= slots) idx = slots - 1;
         if (!r.ok) {
-            out[idx] = 'd';
-        } else if (out[idx] != 'd') {
-            out[idx] = 'u';
+            states[idx] = 'd';
+        } else if (states[idx] != 'd') {
+            states[idx] = 'u';
+        }
+        if (r.ok) {
+            sum[idx] += r.latency_ms;
+            cnt[idx] += 1;
         }
     }
-    return out;
+    for (0..slots) |i| {
+        if (cnt[i] > 0) lat[i] = @divFloor(sum[i], @as(i64, cnt[i]));
+    }
+    return res;
 }
 
 fn readJsonl(comptime T: type, allocator: std.mem.Allocator, path: []const u8, limit: usize) ![]T {

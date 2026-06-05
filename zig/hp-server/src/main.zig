@@ -747,11 +747,9 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
     // Recent uptime history from the self-health probe (real buckets). The
     // store is bounded, so this is honestly "recent" rather than 90 calendar
     // days; slots without data render as no-data.
-    const hist: []u8 = store.readUptimeHistory(res.arena, uptime_path, "self-health", 90) catch blk: {
-        const f = res.arena.alloc(u8, 90) catch break :blk &[_]u8{};
-        @memset(f, 'n');
-        break :blk f;
-    };
+    const uh: store.UptimeHistory = store.readUptimeHistory(res.arena, uptime_path, "self-health", 90) catch
+        store.UptimeHistory{ .states = &[_]u8{}, .lat = &[_]i64{}, .from = 0, .to = 0 };
+    const hist = uh.states;
     var up_n: usize = 0;
     var down_n: usize = 0;
     for (hist) |c| {
@@ -767,7 +765,12 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
     const w = buf.writer();
     try w.writeAll("{\"ok\":true,\"overall\":\"");
     try w.writeAll(overall);
-    try w.print("\",\"updated_at\":{d},\"components\":[", .{std.time.timestamp()});
+    try w.print("\",\"updated_at\":{d},\"history_from\":{d},\"history_to\":{d},\"history_lat\":[", .{ std.time.timestamp(), uh.from, uh.to });
+    for (uh.lat, 0..) |l, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.print("{d}", .{l});
+    }
+    try w.writeAll("],\"components\":[");
 
     try w.writeAll("{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\"");
     if (self_latency >= 0) try w.print(",\"latency_ms\":{d}", .{self_latency});
