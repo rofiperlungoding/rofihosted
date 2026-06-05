@@ -45,7 +45,7 @@ echo "[recovery-job $(date)] tick" >> "$LOG"
 # If hp-server or cloudflared are dead, run the boot script.
 # The boot script itself is idempotent (checks pgrep before each spawn) so
 # running it when partially up is safe.
-if ! pgrep -f 'hp-server$' >/dev/null 2>&1 || ! pgrep -f 'cloudflared.*tunnel' >/dev/null 2>&1; then
+if ! pgrep -f 'zig-out/bin/hp-server' >/dev/null 2>&1 || ! pgrep -f 'cloudflared.*tunnel' >/dev/null 2>&1; then
   echo "[recovery-job $(date)] services missing, re-running boot script" >> "$LOG"
   bash ~/.termux/boot/01-server.sh
 else

@@ -64,7 +64,8 @@ fi
 # Termux:Boot fast-path recovery window.
 
 # 2a. hp-server (Zig binary). Watchdog is responsible for keeping it alive.
-if ! pgrep -f 'hp-server$' > /dev/null; then
+# Match pattern kept in lockstep with watchdog.sh / start-zig-server.sh.
+if ! pgrep -f 'zig-out/bin/hp-server' > /dev/null; then
   setsid nohup ~/zig/hp-server/zig-out/bin/hp-server > ~/logs/hp-server.log 2>&1 < /dev/null &
   echo "[boot] hp-server spawn issued"
 else

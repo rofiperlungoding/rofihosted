@@ -78,6 +78,11 @@ log "running rebuild.sh..."
 PRE_REBUILD_MTIME=0
 if [ -f "$TARGET/zig-out/bin/hp-server" ]; then
     PRE_REBUILD_MTIME=$(stat -c %Y "$TARGET/zig-out/bin/hp-server" 2>/dev/null || echo 0)
+    # P0-2: snapshot the currently-running (known-good) binary before we
+    # overwrite it. If the new build boots but fails health checks, the
+    # rollback sentinel below restores this copy. It lives under zig-out/,
+    # which rsync excludes, so it survives source syncs.
+    cp -f "$TARGET/zig-out/bin/hp-server" "$TARGET/zig-out/bin/hp-server.prev" 2>/dev/null || true
 fi
 
 if ! "$HOME/rebuild.sh" >> "$LOG" 2>&1; then
@@ -128,6 +133,39 @@ fi
 (
     sleep 3
     pkill -TERM -f 'zig-out/bin/hp-server' >> "$LOG" 2>&1 || true
+) &
+disown 2>/dev/null || true
+
+# P0-2: auto-rollback sentinel. Detached so it outlives this request-bound
+# process. After the kill + watchdog respawn, it polls /health for up to 90s.
+# If the new binary never becomes healthy (crash loop, bad config), it restores
+# the last-known-good binary, signals a respawn, and alerts over Telegram.
+(
+    [ -f ~/.hp-server.env ] && { set -a; . ~/.hp-server.env; set +a; }
+    sleep 12
+    ok=0
+    i=0
+    while [ "$i" -lt 26 ]; do
+        if curl -fsS -m 4 -o /dev/null http://127.0.0.1:8080/health 2>/dev/null; then
+            ok=1
+            break
+        fi
+        i=$((i + 1))
+        sleep 3
+    done
+    if [ "$ok" -ne 1 ] && [ -x "$TARGET/zig-out/bin/hp-server.prev" ]; then
+        log "ROLLBACK: new binary $SHORT_AFTER failed /health for ~90s; restoring hp-server.prev"
+        cp -f "$TARGET/zig-out/bin/hp-server.prev" "$TARGET/zig-out/bin/hp-server" 2>>"$LOG" || true
+        pkill -TERM -f 'zig-out/bin/hp-server' >> "$LOG" 2>&1 || true
+        if [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
+            curl -sm 10 -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                --data-urlencode "chat_id=${TG_CHAT_ID}" \
+                --data-urlencode "text=rofihosted self-update ROLLED BACK: new binary ${SHORT_AFTER} failed health checks; restored previous binary. Check ~/logs/self-update.log." \
+                >/dev/null 2>&1 || true
+        fi
+    else
+        log "post-update health verified (new binary healthy)"
+    fi
 ) &
 disown 2>/dev/null || true
 

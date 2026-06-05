@@ -43,6 +43,10 @@ const fingerprint = @import("fingerprint.zig");
 const emailverify = @import("emailverify.zig");
 const signuplimit = @import("signuplimit.zig");
 const metrics = @import("metrics.zig");
+const fspaths = @import("paths.zig");
+const procguard = @import("procguard.zig");
+const cap = @import("cap.zig");
+const workerpool = @import("workerpool.zig");
 
 // Data paths: hardcoded for now, but documented for future portability work
 // TODO: Refactor to use HOME env var throughout the codebase
@@ -89,6 +93,8 @@ const App = struct {
     signuplimit: *signuplimit.Limiter,
     pepper: []const u8,
     metrics_hub: *metrics.MetricsHub,
+    /// Bounded pool for fire-and-forget AI jobs (annotation, embeddings).
+    workerpool: *workerpool.Pool,
     /// Type-erased pointer to the httpz.Server(*App), set after server init.
     /// Used only by the SIGTERM handler to call .stop(). Casting back to the
     /// concrete type avoids a struct-cycle compilation error.
@@ -115,6 +121,17 @@ pub fn main() !void {
         }
     }
     const allocator = gpa.allocator();
+
+    // Resolve $HOME once, then take the single-instance lock before doing any
+    // real work. If another hp-server already holds the lock we exit here,
+    // which is the authoritative guard against duplicate instances competing
+    // for port 8080 (belt-and-suspenders with the lifecycle scripts).
+    fspaths.init();
+    procguard.acquireOrExit(".hp-server.pid");
+
+    // Loudly surface a missing curl/sqlite3
+    // before the dependent subsystems fail in confusing ways.
+    cap.check(allocator);
 
     std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data") catch {};
 
@@ -147,6 +164,10 @@ pub fn main() !void {
     const rules_engine = try rules.Engine.init(allocator, blocklist);
     // Metrics hub for cache observability
     const metrics_hub = metrics.MetricsHub.init(allocator);
+
+    // Bounded pool for background AI jobs. 2 workers, queue of 64: enough to
+    // absorb normal bursts, small enough to bound thread + subprocess churn.
+    const worker_pool = try workerpool.Pool.init(allocator, 2, 64);
 
     const db_cache = try dbcache.Cache.init(allocator, visits_path);
     const db_pool = try dbpool.Pool.init(allocator, .{
@@ -225,6 +246,7 @@ pub fn main() !void {
         .signuplimit = signup_limiter,
         .pepper = pepper_slice,
         .metrics_hub = metrics_hub,
+        .workerpool = worker_pool,
     };
     g_app = &app;
 
@@ -267,6 +289,10 @@ pub fn main() !void {
 
     const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path, uptime_path, &store_mutex });
     rotator.detach();
+
+    // Rate-limiter idle-bucket sweep (every 10 min, off the request hot path).
+    const rl_sweep = try std.Thread.spawn(.{}, ratelimit.Limiter.cleanupLoop, .{&rl});
+    rl_sweep.detach();
 
     var server = try httpz.Server(*App).init(allocator, .{
         .address = "127.0.0.1",
@@ -356,7 +382,13 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     const host_full = req.header("host") orelse "rofihosted.space";
     const host = if (std.mem.indexOfScalar(u8, host_full, ':')) |i| host_full[0..i] else host_full;
     const path = req.url.path;
-    const ip = req.header("cf-connecting-ip") orelse req.header("x-forwarded-for") orelse "local";
+    // Trust ONLY cf-connecting-ip for any security decision (rate limit,
+    // auto-ban, blocklist). All public traffic arrives through Cloudflare,
+    // which sets this header on the origin request; x-forwarded-for /
+    // x-real-ip are client-controllable and were a rate-limit/ban-poison
+    // bypass. The server binds 127.0.0.1 only, so a request without
+    // cf-connecting-ip can only originate on-device and is treated as local.
+    const ip = req.header("cf-connecting-ip") orelse "local";
     const ua = req.header("user-agent") orelse "";
     const method = @tagName(req.method);
     const is_local = std.mem.eql(u8, ip, "local");
@@ -1141,7 +1173,8 @@ fn handleLoginPage(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, default_next: []const u8) !void {
-    const ip = req.header("cf-connecting-ip") orelse req.header("x-forwarded-for") orelse "local";
+    // Security-relevant IP: Cloudflare-asserted only (see hostRouter note).
+    const ip = req.header("cf-connecting-ip") orelse "local";
     const ua = req.header("user-agent") orelse "";
 
     // Defense in depth: even if blocklist already returned 403 in router, double-check
@@ -1867,8 +1900,18 @@ fn spawnAnnotateBan(app: *App, ip: []const u8, ua: []const u8) !void {
         .ip = try app.allocator.dupe(u8, ip),
         .ua = try app.allocator.dupe(u8, ua),
     };
-    const t = try std.Thread.spawn(.{}, annotateBanThread, .{args});
-    t.detach();
+    // Enqueue on the bounded pool instead of spawning a thread per ban. If the
+    // queue is saturated, drop the job and free its context rather than adding
+    // unbounded churn.
+    if (!app.workerpool.submit(.{ .run = annotateBanJob, .ctx = args })) {
+        app.allocator.free(args.ip);
+        app.allocator.free(args.ua);
+        app.allocator.destroy(args);
+    }
+}
+
+fn annotateBanJob(ctx: *anyopaque) void {
+    annotateBanThread(@ptrCast(@alignCast(ctx)));
 }
 
 fn annotateBanThread(args: *AnnotateArgs) void {
@@ -2492,8 +2535,15 @@ fn spawnEmbedRequest(app: *App, ua: []const u8, path: []const u8) !void {
 
     const args = try app.allocator.create(EmbedArgs);
     args.* = .{ .app = app, .key = key };
-    const t = try std.Thread.spawn(.{}, embedRequestThread, .{args});
-    t.detach();
+    // Bounded pool, not a thread-per-request. On a full queue, free and drop.
+    if (!app.workerpool.submit(.{ .run = embedRequestJob, .ctx = args })) {
+        app.allocator.free(args.key);
+        app.allocator.destroy(args);
+    }
+}
+
+fn embedRequestJob(ctx: *anyopaque) void {
+    embedRequestThread(@ptrCast(@alignCast(ctx)));
 }
 
 fn embedRequestThread(args: *EmbedArgs) void {
@@ -5676,10 +5726,9 @@ fn handleSignupSubmit(app: *App, req: *httpz.Request, res: *httpz.Response) !voi
         return;
     }
 
-    // Extract IP address for rate limiting
-    const client_ip = req.header("x-forwarded-for") orelse
-        req.header("x-real-ip") orelse
-        "unknown";
+    // Extract IP for rate limiting. Cloudflare-asserted only; the spoofable
+    // x-forwarded-for / x-real-ip headers must never key a security control.
+    const client_ip = req.header("cf-connecting-ip") orelse "unknown";
 
     // LAYER 1: IP Rate Limiting (max 3 signups per IP per 24h)
     if (!app.signuplimit.canSignup(client_ip)) {

@@ -1,5 +1,12 @@
 //! Simple per-IP token bucket rate limiter, in-memory.
 //! Default: 60 requests per 60 seconds per IP, with burst.
+//!
+//! Admission (`allow`) is the hot path and never scans the map: it performs an
+//! O(1) getOrPut plus a token refill. Idle-bucket eviction runs off the hot
+//! path in a dedicated background sweep (`cleanupLoop`), so a flood of distinct
+//! IPs can never make one unlucky request pay for a full-map scan while holding
+//! the lock. On allocation failure the limiter fails CLOSED (deny) rather than
+//! silently disabling itself under memory pressure.
 const std = @import("std");
 
 const Bucket = struct {
@@ -13,7 +20,10 @@ pub const Limiter = struct {
     buckets: std.StringHashMap(Bucket),
     rate_per_sec: f32,
     burst: f32,
-    last_cleanup: i64,
+    /// Count of admissions denied because an allocation failed. Surfaced for
+    /// observability so a fail-closed event under memory pressure is visible
+    /// rather than silent.
+    alloc_denied: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, rate_per_sec: f32, burst: f32) Limiter {
         return .{
@@ -22,28 +32,31 @@ pub const Limiter = struct {
             .buckets = std.StringHashMap(Bucket).init(allocator),
             .rate_per_sec = rate_per_sec,
             .burst = burst,
-            .last_cleanup = std.time.timestamp(),
         };
     }
 
-    /// Returns true if request is allowed, false if rate-limited.
+    /// Returns true if the request is allowed, false if rate-limited.
+    /// Fails CLOSED on allocation failure (returns false) so memory pressure
+    /// cannot silently disable rate limiting for unauthenticated traffic.
     pub fn allow(self: *Limiter, ip: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const now = std.time.timestamp();
 
-        // Periodic cleanup of buckets idle > 1h to prevent unbounded growth
-        if (now - self.last_cleanup > 600) {
-            self.cleanup(now - 3600);
-            self.last_cleanup = now;
-        }
-
-        // Get or create bucket
-        const gop = self.buckets.getOrPut(ip) catch return true; // on alloc fail, allow
+        const gop = self.buckets.getOrPut(ip) catch {
+            self.alloc_denied += 1;
+            return false;
+        };
         if (!gop.found_existing) {
-            // Need to dupe key since hashmap stores ref
-            const key_dup = self.allocator.dupe(u8, ip) catch return true;
+            // The hashmap currently holds the caller's transient `ip` slice as
+            // the key. We must replace it with an owned copy; if that copy
+            // fails, roll the half-inserted entry back and fail closed.
+            const key_dup = self.allocator.dupe(u8, ip) catch {
+                _ = self.buckets.remove(ip);
+                self.alloc_denied += 1;
+                return false;
+            };
             gop.key_ptr.* = key_dup;
             gop.value_ptr.* = .{ .tokens = self.burst, .last_refill = now };
         }
@@ -60,7 +73,13 @@ pub const Limiter = struct {
         return false;
     }
 
-    fn cleanup(self: *Limiter, before: i64) void {
+    /// Evict buckets idle for longer than `idle_secs`. Holds the lock for the
+    /// duration of the scan, so this must only be called from the background
+    /// sweep, never from `allow`.
+    pub fn sweep(self: *Limiter, idle_secs: i64) void {
+        const before = std.time.timestamp() - idle_secs;
+        self.mutex.lock();
+        defer self.mutex.unlock();
         var to_remove = std.ArrayList([]const u8).init(self.allocator);
         defer to_remove.deinit();
         var it = self.buckets.iterator();
@@ -73,6 +92,15 @@ pub const Limiter = struct {
             if (self.buckets.fetchRemove(k)) |kv| {
                 self.allocator.free(kv.key);
             }
+        }
+    }
+
+    /// Background sweep loop: evict buckets idle for >1h, every 10 minutes.
+    /// Spawn once at startup and detach.
+    pub fn cleanupLoop(self: *Limiter) void {
+        while (true) {
+            std.Thread.sleep(600 * std.time.ns_per_s);
+            self.sweep(3600);
         }
     }
 };

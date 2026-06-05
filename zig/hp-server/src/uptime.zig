@@ -1,5 +1,13 @@
 //! Uptime checker - HTTP probe targets in background.
 //! Detects up<->down transitions, fires Telegram notifications.
+//!
+//! Probes run through `curl` (a subprocess), not `std.http.Client`. The Zig
+//! HTTP client has DNS-resolution problems under Termux/Bionic, which is why
+//! every other outbound call in this codebase (Mistral, Brevo, Telegram,
+//! webhooks) already shells out to curl. Using it here too eliminates the
+//! false "DOWN" transitions and spurious alerts that the in-process client
+//! produced for external targets. The public status page does not depend on
+//! these external probes; it is driven by first-party signals in apiStatus.
 const std = @import("std");
 const store = @import("store.zig");
 const telegram = @import("telegram.zig");
@@ -22,9 +30,6 @@ const TargetState = struct {
 };
 
 fn probe(allocator: std.mem.Allocator, target: Target) store.UptimeRecord {
-    var client = std.http.Client{ .allocator = allocator };
-    defer client.deinit();
-
     const start = std.time.milliTimestamp();
     var result = store.UptimeRecord{
         .target = target.name,
@@ -34,37 +39,28 @@ fn probe(allocator: std.mem.Allocator, target: Target) store.UptimeRecord {
         .checked_at = std.time.timestamp(),
     };
 
-    const uri = std.Uri.parse(target.url) catch {
-        result.latency_ms = std.time.milliTimestamp() - start;
-        return result;
+    // -sS quiet but show errors on stderr; -o /dev/null discards the body;
+    // -w prints just the final HTTP status code; --max-time caps the probe.
+    // No -f, so we still capture a status code for 4xx/5xx responses.
+    const argv = [_][]const u8{
+        "curl", "-sS",        "-o", "/dev/null", "-w", "%{http_code}",
+        "-L",   "--max-time", "8",  target.url,
     };
-
-    var server_header_buf: [4096]u8 = undefined;
-    var req = client.open(.GET, uri, .{
-        .server_header_buffer = &server_header_buf,
-        .redirect_behavior = @enumFromInt(3),
+    const run = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &argv,
+        .max_output_bytes = 256,
     }) catch {
         result.latency_ms = std.time.milliTimestamp() - start;
         return result;
     };
-    defer req.deinit();
+    defer allocator.free(run.stdout);
+    defer allocator.free(run.stderr);
 
-    req.send() catch {
-        result.latency_ms = std.time.milliTimestamp() - start;
-        return result;
-    };
-    req.finish() catch {
-        result.latency_ms = std.time.milliTimestamp() - start;
-        return result;
-    };
-    req.wait() catch {
-        result.latency_ms = std.time.milliTimestamp() - start;
-        return result;
-    };
-
-    result.status_code = @intCast(@intFromEnum(req.response.status));
-    result.ok = result.status_code >= 200 and result.status_code < 400;
     result.latency_ms = std.time.milliTimestamp() - start;
+    const code = std.fmt.parseInt(u16, std.mem.trim(u8, run.stdout, " \t\r\n"), 10) catch 0;
+    result.status_code = code;
+    result.ok = code >= 200 and code < 400;
     return result;
 }
 

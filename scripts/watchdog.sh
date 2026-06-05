@@ -30,6 +30,13 @@ if [ -f ~/.hp-server.env ]; then
 fi
 
 CHECK_INTERVAL=30
+# Canonical process-match pattern for the hp-server binary. Every script that
+# starts/stops/inspects hp-server MUST use this exact expression so a stop
+# issued by one path reliably matches what another path considers alive. The
+# full binary path is unambiguous (pgrep/pkill exclude their own PID, so this
+# never self-matches). The binary itself also holds an flock on ~/.hp-server.pid
+# and refuses to start if another instance is alive, as a second layer.
+HP_MATCH='zig-out/bin/hp-server'
 # Aggressive interval for the first 2 minutes after watchdog boot. Detects
 # crashed services much faster during the recovery window when the platform
 # is most fragile (post-cold-boot, post-OS-update, post-rebuild).
@@ -55,7 +62,7 @@ log() { printf '[watchdog %s] %s\n' "$(date +%H:%M:%S)" "$*" >> "$LOG"; }
 
 # Returns RSS in MB for the first hp-server PID, or "0" if not running.
 hp_rss_mb() {
-  pid=$(pgrep -f 'hp-server$' 2>/dev/null | head -1)
+  pid=$(pgrep -f "$HP_MATCH" 2>/dev/null | head -1)
   if [ -z "$pid" ] || [ ! -r "/proc/$pid/status" ]; then
     echo 0
     return
@@ -91,7 +98,7 @@ tunnel_connected() {
 }
 
 start_hp_server() {
-  pkill -f 'hp-server$' 2>/dev/null || true
+  pkill -f "$HP_MATCH" 2>/dev/null || true
   sleep 1
   setsid nohup ~/zig/hp-server/zig-out/bin/hp-server \
     >> ~/logs/hp-server.log 2>&1 < /dev/null &
@@ -129,7 +136,7 @@ current_interval() {
 while true; do
   INTERVAL=$(current_interval)
   # 1. hp-server liveness (process)
-  if ! pgrep -f 'hp-server$' > /dev/null 2>&1; then
+  if ! pgrep -f "$HP_MATCH" > /dev/null 2>&1; then
     log "hp-server NOT running, restarting"
     start_hp_server
     http_fail_streak=0
@@ -155,7 +162,7 @@ while true; do
   if [ -n "$rss" ] && [ "$rss" -gt "$MAX_RSS_MB" ]; then
     log "hp-server RSS=${rss}MB > ${MAX_RSS_MB}MB, restarting before OOM killer"
     # SIGTERM first so writebuf flushes; start_hp_server will pkill -SIGKILL fallback.
-    pkill -SIGTERM -f 'hp-server$' 2>/dev/null || true
+    pkill -SIGTERM -f "$HP_MATCH" 2>/dev/null || true
     sleep 3
     start_hp_server
     http_fail_streak=0
