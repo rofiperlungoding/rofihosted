@@ -1,175 +1,211 @@
-# Security model
+# Security
 
-This document describes what `hp-server` defends against, how, and what it does not. Be honest here, especially about the limits.
+This document is the canonical reference for rofihosted's security model. It
+describes the threat model, authentication and session management, access
+control across the four public surfaces, the programmatic API-key system, the
+signup anti-abuse pipeline, secrets handling, and the network controls applied
+to every request. It consolidates material previously kept in separate
+anti-duplicate and API-key notes.
 
-## Threat model
+---
 
-This is a single-user home server hanging off a residential ISP. The realistic adversaries are:
+## 1. Threat model
 
-| Adversary | Goal | Frequency |
-| --- | --- | --- |
-| CT-log scanners | Index newly-issued TLS certificates and probe the host for known vulns | Within minutes of cert issuance |
-| Mass scanners | Sweep IPv4 / known Cloudflare ranges for `.env`, `/wp-admin`, `phpMyAdmin`, etc | Continuous |
-| Credential brute-forcers | Try common username/password pairs on `/login` | Continuous if path is reachable |
-| Botnet recon | Enumerate routes, fingerprint stack, look for misconfig | Continuous |
-| Targeted attacker | Hand-tailored attempts after seeing the site | Rare, higher skill |
+rofihosted is a single-operator system exposed to the public internet. The
+relevant adversaries and assumptions are:
 
-What this project is **not** trying to defend against: nation-state adversaries, supply chain attacks on Cloudflare or Termux, physical access to the device, or rooting the phone.
+- **Opportunistic scanners and bots.** The dominant traffic. They probe for
+  known-vulnerable paths (`/.env`, `/wp-login.php`, exposed Git configs).
+  Mitigated by classification, auto-ban, and rate limiting.
+- **Credential attackers.** Brute-force or credential-stuffing against the
+  login. Mitigated by constant-time comparison, login-attempt tracking, and
+  auto-ban after repeated failures.
+- **Abusive sign-ups.** Automated or duplicate account creation. Mitigated by
+  the three-layer anti-abuse pipeline (Section 5).
+- **Application-layer attacks** against hosted projects (path traversal, header
+  spoofing). Mitigated by the path-safety module and strict IP handling.
 
-## Attack surface
+Out of scope: a determined attacker with physical access to the unlocked
+device, or compromise of Cloudflare itself. The device is assumed to be
+physically controlled by the operator.
 
-```
-Internet
-   |
-   v
-Cloudflare edge        <- TLS termination, DDoS absorption, IP reputation
-   |
-cloudflared (Go)       <- Outbound-only mTLS tunnel back to phone
-   |
-hp-server :8080        <- Where this codebase actually lives
-   |
-   +-- Termux user processes (sshd on local LAN only)
-   +-- /proc reads (read-only, SELinux-confined)
-   +-- termux-api subprocess (battery, wifi info)
-```
+Public reachability is mediated entirely by the Cloudflare Tunnel. The device
+exposes no inbound port to the local network or the internet; all traffic
+arrives through `cloudflared`.
 
-The phone has **no inbound port** open to the internet. Cloudflare establishes the connection outbound; if the tunnel goes down, the public side returns a 1033 from Cloudflare's edge, not a connection error from a routable IP.
+---
 
-## Defenses in place
+## 2. Authentication and sessions
 
-### TLS
-- Termination at Cloudflare with their managed cert. The origin (`hp-server`) speaks plain HTTP over the tunnel, but the tunnel itself is mTLS (`cloudflared` ↔ Cloudflare).
-- HSTS header with `max-age=31536000; includeSubDomains` so browsers refuse plain HTTP after first visit.
+Sessions are carried in a single cookie, `rofi_session`, scoped to
+`.rofihosted.space` with the attributes `Secure`, `HttpOnly`,
+`SameSite=Lax`, and a seven-day maximum age. The cookie value is an
+HMAC-SHA256-signed token, not a server-side session reference, so there is no
+session store to compromise.
 
-### Authentication
-- Cookie sessions, not HTTP basic auth. Single user. No "register" flow.
-- Cookie is `base64url(payload).base64url(hmac256(payload))` where payload is `<unix_expiry>:<username>`.
-- HMAC key is `SHA-256("rofi.session.v1:" || password || ":" || username)`. **Changing the password rotates the key**, so every existing session everywhere is invalidated.
-- Cookie attributes: `Secure; HttpOnly; SameSite=Lax; Domain=.rofihosted.space; Max-Age=604800` (7 days).
-- TTL is enforced both on the cookie and inside the signed payload, so a stolen cookie cannot be used past expiry even if `Max-Age` is stripped.
-- Login form uses constant-time comparison for both username and password (`auth.constantTimeEqual`).
+Two token formats coexist:
 
-### Authorization
-- Anonymous can reach: `rofihosted.space/` (placeholder), `/health`, `/login`, and the static asset routes (`theme.css`, `theme.js`, `app.css`, `app.js`).
-- Everything else on `app.rofihosted.space` requires a valid session cookie. The check is the very first thing on every protected handler.
-- `/api/*` is part of the protected set. There is no public API.
+- **Legacy operator (v1).** Signing key is
+  `SHA-256("rofi.session.v1:" || password || ":" || username || ":" || pepper)`.
+  Credentials live in a mode-600 file. Changing the password rotates the key
+  and instantly invalidates all existing sessions.
+- **Multi-user (v2).** Token is `v2.<payload>.<signature>` where the payload is
+  `<expiry>:<user_id>`. The signing key is derived per user:
+  `SHA-256("rofi.session.v2:" || user_id || ":" || password_hash || ":" || pepper)`.
+  Because the key includes the user's password hash, a password change
+  immediately invalidates that user's cookies. Verification re-derives the key
+  from the looked-up user record on every request.
 
-### Request classification (security.zig)
-Every request is classified before it reaches a handler:
+Both formats verify the signature in constant time and check expiry. The two
+namespaces cannot collide.
 
-| Class | Trigger |
-| --- | --- |
-| `self` | Cookie verifies as the operator |
-| `blocked` | Source IP is in the blocklist (and not expired) |
-| `scanner` | Path matches a known vuln-scan fragment (`.env`, `/wp-admin`, `/phpmyadmin`, dot-files, common probes) or `.php`/`.asp`/`.aspx`/`.jsp` extension |
-| `bot` | Empty UA, declared bot UA (curl, wget, python-, googlebot, ...), or missing `Accept-Language` and `Sec-Fetch-*` headers |
-| `unknown` | Browser-like fingerprint but not authenticated |
+### Password storage
 
-The full pattern lists live in `security.zig` constants `SCANNER_PATH_FRAGMENTS` and `BOT_UA_PATTERNS`. Both lists were chosen from public mass-scan datasets and the project's own visit log.
+Multi-user passwords are stored as `HMAC-SHA256(pepper, salt || ":" ||
+password)` with a 16-byte random salt per user, hex-encoded in the record.
+Login comparison is constant-time. (A migration to a memory-hard function such
+as Argon2id is desirable and noted as future work.)
 
-### Auto-ban
-Two trackers in `security.zig`, both with TTL'd ban entries:
+### The pepper
 
-- `AutoBan`: 3 scanner hits from the same IP within 10 minutes triggers a 24-hour ban with reason `auto: scanner attempts exceeded threshold`. **Trusted-IP exemption**: any IP that has sent at least one authenticated request (cookie session or admin API key) in the last 30 minutes is exempt from this trigger. Scanner hits from a trusted IP are still counted for visibility but never reach the blocklist. This prevents the operator's IP from being self-banned by parallel anonymous scans (e.g. running `~/test-everything.sh` which intentionally probes scanner paths). The TTL refreshes on each authenticated request, so an active session keeps the IP trusted indefinitely.
-- `LoginTracker`: 5 failed login attempts from the same IP within 15 minutes triggers a 1-hour ban with reason `auto: login brute force`.
+A 32-byte random value generated once on first boot and stored mode-600 at
+`~/.hp-server-secret.bin`. It underpins session HMACs, password hashes,
+API-key hashes, per-project JWT signing keys, and the per-project secrets
+vault. It is never transmitted and never committed. Loss of the pepper
+invalidates all derived secrets — it is included in backups.
 
-Bans persist to disk (`~/.hp-server-blocklist.txt`, mode 600) so they survive restarts. The file format is TSV: `ip<TAB>blocked_at<TAB>expires_at<TAB>reason`. Expired entries are evicted lazily on read.
+---
 
-### Per-IP rate limit
-Token bucket per source IP, refilled continuously. The bucket is bypassed for `127.0.0.1` (self) and `/health`. Limits are defined in `ratelimit.zig`.
+## 3. Access control
 
-### Security headers (every response)
-- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY` (clickjacking prevention)
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=(), payment=(), usb=()`
-- `Content-Security-Policy`: scoped to `'self' https://rofihosted.space https://*.rofihosted.space`, plus `cdnjs.cloudflare.com` for the icon font, plus `static.cloudflareinsights.com` and `cloudflareinsights.com` for the Cloudflare Web Analytics beacon (auto-injected at the account level, cannot be disabled from the zone dashboard, cookieless per Cloudflare's docs). `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self' + own subdomains`.
+Access is enforced at two independent layers:
 
-### Audit logs
-- `~/data/visits.jsonl`: every request with `visited_at`, `ua`, `ip`, `path`, `method`, `host`, `status`, `referer`, `country`, `classification`.
-- `~/data/logins.jsonl`: every login attempt with `timestamp`, `ip`, `ua`, `username`, `success`.
-- `~/data/uptime.jsonl`: every probe result.
+1. **Host layer.** `admin.rofihosted.space` requires `role = admin`; an
+   authenticated tenant is redirected to the tenant host.
+   `app.rofihosted.space` requires authentication; an authenticated admin is
+   redirected to the operator host for page navigations.
+2. **Route layer.** Sensitive endpoints (`/admin/*`, `/api/users*`,
+   `/api/invites*`, `/api/system/*`) carry an explicit `role = admin` check
+   regardless of the host they are reached on.
 
-Files rotate hourly when over 2 MB. Logs are visible from the Security and Status pages in real time.
+This redundancy is deliberate: a routing mistake at one layer does not, by
+itself, expose privileged functionality. Role-based redirects use `302` (not
+cacheable) so a browser never caches a decision that depends on the current
+session.
 
-## Secrets
+---
 
-Files that **never** leave the device:
+## 4. Programmatic API keys
 
-| File | Purpose | Mode |
-| --- | --- | --- |
-| `~/.hp-server-creds.txt` | username + password (line 1: user, line 2: pass) | 0600 |
-| `~/.hp-server-blocklist.txt` | persistent IP blocklist | 0600 |
-| `~/.hp-server-secret.bin` | 32-byte random pepper folded into the session HMAC | 0600 |
-| `~/.hp-server-geoblock.txt` | geo-block on/off + allow list | 0600 |
-| `~/.hp-server.env` | environment variables (Mistral API key, optional Telegram tokens, optional `BACKUP_PASSPHRASE`) | 0600 |
-| `~/.cloudflared/<tunnel-id>.json` | tunnel credentials issued by Cloudflare | 0600 |
-| `~/.cloudflared/cert.pem` | account cert for `cloudflared tunnel` operations | 0600 |
+External tools and automation authenticate to the `/v1/*` API with an
+`X-API-Key` header rather than a session cookie.
 
-None of these are tracked in git. The `.gitignore` excludes the `~/data/`, `~/.hp-server-*`, `*.env`, and `~/.cloudflared/` paths even if the workspace ever picks them up by accident.
+- **Format:** `rh_` followed by 48 hex characters.
+- **Storage:** keys are never stored in plaintext. The full token is hashed
+  with `SHA-256("rh.apikey.v1:" || pepper || ":" || token)` and only the hash
+  is persisted (append-only, mode 600). A leaked key file cannot authenticate
+  on its own.
+- **Verification:** constant-time comparison (`timingSafeEql`) across active
+  keys. Revoked keys carry a `revoked_at` timestamp and are skipped.
+- **Scopes:**
+  - `sql` — execute SQL on whitelisted databases via `/v1/execute`.
+  - `read` — reserved for future read-only mirroring of `/api/*`.
+  - `admin` — system administration (`/v1/system/*`): triggering updates,
+    restarts, and backups. **This scope is equivalent to an operator login.**
+    Issue it only to trusted automation (for example, the GitHub Actions deploy
+    pipeline), and store it as a repository secret, never in the codebase.
 
-The HMAC session key is derived in memory only:
-`SHA-256("rofi.session.v1:" || password || ":" || username || ":" || pepper)`
-where `pepper` is 32 random bytes from `~/.hp-server-secret.bin`. Both the credentials file and the pepper file have to be exfiltrated for an attacker to forge cookies. Changing the password rotates the secret immediately.
+Any `/v1/*` request carrying an `X-API-Key` header is exempted from the visitor
+classifier and auto-ban, so a malformed automation request cannot ban the
+operator's own address.
 
-## Process supervision and graceful shutdown
+---
 
-`hp-server` installs SIGTERM and SIGINT handlers that call `httpz.Server.stop()`. This drains pending requests, closes SSE streams cleanly, and lets the JSONL append paths finish their writes before the process exits.
+## 5. Signup anti-abuse pipeline
 
-A separate `scripts/watchdog.sh` runs as a long-lived sibling process. Every 30 seconds it:
+Public signup (without an invite code) passes through three independent layers
+before an account becomes usable. An invite code bypasses the pipeline and
+activates the account immediately.
 
-- Restarts `hp-server` if it has died.
-- Restarts `cloudflared` if it has died.
-- Checks `~/data/.tunnel-restart-requested`. The in-process tunnel health watchdog drops this flag after the tunnel has been `degraded` or `offline` for >2 minutes. When `watchdog.sh` sees it, it restarts `cloudflared`.
+1. **IP rate limiting.** A maximum number of signups per source IP per rolling
+   24-hour window. Exceeding it returns `429` and is audited.
+2. **Device fingerprinting.** A best-effort device signature limits the number
+   of accounts a single device can create, catching the common case of one
+   client cycling addresses.
+3. **Email verification.** A six-digit code with a fifteen-minute expiry and a
+   three-attempt limit, delivered through the transactional-email provider
+   (Section 7 of the architecture). Until verification succeeds, the account
+   remains pending and cannot be used. If email is not configured, this layer
+   is skipped and the account follows the pending-approval path.
 
-The tunnel health watchdog is in-process (`tunnel_health.zig`) and polls `cloudflared:20241/metrics` every 30 seconds. State changes (`unknown` → `healthy` / `degraded` / `offline`) are published over SSE so the UI updates live.
+All signup outcomes — success, rate-limit, device-limit, and pending — are
+recorded in the audit log.
 
-## Audit log
+---
 
-`~/data/audit.jsonl` (mode inherited from data dir) records every operator action that mutates security state:
+## 6. Network and request controls
 
-- `block_ip`, `unblock_ip` (manual or via API)
-- `change_credentials`
-- `digest_run`
-- `geoblock_update`
+Applied to every request, before any handler runs:
 
-Each entry includes `timestamp`, `actor` (the username from the session cookie at the time), `action`, `target`, optional `detail`, and `ok` (true / false on success / failure). Surfaced on the Security page under "Audit log".
+- **Strict security headers** on all responses: HSTS, `X-Content-Type-Options`,
+  `X-Frame-Options: DENY`, a referrer policy, a permissions policy, and a
+  Content Security Policy. (Tightening the CSP to remove `unsafe-inline` is
+  tracked in the engineering review.)
+- **Request classifier** assigning each request to `self`, `unknown`, `bot`,
+  `scanner`, or `blocked` from path heuristics, user agent, and browser
+  fingerprint.
+- **Auto-ban.** Three scanner hits within ten minutes earns a 24-hour ban; five
+  failed logins within fifteen minutes earns a one-hour ban. Bans feed the same
+  blocklist used for manual blocks.
+- **Per-IP token-bucket rate limiting**, skipped for the operator and
+  `/health`.
+- **Optional geo-blocking** driven by the Cloudflare country header, never
+  applied to authenticated or local requests.
+- **Operator rule engine** allowing declarative "if X then block/log/count"
+  rules evaluated in the request path.
 
-## AI features and data flow
+> **Client IP integrity.** Security decisions must be based only on the
+> Cloudflare-provided client IP, because all legitimate traffic arrives through
+> the tunnel. Trusting forwarded headers as a fallback would allow spoofing of
+> the rate limiter and auto-ban. Hardening this is tracked in the engineering
+> review (P1-3).
 
-When `MISTRAL_API_KEY` is set in `~/.hp-server.env`, three features call out to `https://api.mistral.ai/v1/chat/completions` with model `mistral-small-latest`. What gets sent:
+---
 
-- **Auto-ban annotation**: the banned IP, its country, its UA, and up to 8 recent paths it requested. Result is cached per IP for 24 hours so re-bans do not re-spend quota.
-- **Explain IP**: the queried IP, country, distinct UAs (up to 6), classification breakdown, and up to 20 recent paths.
-- **Daily digest**: only aggregated counts (totals, classification breakdown, distinct IP count, login counts, top scanner paths, top countries). No per-request data.
+## 7. Application-layer protections
 
-Per-feature rate limits prevent quota drain from a buggy loop: 1 annotate/minute, 1 explain/6s, 1 digest/hour. If the key is unset, all features no-op silently and the server keeps serving normal traffic.
+- **Path safety.** `pathsafe.zig` validates every user-influenced path and
+  subdomain: no null bytes, no control characters, no `..` segments, no
+  backslashes, and — for filesystem access — a `realpath`-based check that the
+  resolved target remains inside its root, which also defeats symlink escape.
+  Hosted subdomains are restricted to `[a-z0-9-]`, 1–63 characters.
+- **Prompt-injection defense.** All untrusted data passed to the AI layer is
+  wrapped in delimited blocks and sanitized; system prompts instruct the model
+  to treat that content strictly as data.
+- **Per-project isolation.** Each project has its own SQLite database, its own
+  AES-256-GCM secrets vault keyed to the pepper and project ID, and its own JWT
+  signing key, so one project can neither read another's data nor mint tokens
+  another would accept.
+- **GitHub webhooks** are verified with HMAC-SHA256 and a constant-time
+  comparison against a per-project secret.
 
-The key is read once at startup, held in memory, and never logged. The Settings page does not display or accept it (rotate via SSH if needed). All AI endpoints require an authenticated session.
+---
 
-## Known limitations / not defended against
+## 8. Auditing
 
-- **Origin IP exposure if cloudflared misconfigures.** The phone's residential IP would leak. Mitigated by running `cloudflared` with `protocol: http2` and never binding any port directly to a public interface.
-- **DDoS at the cloudflared link.** Cloudflare's free plan absorbs L3/L4 floods, but a sufficiently large L7 flood would saturate the tunnel before reaching the phone. There is no fallback.
-- **Compromised Cloudflare account.** If the dashboard is taken over, the attacker can reroute the domain or issue new certs. Two-factor auth is on; no further mitigation in this project.
-- **Compromised SSH key.** SSH on the phone is reachable over LAN only (192.168.100.x), key-based auth, password auth disabled. If the operator's laptop key is stolen and the attacker is on the same WiFi, they get shell.
-- **Side channels.** No defense against timing leaks beyond the constant-time HMAC and password compare. Cache-timing on shared infrastructure isn't relevant since the binary runs on a phone with no other tenants.
-- **Physical access.** Anyone holding the phone can unlock Termux, read all files, and impersonate the operator. The phone's lockscreen is the only barrier.
-- **Subdomain takeover.** All DNS records point to the same tunnel. If the tunnel is deleted but DNS lingers, no third party can claim a Cloudflare tunnel name they don't own (Cloudflare scopes tunnel names to the account), so this isn't currently a risk.
+Every operator mutation is written to an append-only audit log with a
+timestamp, actor, action, target, and outcome. Authentication attempts and
+signup events are logged separately. Because the logs are append-only and
+plain text, they are tamper-evident under normal operation and survive in
+backups.
 
-## Reporting
+---
 
-This is a personal project. If you find a vulnerability, open an issue at <https://github.com/rofiperlungoding/rofihosted/issues>. Do not include exploit details in the title.
+## 9. Secrets in backups
 
-## Verification checklist
-
-When changing security-related code, verify the following manually:
-
-- [ ] Login still requires both correct username and correct password
-- [ ] Wrong password 5 times from the same IP within 15 minutes results in a 1-hour ban
-- [ ] Hitting `/wp-admin` 3 times within 10 minutes results in a 24-hour ban
-- [ ] After changing password via `/settings`, all old cookies on other devices stop working
-- [ ] `curl -I https://app.rofihosted.space/` returns all six security headers
-- [ ] `/api/*` endpoints return 401 without a valid cookie
-- [ ] Static assets (`/theme.css`, etc) on `app.rofihosted.space` are reachable without auth (so the login page can load them)
+Backups include the pepper and the mode-600 configuration files, because they
+are required to restore a working system. Backups are therefore as sensitive as
+the device itself and are stored in a private Cloudflare R2 bucket. The system-
+level environment file (third-party API keys) is currently plaintext on disk;
+ensuring backups protect it and considering at-rest encryption for parity with
+the project vault is tracked in the engineering review (P3-4).

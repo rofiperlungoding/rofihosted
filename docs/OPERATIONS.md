@@ -1,590 +1,193 @@
-# Operations Manual
+# Operations
 
-This is the day-to-day reference for running rofihosted on a Sharp Aquos
-S40P. It assumes the system is already deployed; for first-time setup see
-`docs/RECOVERY.md`, and for architectural rationale see
-`docs/ARCHITECTURE.md`.
-
-## Table of contents
-
-- [System topology](#system-topology)
-- [Operator surfaces](#operator-surfaces)
-- [Daily workflows](#daily-workflows)
-- [Backup and restore](#backup-and-restore)
-- [Incident playbooks](#incident-playbooks)
-- [Self-update flow](#self-update-flow)
-- [Power monitoring](#power-monitoring)
-- [Resource quotas](#resource-quotas)
-- [Audit trail](#audit-trail)
-- [Verification matrix](#verification-matrix)
+This is the operator's manual for running rofihosted day to day: how to deploy,
+where to manage the system from, how backups work, how to respond to common
+incidents, and how to verify the system after a change. It consolidates the
+former metrics-testing checklist.
 
 ---
 
-## System topology
+## 1. Management surfaces
 
-```mermaid
-flowchart LR
-  subgraph laptop["Laptop / phone (anywhere)"]
-    browser["Browser<br/>Dashboard at app.rofihosted.space"]
-    cli["rh CLI<br/>(Node 18+)"]
-    gh["GitHub Actions<br/>auto-deploy.yml"]
-  end
+There are four ways to operate the system, in rough order of routine use.
 
-  subgraph cloudflare["Cloudflare edge"]
-    cf["rofihosted.space tunnel"]
-  end
+| Surface | Authentication | Use for |
+|---------|----------------|---------|
+| Operator console — `admin.rofihosted.space` | Session cookie (admin) | Day-to-day work: projects, settings, security, logs, web shell |
+| Web shell — `admin.rofihosted.space/shell` | Session cookie (admin) | Arbitrary commands; replaces SSH for most tasks |
+| `rh` CLI (workstation) | `X-API-Key` (admin scope) | Scripted operations, status checks, deploys |
+| GitHub Actions | Repository secret (admin scope) | Automatic deploy on every push to the default branch |
 
-  subgraph phone["Sharp Aquos S40P (Termux)"]
-    cflared["cloudflared<br/>(persistent tunnel)"]
-    hp["hp-server<br/>port 8080"]
-    watchdog["watchdog.sh<br/>health probe + RSS cap"]
-    fs["~/data/projects/<br/>~/data/dbs/<br/>~/.hp-server-*"]
-    proj["spawned project<br/>processes<br/>port 3000-3999"]
-    powermon["powermon thread<br/>termux-battery-status"]
-    backup["hourlyBackupLoop<br/>thread"]
-  end
-
-  subgraph external["Offsite"]
-    r2["Cloudflare R2<br/>bucket: rofihosted/"]
-    repo["GitHub<br/>rofiperlungoding/rofihosted"]
-  end
-
-  browser <-->|HTTPS| cf
-  cli <-->|HTTPS + X-API-Key| cf
-  gh -->|push triggers<br/>/v1/system/update| cf
-  cf <-->|outbound persistent<br/>WebSocket| cflared
-  cflared <-->|HTTP/1.1| hp
-  hp <-->|reverse proxy| proj
-  hp -->|read/write| fs
-  watchdog -->|spawn / kill| hp
-  watchdog -->|HTTP health| hp
-  powermon -->|sample| hp
-  hp -->|sync,<br/>flush WAL| fs
-  backup -->|tar + rclone| r2
-  hp -->|git fetch| repo
-  hp -.->|webhook on push| repo
-```
-
-### Single-node assumptions
-
-- One operator (`mrofid`). No multi-tenant.
-- One physical device. If the device dies, recovery is manual via R2 backup.
-- All persistent state lives in `~/data/` and `~/.hp-server-*` under the
-  Termux user home.
-
-### Outbound-only networking
-
-The phone never accepts inbound connections directly. cloudflared maintains
-an outbound persistent connection to Cloudflare, which proxies all
-`*.rofihosted.space` traffic through the tunnel. This means:
-
-- The phone can move between Wi-Fi and cellular networks without DNS or IP
-  changes.
-- No port forwarding, no static IP needed.
-- If the Cloudflare tunnel goes down, the phone is unreachable but local
-  state is intact.
+Direct SSH (key-based, port 8022, LAN-only) remains available as a last resort
+but is not required for any documented workflow.
 
 ---
 
-## Operator surfaces
+## 2. Deploying a change
 
-There are four ways to interact with the system, in order of access scope:
+The normal path is fully automated:
 
-| Surface | Auth | Use for |
-|---------|------|---------|
-| Web dashboard at `app.rofihosted.space` | Session cookie (login form) | Day-to-day project management, settings, viewing logs |
-| Web shell at `app.rofihosted.space/shell` | Same session cookie | Replaces SSH for arbitrary command execution |
-| `rh` CLI on laptop | X-API-Key (admin scope) | Scripted operations, deploys, status checks |
-| GitHub Actions | Repository secret `HP_ADMIN_API_KEY` | CI auto-deploy on push to main |
+1. Push to the default branch on GitHub.
+2. GitHub Actions calls `POST /v1/system/update` on the device with the admin
+   API key.
+3. The device runs `self-update.sh`: fetch, reset to the remote head, rsync
+   sources into the build tree, rebuild, and respawn through the watchdog.
+4. Commits that touch only scripts or documentation skip the rebuild and
+   restart.
 
-Direct SSH still works (key-based, port 8022) but is no longer required for
-any documented workflow.
-
-```mermaid
-sequenceDiagram
-  participant op as Operator
-  participant laptop as Laptop
-  participant cf as Cloudflare
-  participant hp as hp-server
-  participant proj as Project process
-
-  Note over op,proj: Workflow A: Edit + push code via GitHub Actions
-  op->>laptop: edit code
-  laptop->>cf: git push origin main
-  cf->>hp: GitHub Actions → /v1/system/update
-  hp->>hp: git fetch, rsync, rebuild, SIGTERM self
-  hp-->>cf: 524 (build longer than tunnel timeout)
-  Note over hp: watchdog respawns new binary
-  laptop->>hp: GET /v1/system/version (poll)
-  hp-->>laptop: local_sha = new HEAD ✓
-
-  Note over op,proj: Workflow B: Static deploy via rh CLI
-  op->>laptop: rh deploy ./mysite mysub
-  laptop->>laptop: detect runtime → static, vite/dist
-  laptop->>cf: POST /v1/projects/create (if new)
-  laptop->>laptop: zip directory
-  laptop->>cf: POST /v1/projects/upload?id=...
-  cf->>hp: forward zip
-  hp->>hp: extract → release dir, atomic-swap current/
-  hp-->>laptop: ok:true
-  op->>cf: GET https://mysub.rofihosted.space
-  cf->>hp: forward request
-  hp->>hp: serve from current/ symlink
-  hp-->>op: HTML
-
-  Note over op,proj: Workflow C: Stop a misbehaving project
-  op->>cf: POST /api/projects/stop (from dashboard)
-  cf->>hp: forward
-  hp->>proj: SIGTERM (5s grace) then SIGKILL
-  hp->>hp: project.status = stopped, last_kill_reason = operator
-  hp-->>op: ok:true
-  Note over hp: subdomain serves "Site paused" page
-```
-
----
-
-## Daily workflows
-
-### Deploy a new static site
+To deploy manually from the console or `rh`:
 
 ```sh
-# Laptop
-rh deploy ./build my-portfolio
-# → autodetects Vite/CRA/Astro, claims subdomain, uploads, returns URL
+rh update          # from a workstation
+# or, in the web shell:
+bash ~/self-update.sh
 ```
 
-### Edit hp-server source and ship
+**Verify after deploy:**
 
 ```sh
-# Laptop, in repo
-git push origin main
-# → GitHub Actions hits /v1/system/update
-# → phone fetches, rebuilds (90s for Zig changes, instant for scripts/docs)
-# → phone respawns with new binary
-# → CI verifies new SHA via /v1/system/version
-# → green check
+curl -s https://rofihosted.space/health        # expect: ok
+curl -s https://status.rofihosted.space/api/status | head -c 200
 ```
 
-### Quick health check from anywhere
+Confirm exactly one server process is running and the binary timestamp
+advanced:
 
 ```sh
-rh status
-# →
-# hp-server status
-#   version    33fbc22 (up to date)
-#   binary     built 29/05/2026, 07.07.41
-#   battery    90% full
-#   memory     2463 / 7573 MB
-#   disk       80.4 / 93.4 GB free
-#   uptime     2d 19h
+pgrep -af 'bin/hp-server$'
+ls -la ~/zig/hp-server/zig-out/bin/hp-server
 ```
 
-### Run an ad-hoc command without SSH
-
-Open `https://app.rofihosted.space/shell`. Type any shell command. Output
-streams back, capped at 256 KB and 60s by default.
-
-Quick-action chips on the page cover common operations: `~/rebuild.sh`,
-`ps -ef`, `disk usage`, `~/logs/hp-server.log`, `~/logs/cloudflared.log`,
-`~/data/projects/`, `git log`, `termux-battery-status`, `bash ~/backup-quick.sh`,
-`ls ~/backups`, `/health`.
-
-### Stop a project temporarily
-
-Dashboard → Projects → click project → Stop button.
-- Static project: subdomain returns 503 with "Site paused" page.
-- Backend project: SIGTERM (5s grace), then SIGKILL. Auto-restart paused for 30s.
-
-Restart with the Start button.
+> **Process hygiene.** Lifecycle scripts must match the process consistently to
+> avoid leaving duplicate instances competing for the port. If two
+> `hp-server` processes are ever observed, stop all of them and start one
+> cleanly. Standardizing this is tracked in the engineering review (P0-1).
 
 ---
 
-## Backup and restore
+## 3. Configuration and secrets
 
-### What gets backed up
+Runtime configuration lives in mode-600 files in the device home directory,
+never in the repository. The environment file (`~/.hp-server.env`) holds
+third-party credentials (Mistral, Brevo, Telegram, R2) and the operator
+credentials. It is sourced into the process environment at startup.
 
-```mermaid
-flowchart TD
-  subgraph essential["Essential (in backup)"]
-    registry["~/.hp-server-projects.jsonl<br/>(project registry)"]
-    creds["~/.hp-server-creds.txt<br/>(operator login)"]
-    pepper["~/.hp-server-secret.bin<br/>(session HMAC pepper)"]
-    secrets["~/data/projects/&lt;id&gt;/secrets.bin<br/>(per-project AES-256-GCM env vars)"]
-    dbs["~/data/dbs/&lt;id&gt;.db<br/>(per-project SQLite)"]
-    blocklist["~/.hp-server-blocklist.txt"]
-    webhooks["~/.hp-server-webhooks.jsonl"]
-    apikeys["~/.hp-server-apikeys.jsonl"]
-    rules["~/.hp-server-rules.json"]
-    cron["~/.hp-server-cron.jsonl"]
-  end
-
-  subgraph recoverable["Recoverable (NOT in backup)"]
-    src["hp-server source<br/>→ git clone from GitHub"]
-    bin["hp-server binary<br/>→ rebuild from source"]
-    repos["~/data/projects/&lt;id&gt;/repo/<br/>→ git clone on next deploy"]
-    cflared["~/.cloudflared/*.json<br/>→ cf-login + recreate-tunnel"]
-  end
-
-  essential --> tar["scripts/backup-quick.sh<br/>tar.gz to ~/backups/"]
-  tar --> rotate["rotate: keep last 14 local"]
-  tar --> r2up["scripts/backup-r2.sh<br/>rclone copy"]
-  r2up --> r2["Cloudflare R2<br/>r2:rofihosted/rofihosted/"]
-  r2 --> r2rotate["rotate: keep last 168<br/>(7 days hourly)"]
-```
-
-### Schedule
-
-```mermaid
-gantt
-  title Backup cadence (typical day)
-  dateFormat HH:mm
-  axisFormat %H:%M
-  section Local
-  hp-server boot                  :crit, 00:00, 5m
-  Hourly backup-quick (auto)      :04:00, 5m
-  Hourly backup-quick (auto)      :05:00, 5m
-  Hourly backup-quick (auto)      :06:00, 5m
-  section R2
-  hourlyBackupLoop fires backup-r2 :crit, 04:00, 10m
-  hourlyBackupLoop fires backup-r2 :crit, 05:00, 10m
-  hourlyBackupLoop fires backup-r2 :crit, 06:00, 10m
-  section Manual
-  Operator clicks Backup to R2    :milestone, 12:30, 0m
-  Operator clicks Validate backup :milestone, 12:35, 0m
-```
-
-The hourlyBackupLoop thread inside hp-server runs `~/backup-r2.sh` every
-3600 seconds with a 5-minute initial delay (so it doesn't fight boot-time
-project respawn). Each invocation:
-
-1. Calls `~/backup-quick.sh` to produce `~/backups/rofihosted-<ts>.tar.gz`
-2. `rclone copy` uploads to `r2:rofihosted/rofihosted/<ts>.tar.gz`
-3. Local: rotate, keep last 14
-4. Remote: `rclone lsf | sort | head -n -168 | xargs rclone delete` → keep last 168
-
-### Validate a backup
-
-Dashboard → Settings → Backups card → click "Validate backup".
-- If R2 configured, downloads the latest remote tarball, extracts to a
-  temp dir, counts registry lines and DBs.
-- Otherwise validates the latest local tarball.
-- Returns size, registry_lines, db_count, db_total_bytes.
-- Cleans up temp dir on exit.
-
-### Restore on a fresh phone
-
-See `docs/RECOVERY.md` for the full step-by-step. Summary:
-
-1. Install Termux on new device, pkg install git openssh openssl-tool curl unzip nodejs python proot termux-api zip rsync rclone
-2. `git clone https://github.com/rofiperlungoding/rofihosted ~/rofihosted-src`
-3. Pull the latest tarball from R2 manually:
-   `rclone copy r2:rofihosted/rofihosted/<latest>.tar.gz ~/`
-4. `cd ~ && tar xzf <latest>.tar.gz` (puts back .hp-server-*, data/dbs/, secrets.bin)
-5. `~/scripts/install-zig-014.sh` then `~/scripts/cf-login.sh` and `~/scripts/recreate-tunnel.sh`
-6. `~/rebuild.sh && ~/scripts/watchdog.sh &`
-7. Verify with `~/test-everything.sh`
-
----
-
-## Incident playbooks
-
-### Phone is unreachable
-
-```mermaid
-flowchart TD
-  start[GET https://app.rofihosted.space fails] --> a{Cloudflare 522?}
-  a -->|yes| cf[Tunnel down on phone]
-  cf --> cfcheck[Check phone power +<br/>cloudflared.log]
-  cfcheck --> cfaction[Restart cloudflared:<br/>~/scripts/start-named-tunnel.sh]
-
-  a -->|524| build[Long-running endpoint<br/>during rebuild]
-  build --> wait[Poll /v1/system/version<br/>every 5s for 4 min]
-
-  a -->|521| origin[hp-server crashed]
-  origin --> watchdog[Wait 60s for watchdog<br/>auto-respawn]
-  watchdog --> stillbad{Still down?}
-  stillbad -->|yes| ssh[SSH to phone, run ~/zig/hp-server/zig-out/bin/hp-server<br/>read stderr]
-  stillbad -->|no| ok[Auto-recovered]
-
-  a -->|other| net[Check operator's<br/>own network]
-```
-
-### Charger fell out
-
-The powermon thread polls `termux-battery-status` every 30s. On detecting
-the transition CHARGING/FULL → DISCHARGING/NOT_CHARGING:
-
-1. Logs `powermon: charger disconnected`
-2. Runs `sync` to flush filesystem buffers (this device bootloops on
-   prolonged unplug, so we want WAL flushed before potential power loss)
-3. Fires Telegram alert (rate-limited to 1/60s) if configured
-4. Renders a sticky red banner on the dashboard
-
-Operator action: replug the charger. The phone will reboot if power was
-fully lost; watchdog respawns hp-server, project supervisor reaps any
-orphan PIDs, and projects with status=running auto-restart.
-
-### Project is OOM-looping
-
-Symptom: Project keeps crashing, RAM pill turns red, `last_kill_reason`
-shows `rss_quota`.
-
-Steps:
-
-1. Dashboard → click project → Logs → Runtime log to find the leak
-2. Config tab → raise RAM limit if the cap is genuinely too tight
-3. Or fix the leak in your code and redeploy
-
-If the supervisor's auto-restart loop sees three OOM kills in a row, it
-backs off exponentially (5s → 10s → 20s ... up to 60s) before respawning.
-
-### Forgot to set R2 credentials
-
-Symptom: hourly backup logs `R2_BUCKET not set in ~/.hp-server.env`.
+Helper scripts manage individual settings without clobbering the rest of the
+file, for example:
 
 ```sh
-# In /shell on dashboard:
-R2_ACCOUNT_ID="..." R2_ACCESS_KEY_ID="..." R2_SECRET_ACCESS_KEY="..." R2_BUCKET="rofihosted" bash ~/r2-setup.sh
+bash ~/scripts/set-email.sh <brevo-api-key> <verified-sender> rofihosted
+bash ~/scripts/set-telegram.sh <bot-token> <chat-id>
 ```
 
-Test: `rclone lsd r2:rofihosted` should list the bucket.
+After changing configuration, restart the server so the new environment is
+loaded.
 
 ---
 
-## Self-update flow
+## 4. Backups
 
-```mermaid
-flowchart TD
-  push[git push origin main] --> ghaction[GitHub Actions<br/>auto-deploy.yml]
-  ghaction --> wait[sleep 10s for<br/>origin/main to propagate]
-  wait --> trig[POST /v1/system/update<br/>with HP_ADMIN_API_KEY]
-  trig --> cf[Cloudflare tunnel]
-  cf --> hp[hp-server]
-  hp --> script[Spawn ~/self-update.sh]
-  script --> check{cd ~/rofihosted-src<br/>git fetch}
-  check --> already{HEAD == origin/main?}
-  already -->|yes| done1[emit already_up_to_date<br/>exit 0]
+- **Local snapshots** (`scripts/backup-quick.sh`) — a tarball of the registry,
+  per-project databases, secrets vaults, the pepper, and all JSONL data,
+  rotated to the most recent fourteen.
+- **Offsite** (`scripts/backup-r2.sh`) — the same snapshot copied to a private
+  Cloudflare R2 bucket via `rclone`, rotated to the most recent 168 (seven days
+  hourly). An in-process thread triggers this hourly.
+- The Settings page can trigger either backup, list both, and validate that a
+  snapshot is restorable.
 
-  already -->|no| files{Any .zig/.html/.js/.css/.zon<br/>changed?}
-  files -->|no| sync_only[rsync sources<br/>emit no_restart_needed<br/>hp-server stays up]
-  files -->|yes| sync_full[rsync sources]
-  sync_full --> rebuild[~/rebuild.sh]
-  rebuild --> mtimecheck{binary mtime<br/>advanced?}
-  mtimecheck -->|no| failbuild[emit rebuild_did_not_produce_new_binary<br/>exit 1]
-  mtimecheck -->|yes| schedkill[schedule SIGTERM<br/>in 3s subshell]
-  schedkill --> respond[respond to HTTP client<br/>with success JSON]
-  respond --> kill[3s later: kill self]
-  kill --> watchdog[watchdog detects<br/>and respawns]
-  watchdog --> verify[GitHub Actions polls<br/>/v1/system/version<br/>until SHA matches]
-```
-
-### Why three classes of update
-
-| Class | Trigger | Result |
-|-------|---------|--------|
-| `already_up_to_date` | HEAD already at remote | Returns in <1s, no rebuild, no restart |
-| `no_restart_needed` | Only scripts/docs changed | Sources rsync'd, no rebuild needed, hp-server keeps running |
-| `updated` (full) | Zig/template/JS/CSS/zon changed | Sources rsync'd, rebuilt, hp-server killed and respawned |
-
-This minimizes downtime: 95% of operator commits are scripts or docs and
-never bounce hp-server.
+Because backups contain the pepper and secrets, they are as sensitive as the
+device. Keep the R2 bucket private. Perform a restore drill periodically; see
+`RECOVERY.md`.
 
 ---
 
-## Power monitoring
+## 5. Monitoring
 
-This device has a faulty charging IC that bootloops on unplug. The
-powermon module is built around that constraint.
+- **Public status** — `status.rofihosted.space` shows overall state and
+  per-component status with recent uptime bars, computed from first-party
+  signals (`/api/status`).
+- **Operator status** — the console's Status page shows the in-depth view:
+  probe results, tunnel internals, process and thread health, and response-code
+  breakdowns.
+- **Alerts** — optional Telegram notifications fire on power events
+  (charger disconnect), downtime transitions, and pending signups.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Unknown: hp-server boots
-    Unknown --> Plugged: first sample CHARGING/FULL
-    Unknown --> Unplugged: first sample DISCHARGING/NOT_CHARGING
+> External reference probes (Google, GitHub, Cloudflare) can report false
+> failures under Termux DNS and should not be treated as outages of this
+> system. Reducing this noise is tracked in the engineering review (P0-3).
 
-    Plugged --> Plugged: 30s timer<br/>still charging
-    Plugged --> Unplugged: status flips to<br/>DISCHARGING<br/>+ run sync<br/>+ Telegram alert<br/>+ red banner on dashboard
-    Unplugged --> Plugged: status flips to<br/>CHARGING/FULL<br/>+ Telegram clear<br/>+ banner hides
+---
 
-    note right of Plugged
-        is_plugged: true
-        Banner hidden
-    end note
-    note right of Unplugged
-        is_plugged: false
-        Sticky red banner: "Charger disconnected"
-        Operator should replug ASAP
-    end note
-```
+## 6. Incident playbooks
 
-### Telegram setup
-
-Optional but strongly recommended. To enable:
+**Server not responding (`/health` fails).** The watchdog should restart it
+within its check interval. If it does not, open the web shell or SSH, confirm
+the process state, and start it cleanly:
 
 ```sh
-# In /shell:
-~/scripts/set-telegram.sh
+pkill -f 'bin/hp-server$'; sleep 2; bash ~/start-zig-server.sh
 ```
 
-Follow the prompts to register a Telegram bot via @BotFather, get a chat
-ID, and write to `~/.hp-server.env`.
-
----
-
-## Resource quotas
-
-Per-project RSS limit caps memory at the supervisor level.
-
-```mermaid
-sequenceDiagram
-  participant sup as Supervisor (5s loop)
-  participant proc as Project process
-  participant fs as /proc/&lt;pid&gt;/status
-
-  loop every 5 seconds
-    sup->>fs: read VmRSS
-    fs-->>sup: e.g. 312000 KB
-    alt under limit
-      sup->>sup: over_quota_count = 0
-    else over limit
-      sup->>sup: over_quota_count++
-      alt count >= 2
-        sup->>proc: SIGTERM
-        sup->>sup: last_kill_reason = rss_quota
-        Note over sup: autoRestart respawns<br/>with backoff
-      end
-    end
-  end
-```
-
-### Setting a limit
-
-Dashboard → click project → Config tab → "RAM limit (MB)" → click a
-preset chip (128, 256, 384, 512) or type a custom number → click Save.
-
-Static projects ignore the setting (they have no spawned process to cap).
-
-The "RAM 142 MB / 256 (55%)" pill on the meta row updates every 5s and
-turns amber at 75% and red at 90%.
-
----
-
-## Audit trail
-
-Every privileged action is recorded in `~/.hp-server-audit.jsonl`. View
-recent entries via `GET /api/audit?limit=100`.
-
-Actions logged:
-- `login`, `logout`, `login_failure`
-- `block_ip`, `unblock_ip`, `change_credentials`
-- `digest_run`, `geoblock_update`
-- `project_create`, `project_update`, `project_delete`, `project_delete_purge`
-- `project_start`, `project_stop`, `project_restart`, `project_deploy`
-- `project_secret_set`, `project_secret_delete`
-- `apikey_create`, `apikey_revoke`
-- `webhook_create`, `webhook_delete`
-- `system_exec` (with first 200 chars of command)
-- `system_backup`, `system_update`, `system_restore_test`
-
-Each entry has a Unix timestamp, actor (username from session or API key
-name), action, target identifier, optional detail string, and ok flag.
-
----
-
-## Verification matrix
-
-`scripts/test-everything.sh` runs all 48 checks below. Designed to be run
-on the phone via SSH or `/shell`.
-
-| Category | Check | What it tests |
-|----------|-------|---------------|
-| Auth | session login | Login form returns 302 |
-| | admin API key created | /api/apikeys/create with admin scope |
-| Pages | / /status /files /api /projects /security /settings /shell | All sidebar pages return 200 |
-| | /health | Public health endpoint |
-| | /login (apex) | Public landing |
-| System (cookie) | /api/system/info | Battery, mem, disk, uptime |
-| | /api/system/power | Charger status |
-| | /api/system/version | Local + remote SHA |
-| | /api/system/backups | Lists local + R2 |
-| | /api/system/backup local | Triggers backup-quick.sh |
-| | /api/system/restore-test local | Validates a tarball |
-| | /api/system/exec (echo) | Shell exec |
-| | /api/system/exec (timeout) | SIGTERM at deadline |
-| V1 (admin key) | /v1/whoami | Key identity |
-| | /v1/system/version | Mirror of /api/system/version |
-| | /v1/system/info | Mirror |
-| | /v1/system/power | Mirror |
-| | /v1/projects | Project list |
-| | scope enforcement | sql-only key on /v1/system/* gets 403 |
-| Project | v1 projects create | Create static project |
-| | v1 projects list | Sees new project |
-| | set rss_limit_mb | Update with quota |
-| | rss_limit_mb persisted | Survives round-trip |
-| | v1 projects status (rss fields) | rss_kb, rss_limit_mb, last_kill_reason |
-| | stop static project | Sets status=stopped |
-| | start static project | Flips back to running |
-| | delete with purge | Removes registry + files + DB |
-| Deploy | v1 deploy: project created | Static project via /v1/projects/create |
-| | v1 deploy: upload | ZIP through /v1/projects/upload |
-| | v1 deploy: site reachable through CF | Public URL serves the deployed file |
-| Backup | local backup | Creates tarball, lists in /api/system/backups |
-| | R2 configured | r2_configured=true |
-| | R2 backup upload | rclone copy succeeds |
-| | R2 backup visible | New file in remote list |
-| Powermon | battery readable | Returns valid percentage and is_plugged |
-| Audit | trail readable | /api/audit returns entries |
-| | logs system_backup | Recent backup recorded |
-| | logs project_create | Recent create recorded |
-
-Run it any time:
+**Tunnel down (edge returns 530).** Check `cloudflared`:
 
 ```sh
-ssh hp 'bash ~/test-everything.sh'
+pgrep -af cloudflared
+tail -50 ~/logs/cloudflared.log
 ```
 
-Expected output ends with `48 / 48 passed   All green.`
+The tunnel-health watchdog requests a restart after a sustained outage; the
+shell watchdog acts on that request.
+
+**Memory pressure.** The watchdog restarts the server if its RSS exceeds the
+configured ceiling. Investigate the cause (a runaway project process is the
+usual culprit) via the Security and Projects pages.
+
+**Failed deploy.** If a build fails on the device, the previous binary may
+still be running. Re-run the update after fixing the cause. A last-known-good
+binary fallback is recommended; see the engineering review (P0-2).
+
+**Suspected compromise / abuse.** Review the Security page and audit log,
+block offending IPs, and if a credential may be exposed, change the operator
+password (which rotates all sessions) and revoke affected API keys.
 
 ---
 
-## Quick reference: file locations on phone
+## 7. Verification suite
 
-| Path | Owner | Purpose |
-|------|-------|---------|
-| `~/zig/hp-server/` | source + build cache | hp-server source tree |
-| `~/zig/hp-server/zig-out/bin/hp-server` | binary | compiled server |
-| `~/rofihosted-src/` | clone of GitHub repo | self-update fetches here, then rsyncs to ~/zig/hp-server/ |
-| `~/data/projects/<id>/` | per project | working tree, releases, logs, secrets vault, runtime.pid |
-| `~/data/dbs/<id>.db` | per project | SQLite DB for auth + app data |
-| `~/.hp-server-projects.jsonl` | registry | JSON-lines list of projects |
-| `~/.hp-server-creds.txt` | auth | operator username:bcrypt(password) |
-| `~/.hp-server-secret.bin` | auth | 32-byte HMAC pepper |
-| `~/.hp-server-blocklist.txt` | security | banned IPs |
-| `~/.hp-server-apikeys.jsonl` | api | issued API keys |
-| `~/.hp-server-webhooks.jsonl` | api | outbound webhook configs |
-| `~/.hp-server-rules.json` | security | operator-defined rules |
-| `~/.hp-server-cron.jsonl` | scheduling | per-project cron tasks |
-| `~/.hp-server-audit.jsonl` | audit | append-only action log |
-| `~/.hp-server.env` | config | TG_BOT_TOKEN, R2_BUCKET, MISTRAL_API_KEY, etc |
-| `~/.cloudflared/<tunnel-id>.json` | tunnel | tunnel credentials |
-| `~/.cloudflared/cert.pem` | tunnel | account cert |
-| `~/.config/rclone/rclone.conf` | tunnel | R2 endpoint + access keys |
-| `~/backups/rofihosted-<ts>.tar.gz` | backup | local snapshots (last 14) |
-| `~/logs/hp-server.log` | runtime | std out + err of hp-server |
-| `~/logs/cloudflared.log` | runtime | tunnel logs |
-| `~/logs/watchdog.log` | runtime | watchdog actions |
-| `~/logs/self-update.log` | runtime | self-update.sh diagnostics |
+After any change, run the end-to-end verification on the device:
+
+```sh
+bash ~/test-everything.sh
+```
+
+It exercises authentication, infrastructure, system endpoints, the `/v1` API,
+the project lifecycle and deploy pipeline, backups, the power monitor, and
+auditing. Clean it up after.
+
+For routing and surface behaviour specifically, confirm:
+
+- `rofihosted.space/` returns the landing page; `/health` returns `ok`.
+- `status.rofihosted.space/` renders and `/api/status` reports `operational`.
+- `admin.rofihosted.space/` redirects unauthenticated requests to login, and
+  serves the console after an admin login.
+- `app.rofihosted.space/` requires authentication.
+- Static assets and fonts load (`/theme.css`, `/app.css`,
+  `/fonts/SFProDisplay-*.woff2`).
 
 ---
 
-## Quick reference: ports
+## 8. Routine tasks reference
 
-| Port | Bound by | Visibility |
-|------|----------|------------|
-| 8080 | hp-server (httpz) | localhost-only |
-| 3000-3999 | project supervisors | localhost-only, allocated per project |
-| 8022 | sshd (Termux) | LAN-only (recovery surface) |
-| n/a | cloudflared | outbound only, no listen |
-
-All public traffic enters via cloudflared and is proxied to localhost:8080
-or localhost:&lt;project_port&gt; based on the Host header subdomain.
+| Task | Where |
+|------|-------|
+| Create / deploy a project | Console → Projects |
+| Roll back a release | Console → Projects → project → Releases |
+| Run SQL against a project DB | Console → Projects → project → Database |
+| Add a scheduled task | Console → Projects → project → Scheduled tasks |
+| Create / revoke an API key | Console → Settings → API keys |
+| Configure webhooks | Console → Settings → Webhooks |
+| Edit operator rules | Console → Settings → Rules |
+| Toggle geo-block / honeypot | Console → Settings |
+| Trigger a backup | Console → Settings → Backups |
+| Run an arbitrary command | Console → Shell |

@@ -1,175 +1,273 @@
 # Architecture
 
-This is a single-binary HTTP server written in Zig 0.14, deployed to one user's Termux session on Android 12. It is not designed for horizontal scaling.
+This document describes the design of rofihosted: its process model, request
+lifecycle, host routing, module organization, storage strategy, concurrency,
+and deployment pipeline. It is the canonical reference for how the system is
+put together and why.
 
-## Process model
+---
 
-Two processes cooperate at runtime:
+## 1. Design principles
 
-- `hp-server` (the Zig binary): serves HTTP, runs all in-process loops below.
-- `watchdog.sh`: a sibling shell loop that restarts `hp-server` and `cloudflared` if they die, and reacts to the in-process tunnel-restart flag.
+The system is shaped by four constraints and the principles that follow from
+them.
 
-Inside `hp-server`:
+1. **It runs on a phone under Termux.** There is no glibc, the standard
+   shipping locations for CRT files are absent, and the Zig standard-library
+   HTTP client has DNS difficulties on Bionic. The system therefore prefers
+   well-tested external binaries (`curl`, `sqlite3`, `cloudflared`) invoked as
+   subprocesses over fragile in-process equivalents.
+2. **It is a single node with no replicas.** Recoverability matters more than
+   availability engineering. Persistent state is append-only and the durable
+   record is plain text that can be inspected and replayed.
+3. **It is operated by one person.** The codebase is kept small, dependency-
+   light, and readable. Complexity is added only where it earns its keep.
+4. **It is exposed to the public internet.** Every request is untrusted until
+   classified, and security controls run in the hot path.
 
-| Thread | Purpose |
-| --- | --- |
-| Main + httpz pool | Accept TCP, parse HTTP, dispatch to handlers |
-| `uptime.checkerLoop` | Probe configured targets every 60s |
-| `store.rotatorLoop` | Hourly rotate JSONL logs over 2 MB |
-| `events.heartbeatLoop` | Send `:` keepalive to SSE clients every 25s |
-| `statsTickLoop` | Read /proc, publish stats every 2s if anyone is subscribed |
-| `digestLoop` | Generate the daily AI digest every 24h (waits 5 min after boot) |
-| `tunnel_health.loop` | Poll cloudflared metrics every 30s, classify state, request restart after >2 min downtime |
-| One thread per active SSE client | Owns a TCP stream, written to by the bus |
-| Per-event short-lived threads | Annotate auto-bans via Mistral (fire-and-forget) |
+---
 
-All shared state goes through `std.Thread.Mutex`. JSONL writes serialise via `store_mutex`. The blocklist, autoban tracker, login tracker, geoblock config, AI annotation cache, tunnel-health status, and event bus each have their own mutex.
+## 2. Process model
 
-The SIGTERM and SIGINT handlers call `httpz.Server.stop()` so the server drains in-flight requests, lets background loops finish their current iteration, and exits cleanly. JSONL appenders use `O_APPEND` so partial writes can never corrupt other lines.
+Two cooperating OS processes run on the device:
 
-## Request lifecycle
+- **`hp-server`** — the Zig binary. It owns the listening socket on
+  `127.0.0.1:8080` and all application logic.
+- **`watchdog.sh`** — a shell supervisor. It restarts `hp-server` if the
+  process dies or fails an HTTP health probe, restarts `cloudflared` if the
+  tunnel drops, and restarts the server proactively if its resident memory
+  exceeds a configured ceiling.
+
+Public traffic reaches the server through `cloudflared`, which maintains a
+persistent outbound connection to the Cloudflare edge and forwards requests to
+the local port. There is no inbound port exposed on the device or the home
+network.
+
+Inside `hp-server`, the main thread starts the httpz worker pool and then spawns
+a set of long-lived background threads:
+
+| Thread | Responsibility | Cadence |
+|--------|----------------|---------|
+| httpz workers | Accept and dispatch HTTP / SSE | — |
+| uptime checker | Probe configured targets | 60 s |
+| store rotator | Bound JSONL files by size | hourly |
+| SSE heartbeat | Keep event streams alive | 25 s |
+| stats tick | Publish process/memory stats | 2 s |
+| daily digest | AI summary (if enabled) | 24 h |
+| weekly policy review | AI policy audit (if enabled) | 7 d |
+| tunnel health | Poll `cloudflared` metrics | 30 s |
+| embeddings persist | Flush vector store | 5 min |
+| hourly backup | Offsite snapshot to R2 | 60 min |
+
+Short-lived threads are also spawned per event for asynchronous AI annotation
+and embedding generation. (See `docs/ENGINEERING-REVIEW.md`, item P1-2, for a
+note on bounding this.)
+
+---
+
+## 3. Request lifecycle
+
+Every request passes through a single host router that applies a uniform
+pipeline before dispatching by hostname:
+
+1. Apply strict security headers (HSTS, CSP, `X-Frame-Options`, etc.).
+2. Resolve the client IP (from the Cloudflare-provided header), user agent, and
+   method; parse the `Host` header.
+3. Evaluate the session cookie to determine authenticated identity.
+4. Check the blocklist; serve `403` if the IP is banned.
+5. Classify the request (`self` / `unknown` / `bot` / `scanner` / `blocked`).
+6. Apply geo-blocking if enabled (never for authenticated or local requests).
+7. For scanners, record the hit toward auto-ban; optionally serve honeypot
+   content.
+8. Apply per-IP rate limiting (skipped for the operator and `/health`).
+9. Attempt project-subdomain routing, then legacy static-site routing.
+10. Dispatch `/v1/*` programmatic API requests (API-key authenticated).
+11. Dispatch by host (see Section 4).
+12. After the handler returns, record the visit to the append-only log and
+    publish it to the SSE event bus.
+
+---
+
+## 4. Host routing
+
+The router maps each public hostname to a handler. Access policy is enforced at
+both the host layer and the route layer (defense in depth).
 
 ```
-TCP accept
-  |
-httpz.Server worker
-  |
-  v
-hostRouter (one big handler)
-  |
-  +--> security.applyHeaders         (HSTS, CSP, etc, on every response)
-  +--> resolve ip + ua + method
-  +--> auth.isAuthenticated          (cookie HMAC verify, with pepper)
-  +--> blocklist.isBlocked
-  +--> security.classify             (combine path heuristics + UA + browser fingerprint)
-  +--> if blocked: 403, log, return
-  +--> geoblock.shouldBlock          (skip if authed/local; only when feature is on)
-  +--> if scanner: autoban.recordScannerHit -> if did_ban: spawn AI annotation thread
-  +--> rateLimit.allow (per IP)      (skip for self + /health)
-  +--> dispatch by host:
-  |      - rofihosted.space        => handleRoot (public landing + shared assets)
-  |      - app.rofihosted.space    => handleApp  (private console + JSON API)
-  |      - legacy subdomains       => 301 to app
-  +--> after handler returns:
-        logVisitFull -> appendJson visits.jsonl + bus.publish(.visit, ...)
+rofihosted.space            -> public landing, signup, health, static assets
+status.rofihosted.space     -> public status page + GET /api/status
+admin.rofihosted.space      -> operator console   (requires role = admin)
+app.rofihosted.space        -> tenant console      (requires authentication)
+<sub>.rofihosted.space      -> project router (auth intercept, static, or proxy)
+www / dashboard / api / files -> redirects to canonical locations
 ```
 
-## Storage
+Both consoles are served by one handler, `handleConsole`, parameterized by a
+`Surface` value (`admin` or `app`):
 
-Append-only JSONL files in `~/data/`:
+- On the **admin** surface, an authenticated non-admin is redirected (302) to
+  the tenant host.
+- On the **app** surface, an authenticated admin is redirected (302) to the
+  operator host for page navigations (API calls are left untouched so
+  automation continues to work).
+- Sensitive routes (`/admin/*`, `/api/users*`, `/api/invites*`, and the system
+  endpoints) additionally enforce `role = admin` regardless of host.
 
-- `visits.jsonl` - every request, fields: `visited_at, ua, ip, path, method, host, status, referer, country, classification`
-- `uptime.jsonl` - every probe result
-- `logins.jsonl` - every authentication attempt
-- `audit.jsonl` - every operator action: block, unblock, change credentials, run digest, geoblock update
-- `digests.jsonl` - one line per generated daily digest
+The session cookie is scoped to `.rofihosted.space`, so one login is valid
+across all surfaces; login and apex redirects choose the destination host by
+role.
 
-Files are rotated hourly when over 2 MB by walking line-by-line and rewriting the tail.
+### Project subdomains
 
-Credentials and policy state live outside `~/data/`:
+For `<sub>.rofihosted.space`, the router resolves in this order:
 
-- `~/.hp-server-creds.txt` - mode 600, two lines (user, pass)
-- `~/.hp-server-blocklist.txt` - mode 600, TSV: `ip<TAB>blocked_at<TAB>expires_at<TAB>reason`
-- `~/.hp-server-secret.bin` - mode 600, 32 random bytes used as session-secret pepper
-- `~/.hp-server-geoblock.txt` - mode 600, line 1 `on`/`off`, line 2 comma-separated country codes
-- `~/.hp-server.env` - mode 600, environment variables (`MISTRAL_API_KEY`, optional `TG_*`, optional `BACKUP_PASSPHRASE`, `HP_AUTH_USER`/`HP_AUTH_PASS`)
+1. `/auth/{signup,login,verify}` — intercepted by the per-project
+   authentication service before the project's own code can see credentials.
+2. `/v1/github/<project_id>` — HMAC-verified GitHub deploy webhook.
+3. If the project is static, serve from its current release directory.
+4. If the project is a backend, reverse-proxy to its allocated local port.
+5. Otherwise, fall through to legacy static-site hosting.
 
-## Authentication
+Reserved subdomains (`app`, `www`, `dashboard`, `status`, `api`, `files`,
+`admin`) are never claimable by a project.
 
-Cookie name: `rofi_session`. Format: `base64url(payload).base64url(hmac256(payload))`. Payload format: `<unix_expiry>:<username>`.
+---
 
-The HMAC key is derived once on each `auth.Config.recomputeSecret` call as:
+## 5. Module map
+
+The server is organized into focused modules under `zig/hp-server/src/`.
+
+**Core and routing**
+- `main.zig` — HTTP routing, request lifecycle, signal handling, and the bulk
+  of the handlers. (Decomposition is tracked in the engineering review.)
+
+**Identity and access**
+- `auth.zig` — HMAC session cookies (legacy operator and multi-user v2),
+  identity resolution.
+- `users.zig` — multi-tenant user store (roles, statuses, password hashing).
+- `apikey.zig` — scoped, hashed API keys for the `/v1/*` API.
+- `secret.zig` — the per-install random pepper.
+
+**Security**
+- `security.zig` — classifier, blocklist, auto-ban, login tracker, headers.
+- `ratelimit.zig` — per-IP token bucket.
+- `geoblock.zig` — country-based filtering.
+- `pathsafe.zig` — path/subdomain validation with `realpath` escape checks.
+- `fingerprint.zig`, `signuplimit.zig`, `invites.zig`, `emailverify.zig` —
+  the signup anti-abuse pipeline.
+
+**Platform (PaaS)**
+- `projects.zig` — project registry.
+- `projsecrets.zig` — AES-256-GCM per-project secrets vault.
+- `builder.zig` — clone/install/build/publish/rollback orchestration.
+- `supervisor.zig` — per-project process supervision and RSS quotas.
+- `proxy.zig` — HTTP/1.1 reverse proxy to project ports.
+- `projauth.zig` — per-project authentication-as-a-service (HS256 JWT).
+- `cron.zig` — scheduled tasks.
+- `hosted.zig` — legacy static-site hosting.
+
+**Storage and telemetry**
+- `store.zig` — append-only JSONL with size-bounded rotation; uptime history.
+- `writebuf.zig` — buffered writer for the visits log.
+- `dbcache.zig` — SQLite read-side cache, incrementally synced from JSONL.
+- `dbpool.zig` — persistent `sqlite3` worker pool.
+- `uptime.zig`, `tunnel_health.zig`, `sysmon.zig`, `hostinfo.zig`,
+  `powermon.zig` — monitoring.
+- `events.zig` — SSE pub/sub bus with an outbound webhook fan-out hook.
+- `rules.zig` — operator rule engine.
+- `webhook.zig` — outbound webhook dispatch.
+
+**Communications and AI**
+- `email.zig` — transactional email via the Brevo HTTP API.
+- `telegram.zig` — optional Telegram notifier.
+- `ai.zig`, `embeddings.zig`, `honeypot.zig`, `query.zig` — the AI layer.
+
+**Presentation**
+- `templates/` — all HTML, CSS, JavaScript, and fonts, embedded into the
+  binary at compile time.
+
+---
+
+## 6. Storage model
+
+The durable record is **append-only JSON Lines** under `~/data/`. SQLite is a
+**derived, rebuildable cache**, never the source of truth.
 
 ```
-SHA-256("rofi.session.v1:" || password || ":" || username || ":" || pepper)
+~/data/
+  visits.jsonl, uptime.jsonl, logins.jsonl, audit.jsonl,
+  digests.jsonl, policy.jsonl, anomalies.jsonl, ai-calls.jsonl, scrub.jsonl
+  cache.db                  (SQLite read-side cache, rebuildable)
+  embeddings.bin            (vector store, custom binary format)
+  dbs/<project_id>.db       (per-project SQLite)
+  projects/<id>/            (repo, releases, current symlink, secrets, logs)
 ```
 
-`pepper` is 32 random bytes loaded from `~/.hp-server-secret.bin` at startup (generated on first boot). Both the credentials file and the pepper file have to be exfiltrated to forge cookies. Changing the password or username via `/settings/change` rotates the secret immediately. Cookies are issued with `Secure; HttpOnly; SameSite=Lax; Domain=.rofihosted.space; Max-Age=604800`.
+### Why JSONL plus SQLite
 
-## Real-time events
+Append-only writes are simple, crash-safe, and human-inspectable. But scanning
+JSONL for the AI query bar is slow at scale, so a SQLite table (`visits`, with
+indexes and an FTS5 virtual table) is maintained as a cache. A background sync
+reads new rows from the last-synced byte offset every five minutes and batches
+them into a single transaction. Queries use the cache when healthy and fall
+back to a JSONL scan otherwise; responses report which source served them.
 
-Each authenticated SSE subscriber connects to `/api/stream`. httpz `startEventStreamSync` switches the response into chunked-streaming mode and disowns the underlying socket. The application registers the stream with `events.Bus`. The bus stores subscribers in an `ArrayList(*Subscriber)` guarded by a mutex.
+SQLite is accessed through a pool of persistent `sqlite3` CLI subprocesses
+rather than a linked library, because Termux does not ship the CRT files needed
+to link `libsqlite3` reliably. A sentinel-based protocol marks query boundaries
+on each worker's stdio. This trades a small per-query overhead for a
+dependency-free, Termux-correct implementation.
 
-Publishing iterates subscribers, writes the formatted SSE record (`event: <name>\ndata: <json>\n\n`), and on any write error marks the subscriber dead and removes it. Dead detection is also done via a heartbeat thread that writes `:\n\n` (SSE comment) every 25s.
+### Configuration and secrets
 
-Events emitted today:
+Configuration and credentials live in mode-600 files outside the repository and
+are never committed: the credentials file, blocklist, the random pepper,
+geo-block and honeypot toggles, the environment file (third-party API keys),
+the operator rule set, API keys, webhooks, the project registry, and the cron
+schedule.
 
-| Event | Where | Payload |
-| --- | --- | --- |
-| `hello` | Once on connect | `{ts}` |
-| `visit` | After every handled request | full Visit record |
-| `login_attempt` | After every login submit | `{timestamp, ip, username, success}` |
-| `blocklist_change` | On block / unblock / annotate | `{action, ip, reason?, timestamp}` |
-| `uptime_probe` | After each probe | full UptimeRecord |
-| `stats_tick` | Every 2s when at least one subscriber is connected | `{memory, process, timestamp}` |
-| `tunnel_health` | On state transition | `{state, connections, timestamp}` |
-| `digest_ready` | After each digest run | `{timestamp, summary}` |
+---
 
-## AI features (optional)
+## 7. Concurrency
 
-When `MISTRAL_API_KEY` is set, three opt-in features call out to `https://api.mistral.ai/v1/chat/completions` with model `mistral-small-latest`. Implementation lives in `ai.zig`; calls are made via `curl` subprocess (Zig `std.http` had Bionic-libc DNS issues).
+Shared state is guarded by mutexes held briefly and released before any I/O
+where possible. The append-only logs are written under a store mutex; the
+buffered visits writer flushes on an interval. The SSE bus fans out events to
+subscribers and, through a registered callback, to the outbound webhook
+dispatcher, avoiding an import cycle.
 
-| Feature | Trigger | Rate limit |
-| --- | --- | --- |
-| Auto-ban annotation | Background thread after `recordScannerHit` results in a ban | 1/min, burst 5; 24h per-IP cache |
-| Explain IP | `POST /api/ai/explain` (operator click) | 1/6s, burst 10 |
-| Daily digest | `digestLoop` thread or `GET /api/ai/digest/run` | 1/hour, burst 2 |
+Signal handling uses an async-signal-safe atomic flag; the actual flush and
+socket shutdown happen on the main thread's shutdown loop rather than inside
+the handler, per POSIX guidance.
 
-If the key is unset, all features no-op silently and the server keeps serving normal traffic.
+---
 
-## What we cannot read
+## 8. Deployment pipeline
 
-Android 12 SELinux blocks several `/proc` paths for non-root user processes. The `/api/stats` capabilities object surfaces these honestly:
-
-| Path | State |
-| --- | --- |
-| `/proc/meminfo` | readable |
-| `/proc/self/*` | readable |
-| `/proc/stat` (global CPU) | blocked |
-| `/proc/loadavg` | blocked |
-| `/proc/uptime` | blocked |
-| `/proc/net/*` | blocked |
-
-For data that lives outside our process we shell out to `termux-api` (`termux-battery-status`, `termux-wifi-connectioninfo`) and scrape `cloudflared` Prometheus metrics at `:20241/metrics`.
-
-## Dependencies
-
-- httpz (https://github.com/karlseguin/http.zig) tracking the `zig-0.14` branch
-  - which transitively pulls metrics.zig and websocket.zig
-
-That is the entire dependency graph for the application binary. Cloudflared is a separate Go binary downloaded once at provisioning time. `age` is required only for `scripts/backup.sh`.
-
-## Source-file encoding
-
-Every `.zig`, `.html`, `.css`, and `.js` file in `zig/hp-server/src/` is pure 7-bit ASCII. JS uses Unicode escapes (`\u00B0`, `\u2014`); HTML uses entities (`&deg;`, `&mdash;`); Zig sources avoid any non-ASCII glyph. This means a sloppy `tar | ssh` transfer cannot mangle multi-byte sequences and corrupt the running binary. The only binary asset is `Simple-Line-Icons.woff2`, which must always be transferred via `scp` (or `tar -czf`).
-
-## Build
-
-```sh
-zig build -Doptimize=ReleaseFast
+```
+git push -> GitHub Actions -> POST /v1/system/update (admin API key)
+                                      |
+                                      v
+                          self-update.sh on the device:
+              fetch -> reset --hard -> rsync sources -> rebuild -> respawn
 ```
 
-ReleaseFast emits ~12 MB binary (font + AI module add a small amount over the 10 MB pre-AI baseline). The Zig compile step warns about `FileNotFound` while probing for libc; this is harmless on Termux because we don't link libc.
+The device holds a Git clone (`~/rofihosted-src`) separate from the build tree
+(`~/zig/hp-server`). `self-update.sh` fetches, resets to the remote head,
+rsyncs sources into the build tree (preserving the build cache), rebuilds, and
+signals the running server so the watchdog respawns the new binary. Commits
+that touch only scripts or documentation skip the restart. The build is
+performed on the device today; see the engineering review (P0-2) for the
+recommended move to prebuilt artifacts.
 
-The build must be wrapped in `proot` so the Zig package fetcher can resolve DNS and validate TLS:
+---
 
-```sh
-proot \
-  -b $PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt \
-  -b $PREFIX/etc/tls/cert.pem:/etc/ssl/cert.pem \
-  zig build -Doptimize=ReleaseFast
-```
+## 9. Frontend
 
-## Boot sequence
-
-`~/.termux/boot/01-server.sh` runs at Termux launch (see `scripts/boot-all.sh`):
-
-1. Source `~/.hp-server.env` (with `set -a` so children inherit env vars)
-2. `termux-wake-lock` to keep the process scheduled when the screen is off
-3. `sshd` if not already running
-4. `hp-server` from `~/zig/hp-server/zig-out/bin/hp-server`
-5. `cloudflared tunnel run` via proot, using `~/.cloudflared/config.yml`
-6. `watchdog.sh` (long-lived, restarts services if they die)
-7. One-shot `backup.sh` if `BACKUP_PASSPHRASE` is set
-
-Termux:Boot must be opened once after install for Android to allow it to run on subsequent reboots.
+All presentation assets are embedded into the binary and served from the apex
+host with permissive caching and CORS, so every surface can load them
+cross-origin. The design system is defined in `theme.css` (tokens, typography,
+components) and `app.css` (console shell), using a self-hosted subset of SF Pro
+Display delivered as woff2. The visual language is neutral and status-driven:
+the only meaningful colour is the operational state (green/amber/red), with a
+single green accent that doubles as the "operational" signal.

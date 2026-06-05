@@ -4,6 +4,47 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Changed: Engineering review + documentation consolidation (2026-06-05)
+
+A documentation-only release (no binary changes, no deploy required). The goal
+was to make the repository legible to a new reader and to record, in one
+authoritative place, what should be improved next and why.
+
+**New: prioritized improvement backlog.**
+- New [`docs/ENGINEERING-REVIEW.md`](docs/ENGINEERING-REVIEW.md) — a full technical
+  review with eighteen findings ranked across four tiers (P0 critical → P3 low),
+  each stating the observation, its impact, and a concrete recommendation. It
+  also records the design choices worth preserving and a suggested sequencing.
+  The three P0 items concern operational robustness: duplicate-process races
+  from inconsistent `pgrep`/`pkill` patterns, on-device compilation as a single
+  point of deploy failure, and unreliable external uptime probes under Termux.
+
+**Rewritten: canonical documentation set (formal, current, full English).**
+- [`README.md`](README.md) — rewritten around the current four-surface
+  architecture (apex / status / admin / app) with capability, technology, and
+  operating-model sections and a documentation map.
+- [`docs/README.md`](docs/README.md) — new documentation index.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system design, request
+  lifecycle, module map, and storage model brought up to date with the
+  subdomain split and email subsystem.
+- [`docs/SECURITY.md`](docs/SECURITY.md) — threat model and controls;
+  consolidates the former anti-duplicate and API-key working notes.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — deploy workflow and incident
+  playbooks; absorbs the former metrics-testing checklist.
+- [`docs/RECOVERY.md`](docs/RECOVERY.md) — disaster recovery onto a fresh device.
+- [`docs/API.md`](docs/API.md) — endpoint reference (session and API-key).
+
+**Removed: stale and fragmentary notes (addresses finding P3-1).**
+- Deleted eleven overlapping working-note files whose content is now folded into
+  the canonical references: `ANTI-DUPLICATE-*.md` (×4), `API-KEY-AUDIT.md`,
+  `API-KEY-INVENTORY.md`, `CACHE-IMPLEMENTATION-SUMMARY.md`, `CACHE-METRICS.md`,
+  `CACHE-OBSERVABILITY-PLAN.md`, `METRICS-TESTING-CHECKLIST.md`, and the
+  superseded `PROJECT-BRIEFING.md` (its content predated the subdomain split,
+  the email feature, and the design overhaul, and is now covered accurately by
+  `ARCHITECTURE.md` / `SECURITY.md` / `OPERATIONS.md`).
+
+No source files changed; the binary on the device is unaffected by this release.
+
 ### Changed: Four-surface subdomain split + redesigned UI system (2026-06-05)
 
 A full front-of-house overhaul. Routing, design language, and a real public status page.
