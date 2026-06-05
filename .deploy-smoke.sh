@@ -1,0 +1,25 @@
+B="http://127.0.0.1:8080"
+code() { curl -s -o /dev/null -w "%{http_code}" -H "Host: $1" "$B$2"; }
+body() { curl -s -H "Host: $1" "$B$2"; }
+ct()   { curl -s -o /dev/null -w "%{content_type}" -H "Host: $1" "$B$2"; }
+
+echo "apex /            = $(code rofihosted.space /)   $(body rofihosted.space / | grep -qi 'server you can hold' && echo OK || echo MISS)"
+echo "apex /health      = $(code rofihosted.space /health)"
+echo "theme.css         = $(code rofihosted.space /theme.css)  $(body rofihosted.space /theme.css | grep -qi 'SF Pro Display' && echo OK || echo MISS)"
+echo "app.css           = $(code rofihosted.space /app.css)"
+echo "icons.css         = $(code rofihosted.space /icons.css)"
+echo "font 600          = $(code rofihosted.space /fonts/SFProDisplay-600.woff2)  ct=$(ct rofihosted.space /fonts/SFProDisplay-600.woff2)"
+echo "font 400          = $(code rofihosted.space /fonts/SFProDisplay-400.woff2)"
+echo "status /          = $(code status.rofihosted.space /)  $(body status.rofihosted.space / | grep -qi 'rofihosted' && echo OK || echo MISS)"
+echo "status /api/status= $(code status.rofihosted.space /api/status)"
+echo "  -> $(body status.rofihosted.space /api/status | head -c 220)"
+echo "admin /login      = $(code admin.rofihosted.space /login)"
+echo "admin / (noauth)  = $(code admin.rofihosted.space /)   (expect 302)"
+echo "app /login        = $(code app.rofihosted.space /login)"
+echo "app / (noauth)    = $(code app.rofihosted.space /)   (expect 302)"
+echo "signup            = $(code rofihosted.space /signup)"
+echo "www redirect      = $(code www.rofihosted.space /)   (expect 301)"
+echo "=== procs ==="
+echo "hp=$(pgrep -f 'bin/hp-server$' | wc -l) wd=$(pgrep -f 'watchdog.sh$' | wc -l)"
+echo "=== recent errors in log (if any) ==="
+grep -iE 'panic|segfault|error:' "$HOME/logs/hp-server.log" 2>/dev/null | tail -5 || echo "(none)"

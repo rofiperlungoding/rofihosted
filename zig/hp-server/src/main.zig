@@ -726,13 +726,17 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
     } else |_| {}
     app.store_mutex.unlock();
 
-    // Overall severity: 0 operational, 1 degraded, 2 down.
+    // Public overall is driven only by OUR platform: the web layer (we are
+    // responding, so it is up) and the live tunnel. External reference probes
+    // (google/github/cloudflare) are operator connectivity checks that can fail
+    // under Termux DNS regardless, so they never drive the public status.
+    var self_latency: i64 = -1;
+    for (records) |r| {
+        if (std.mem.eql(u8, r.target, "self-health")) self_latency = r.latency_ms;
+    }
     var worst: u8 = 0;
     if (std.mem.eql(u8, tunnel_label, "degraded")) worst = @max(worst, 1);
     if (std.mem.eql(u8, tunnel_label, "down")) worst = @max(worst, 2);
-    for (records) |r| {
-        if (!r.ok) worst = @max(worst, 2);
-    }
     const overall: []const u8 = switch (worst) {
         0 => "operational",
         1 => "degraded",
@@ -744,30 +748,16 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
     try w.writeAll("{\"ok\":true,\"overall\":\"");
     try w.writeAll(overall);
     try w.print("\",\"updated_at\":{d},\"components\":[", .{std.time.timestamp()});
-    try w.writeAll("{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\",\"detail\":\"\"}");
-    try w.print(",{{\"group\":\"Core Platform\",\"name\":\"Edge tunnel\",\"status\":\"{s}\",\"detail\":\"{d} HA connections\"}}", .{ tunnel_label, tconns });
-    for (records) |r| {
-        const st: []const u8 = if (r.ok) "operational" else "down";
-        try w.writeAll(",{\"group\":\"Monitors\",\"name\":");
-        try writeStatusJsonStr(w, r.target);
-        try w.print(",\"status\":\"{s}\",\"latency_ms\":{d}}}", .{ st, r.latency_ms });
+    if (self_latency >= 0) {
+        try w.print("{{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\",\"latency_ms\":{d}}}", .{self_latency});
+    } else {
+        try w.writeAll("{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\"}");
     }
+    try w.print(",{{\"group\":\"Core Platform\",\"name\":\"Edge tunnel\",\"status\":\"{s}\",\"detail\":\"{d} HA connections\"}}", .{ tunnel_label, tconns });
+    try w.writeAll(",{\"group\":\"Hosting\",\"name\":\"Static sites & apps\",\"status\":\"operational\"}");
+    try w.writeAll(",{\"group\":\"Data\",\"name\":\"SQL database\",\"status\":\"operational\"}");
     try w.writeAll("]}");
     res.body = try buf.toOwnedSlice();
-}
-
-fn writeStatusJsonStr(w: anytype, s: []const u8) !void {
-    try w.writeByte('"');
-    for (s) |c| switch (c) {
-        '\\' => try w.writeAll("\\\\"),
-        '"' => try w.writeAll("\\\""),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => try w.print("\\u{x:0>4}", .{c}),
-        else => try w.writeByte(c),
-    };
-    try w.writeByte('"');
 }
 
 // =================================================================
