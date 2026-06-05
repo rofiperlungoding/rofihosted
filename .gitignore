@@ -72,3 +72,6 @@ convert-fonts.py
 
 # Local design preview scratch (not part of the deployed product)
 preview/
+
+# Kiro deploy scratch scripts
+.deploy-*.sh
