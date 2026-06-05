@@ -59,6 +59,18 @@ Two token formats coexist:
 Both formats verify the signature in constant time and check expiry. The two
 namespaces cannot collide.
 
+The login-to-landing flow ties the session cookie above to the role-based routing described in Section 3:
+
+```mermaid
+flowchart TD
+    L["Login: username + password"] --> V{"Constant-time<br/>credential check"}
+    V -->|"fail"| F["Rejected<br/>(login attempt tracked, feeds auto-ban)"]
+    V -->|"pass"| T["Issue rofi_session cookie<br/>HMAC-SHA256 signed token<br/>scoped to .rofihosted.space<br/>Secure, HttpOnly, SameSite=Lax, 7-day max age"]
+    T --> ROLE{"Role?"}
+    ROLE -->|"admin"| A["admin.rofihosted.space<br/>(authenticated tenant redirected to tenant host)"]
+    ROLE -->|"tenant"| TN["app.rofihosted.space<br/>(authenticated admin redirected to operator host)"]
+```
+
 ### Password storage
 
 Multi-user passwords are stored as `HMAC-SHA256(pepper, salt || ":" ||
@@ -115,6 +127,18 @@ External tools and automation authenticate to the `/v1/*` API with an
     Issue it only to trusted automation (for example, the GitHub Actions deploy
     pipeline), and store it as a repository secret, never in the codebase.
 
+How the three scopes map to what they permit:
+
+```mermaid
+flowchart LR
+    K["API key (X-API-Key)<br/>rh_ + 48 hex"] --> SQL["scope: sql"]
+    K --> READ["scope: read"]
+    K --> ADMIN["scope: admin"]
+    SQL --> SQLP["Execute SQL on whitelisted<br/>databases via /v1/execute"]
+    READ --> READP["Reserved: future read-only<br/>mirroring of /api/*"]
+    ADMIN --> ADMINP["System administration via /v1/system/*<br/>updates, restarts, backups<br/>equivalent to an operator login"]
+```
+
 Any `/v1/*` request carrying an `X-API-Key` header is exempted from the visitor
 classifier and auto-ban, so a malformed automation request cannot ban the
 operator's own address.
@@ -140,6 +164,21 @@ activates the account immediately.
 
 All signup outcomes — success, rate-limit, device-limit, and pending — are
 recorded in the audit log.
+
+The signup pipeline and its outcomes:
+
+```mermaid
+flowchart TD
+    S["Signup request"] --> INV{"Invite code?"}
+    INV -->|"yes (bypasses pipeline)"| OK["Account active / usable"]
+    INV -->|"no"| RL{"IP rate limit<br/>signups per IP / 24h window"}
+    RL -->|"exceeded"| R429["429, audited"]
+    RL -->|"ok"| DF{"Device fingerprint<br/>accounts per device"}
+    DF -->|"over limit"| DL["Device-limit, audited"]
+    DF -->|"ok"| EV{"Email verification<br/>6-digit code, 15-min expiry, 3 attempts"}
+    EV -->|"verified"| OK
+    EV -->|"email not configured"| PEND["Pending-approval path"]
+```
 
 ---
 
@@ -169,6 +208,20 @@ Applied to every request, before any handler runs:
 > the tunnel. Trusting forwarded headers as a fallback would allow spoofing of
 > the rate limiter and auto-ban. Hardening this is tracked in the engineering
 > review (P1-3).
+
+The controls applied to every request, before any handler runs:
+
+```mermaid
+flowchart TD
+    R["Incoming request"] --> H["Strict security headers<br/>HSTS, X-Content-Type-Options,<br/>X-Frame-Options: DENY, CSP"]
+    H --> C["Request classifier<br/>self / unknown / bot / scanner / blocked"]
+    C --> AB["Auto-ban<br/>3 scanner hits in 10 min: 24h ban<br/>5 failed logins in 15 min: 1h ban"]
+    AB --> BL["Blocklist<br/>auto-ban plus manual blocks"]
+    BL --> RL["Per-IP token-bucket rate limit<br/>skipped for operator and /health"]
+    RL --> GEO["Optional geo-blocking<br/>never for authenticated or local requests"]
+    GEO --> RE["Operator rule engine<br/>if X then block / log / count"]
+    RE --> OK["Handler runs"]
+```
 
 ---
 

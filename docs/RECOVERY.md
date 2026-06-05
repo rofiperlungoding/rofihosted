@@ -7,6 +7,52 @@ backup exists in Cloudflare R2 (or a local snapshot is at hand).
 Recovery objective: a working server, reachable at the production hostnames,
 with all projects, users, credentials, and history intact.
 
+The end-to-end bring-up sequence, from a fresh device to a verified server:
+
+```mermaid
+flowchart TD
+    FRESH(["Fresh or wiped device<br/>offsite R2 backup exists"]) --> TERMUX
+
+    subgraph PRE["Prerequisites · Section 2"]
+        direction TB
+        TERMUX["Install Termux (F-Droid)<br/>+ Termux:API + Termux:Boot"] --> TOOLS["pkg install toolchain<br/>git zig rsync rclone curl<br/>sqlite proot openssh"]
+        TOOLS --> SSHKEY["Generate or restore<br/>SSH key for LAN (optional)"]
+    end
+
+    SSHKEY --> CLONE
+
+    subgraph RESTORE["Restore procedure · Section 3"]
+        direction TB
+        CLONE["1 · git clone repo<br/>~/rofihosted-src"] --> BACKUP["2 · Retrieve latest R2 snapshot<br/>rclone · extract to ~/data,<br/>project trees, mode-600 config"]
+        BACKUP --> VERIFYP{"3 · Pepper + config<br/>present and mode 600?"}
+        VERIFYP -->|no pepper| PEPPER["See Section 5:<br/>sessions, API keys, secrets<br/>unrecoverable"]
+        VERIFYP -->|yes| HELPERS["4 · Place helper scripts at ~/<br/>boot · watchdog · rebuild · start"]
+        HELPERS --> BUILD["5 · Build server<br/>bash ~/rebuild.sh"]
+        BUILD --> TUNNEL["6 · Restore tunnel<br/>cloudflared creds or recreate<br/>+ re-point wildcard DNS"]
+        TUNNEL --> START["7 · Start services<br/>start-zig-server.sh + watchdog.sh"]
+        START --> CACHE["8 · Rebuild cache (optional)<br/>/api/dbcache/sync"]
+    end
+
+    CACHE --> VERIFY
+
+    subgraph CHECK["Verification · Section 4"]
+        direction TB
+        VERIFY["curl /health · tunnel /health<br/>· /api/status"] --> BROWSER["Browser: operator login,<br/>projects serve, audit log present"]
+        BROWSER --> SUITE["bash ~/test-everything.sh"]
+    end
+
+    SUITE --> DONE(["Server restored · reachable at<br/>production hostnames"])
+
+    classDef step fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef decision fill:#422006,stroke:#f59e0b,color:#e2e8f0;
+    classDef bad fill:#450a0a,stroke:#ef4444,color:#e2e8f0;
+    classDef ok fill:#052e16,stroke:#22c55e,color:#e2e8f0;
+    class FRESH,TERMUX,TOOLS,SSHKEY,CLONE,BACKUP,HELPERS,BUILD,TUNNEL,START,CACHE,VERIFY,BROWSER,SUITE step;
+    class VERIFYP decision;
+    class PEPPER bad;
+    class DONE ok;
+```
+
 ---
 
 ## 1. What a backup contains

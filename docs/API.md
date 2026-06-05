@@ -20,6 +20,25 @@ additionally require `role = admin`; tenants receive `403`. Selected `/api/*`
 endpoints also accept an admin-scoped API key so the CLI and CI can call them
 without a browser session.
 
+The diagram below summarises how a caller authenticates and how API-key scopes gate access:
+
+```mermaid
+flowchart TD
+    Caller["Caller"] --> Q1{"Browser console<br/>or programmatic?"}
+    Q1 -->|"Browser console<br/>(admin.*, app.*)"| Cookie["Session cookie<br/>rofi_session"]
+    Q1 -->|"Programmatic, rh CLI, CI"| Key["X-API-Key: rh_&lt;48 hex&gt;"]
+
+    Cookie --> Q2{"role = admin?"}
+    Q2 -->|"No (tenant)"| Forbidden["403 on admin-only endpoints"]
+    Q2 -->|"Yes"| ConsoleOK["Console + admin-only endpoints"]
+
+    Key --> Q3{"Key scope?"}
+    Q3 -->|"any"| Whoami["GET /v1/whoami"]
+    Q3 -->|"sql"| Execute["POST /v1/execute"]
+    Q3 -->|"admin"| Update["POST /v1/system/update"]
+    Q3 -->|"admin-scoped"| ApiStar["Selected /api/*<br/>(incl. /api/system/*, /api/projects/*)"]
+```
+
 ---
 
 ## 2. Public endpoints (no authentication)
@@ -169,6 +188,22 @@ Authenticated with `X-API-Key`. Available on the console hosts.
 | GET | `/v1/whoami` | any | Returns `{name, id}` of the calling key. |
 | POST | `/v1/execute` | `sql` | Body `{db, sql}`; returns `{ok, db, result}`. `db` must match `[a-z0-9_-]`. Output uses SQLite JSON mode. Caps: 8 MB response, 64 KB SQL. Audited. |
 | POST | `/v1/system/update` | `admin` | Trigger a self-update. Used by CI. |
+
+A representative CI self-update flow using these endpoints:
+
+```mermaid
+sequenceDiagram
+    participant CI as "CI (admin-scoped API key)"
+    participant Server as "rofihosted origin"
+
+    CI->>Server: POST /v1/system/update (X-API-Key, scope admin)
+    Server-->>CI: { ok: true }
+    Note over Server: Trigger a self-update
+    loop poll until version changes
+        CI->>Server: GET /api/system/version (X-API-Key)
+        Server-->>CI: current version
+    end
+```
 
 ### Project-facing (no operator auth)
 

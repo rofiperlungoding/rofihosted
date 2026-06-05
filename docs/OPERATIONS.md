@@ -35,6 +35,26 @@ The normal path is fully automated:
 4. Commits that touch only scripts or documentation skip the rebuild and
    restart.
 
+The automated path, end to end:
+
+```mermaid
+flowchart TD
+    PUSH["git push<br/>(default branch)"] --> GHA["GitHub Actions<br/>POST /v1/system/update<br/>(admin API key)"]
+    MAN["Operator (manual)<br/>rh update · bash ~/self-update.sh"] --> SU
+    GHA --> SU["self-update.sh on device<br/>fetch · reset to remote head · rsync"]
+    SU --> Q{"Commit touches only<br/>scripts or docs?"}
+    Q -->|yes| SKIP["Skip rebuild and restart"]
+    Q -->|no| BUILD["Rebuild"]
+    BUILD --> WD["Respawn through watchdog"]
+
+    classDef step fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef warn fill:#422006,stroke:#f59e0b,color:#e2e8f0;
+    classDef ok fill:#052e16,stroke:#22c55e,color:#e2e8f0;
+    class PUSH,GHA,MAN,SU,BUILD step;
+    class SKIP warn;
+    class WD ok;
+```
+
 To deploy manually from the console or `rh`:
 
 ```sh
@@ -121,12 +141,52 @@ device. Keep the R2 bucket private. Perform a restore drill periodically; see
 
 ## 6. Incident playbooks
 
+The watchdog self-heals across the conditions below before any manual action is
+needed:
+
+```mermaid
+flowchart TD
+    TICK(["Watchdog check interval"]) --> H{"/health<br/>responding?"}
+    H -->|no| RH["Restart hp-server"]
+    H -->|yes| M{"RSS over<br/>configured ceiling?"}
+    M -->|yes| RH
+    M -->|no| T{"Tunnel sustained<br/>outage?"}
+    T -->|yes| RT["Restart cloudflared<br/>(shell watchdog acts on request)"]
+    T -->|no| OK["Healthy — no action"]
+
+    classDef step fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef warn fill:#422006,stroke:#f59e0b,color:#e2e8f0;
+    classDef ok fill:#052e16,stroke:#22c55e,color:#e2e8f0;
+    class TICK,H,M,T step;
+    class RH,RT warn;
+    class OK ok;
+```
+
 **Server not responding (`/health` fails).** The watchdog should restart it
 within its check interval. If it does not, open the web shell or SSH, confirm
 the process state, and start it cleanly:
 
 ```sh
 pkill -f 'bin/hp-server$'; sleep 2; bash ~/start-zig-server.sh
+```
+
+Escalation path when the automatic restart does not recover it:
+
+```mermaid
+flowchart TD
+    F["/health fails"] --> W{"Watchdog restarts<br/>within check interval?"}
+    W -->|yes| OK["Recovered"]
+    W -->|no| SHELL["Open web shell or SSH"]
+    SHELL --> CONF["Confirm process state"]
+    CONF --> START["Start cleanly<br/>(start-zig-server.sh)"]
+    START --> OK
+
+    classDef step fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef warn fill:#422006,stroke:#f59e0b,color:#e2e8f0;
+    classDef ok fill:#052e16,stroke:#22c55e,color:#e2e8f0;
+    class F,SHELL,CONF step;
+    class W,START warn;
+    class OK ok;
 ```
 
 **Tunnel down (edge returns 530).** Check `cloudflared`:

@@ -20,6 +20,33 @@ managed database, authentication-as-a-service, scheduled tasks, secrets
 management, and offsite backups — into a single, small, auditable binary
 running on commodity hardware that most people already own: a spare phone.
 
+```mermaid
+flowchart LR
+    U["Tenants & visitors"]
+    OP["Operator"]
+    U -->|HTTPS| CF
+    OP -->|HTTPS| CF
+    CF["Cloudflare<br/>edge + DNS + CDN"]
+    CF <-->|"outbound encrypted tunnel<br/>no open ports"| CFD
+
+    subgraph PHONE["Sharp Aquos Sense4+ · Termux · Android 12"]
+        direction TB
+        CFD["cloudflared"]
+        CFD --> HP["hp-server<br/>single Zig binary · 127.0.0.1:8080"]
+        WD["watchdog.sh"] -.->|restart if unhealthy| HP
+        WD -.->|restart if tunnel drops| CFD
+        HP --> DATA[("append-only JSONL<br/>source of truth")]
+        HP --> CACHE[("SQLite<br/>rebuildable cache")]
+    end
+
+    HP -->|hourly snapshot| R2[("Cloudflare R2<br/>offsite backups")]
+
+    classDef phone fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
+    class HP,WD,CFD,DATA,CACHE phone;
+    class CF,R2,U,OP ext;
+```
+
 The reference deployment runs on a Sharp Aquos Sense4 Plus (Snapdragon 720G,
 8 GB RAM, Android 12) under Termux. The device's battery acts as a built-in
 uninterruptible power supply, and the Cloudflare Tunnel provides public
@@ -158,6 +185,69 @@ All persistent data lives under `~/data/` as append-only JSON Lines, treated as
 the source of truth; the SQLite cache is a rebuildable, derived index.
 Configuration and secrets live in mode-600 files outside the repository and are
 never committed.
+
+---
+
+## Getting started
+
+There are two ways to use rofihosted: deploy your app to the hosted instance as
+a tenant, or run the whole platform on your own spare phone.
+
+```mermaid
+flowchart TD
+    START(["Want to try rofihosted?"]) --> Q{"Use the hosted<br/>service, or run<br/>your own?"}
+    Q -->|"Just deploy an app"| T1
+    Q -->|"Run the platform myself"| S1
+
+    subgraph TENANT["Path A · Deploy as a tenant"]
+        direction TB
+        T1["rofihosted signup<br/>(or sign up in the dashboard)"] --> T2["create an admin-scoped API key"]
+        T2 --> T3["rofihosted login"]
+        T3 --> T4["rofihosted deploy https://github.com/you/app"]
+        T4 --> T5(["Live at https://app-name.rofihosted.space"])
+    end
+
+    subgraph SELFHOST["Path B · Self-host on a phone"]
+        direction TB
+        S1["Install Termux + Zig 0.14 on an Android phone"] --> S2["Clone the repo, set up Cloudflare Tunnel"]
+        S2 --> S3["Run the boot script (sshd + hp-server + cloudflared + watchdog)"]
+        S3 --> S4(["Your own platform on your own domain"])
+    end
+
+    T5 --> DOCS["See cli/README.md"]
+    S4 --> DOCS2["See docs/RECOVERY.md for the full bring-up"]
+```
+
+### Path A — deploy an app (tenant)
+
+```sh
+npm install -g rofihosted        # installs both 'rofihosted' and the 'rh' alias
+
+rofihosted signup                # create an account (or use the dashboard)
+rofihosted login                 # paste an admin-scoped API key
+rofihosted deploy https://github.com/you/your-app
+#   the server clones, detects the stack, builds, and streams the log live
+#   -> https://your-app.rofihosted.space
+```
+
+Everyday commands: `rh status`, `rh ls`, `rh logs <sub>`, `rh secret set <sub> <key>`,
+`rh sql <sub> "<query>"`. Full reference in [`cli/README.md`](cli/README.md).
+
+### Path B — run your own instance
+
+You need an Android phone with [Termux](https://termux.dev/), a Cloudflare
+account (free tier is fine) with a domain, and Zig 0.14. The end-to-end
+bring-up — packages, tunnel, boot scripts, and first build — is documented step
+by step in [`docs/RECOVERY.md`](docs/RECOVERY.md), which doubles as the
+disaster-recovery runbook.
+
+To build and verify locally before pushing (from any OS):
+
+```sh
+cd zig/hp-server
+zig build phone        # cross-compile for the device target (aarch64-linux-android)
+zig build test         # run the unit tests
+```
 
 ---
 

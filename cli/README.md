@@ -42,6 +42,30 @@ export ROFIHOSTED_API_KEY=rh_xxxxxxxxxxxxxxxxxxx
 export ROFIHOSTED_BASE=https://app.rofihosted.space  # optional, default
 ```
 
+Here's the typical first-run path, plus the everyday commands you'll reach for once an app is live:
+
+```mermaid
+flowchart TD
+    I["npm install -g rofihosted<br/>(installs rh + rofihosted)"] --> L["rh login<br/>(paste admin-scoped API key)"]
+    L --> D["rh deploy &lt;repo-url&gt;"]
+    D --> LIVE(["https://&lt;sub&gt;.rofihosted.space"])
+
+    LIVE --> EVERYDAY{"Everyday<br/>commands"}
+    EVERYDAY -->|"check vitals"| ST["rh status"]
+    EVERYDAY -->|"list projects"| LS["rh ls"]
+    EVERYDAY -->|"read logs once"| LG["rh logs &lt;sub&gt;"]
+    EVERYDAY -->|"follow logs live"| TL["rh tail &lt;sub&gt;"]
+    EVERYDAY -->|"set a secret"| SE["rh secret set &lt;sub&gt; &lt;key&gt;"]
+    EVERYDAY -->|"query the db"| SQ["rh sql &lt;sub&gt; &quot;&lt;query&gt;&quot;"]
+    EVERYDAY -->|"ship an update"| RD["rh redeploy &lt;sub&gt;"]
+    RD --> LIVE
+
+    classDef step fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef edge fill:#1e293b,stroke:#64748b,color:#e2e8f0;
+    class I,L,D,ST,LS,LG,TL,SE,SQ,RD step;
+    class LIVE,EVERYDAY edge;
+```
+
 ## Commands
 
 ### Account & system

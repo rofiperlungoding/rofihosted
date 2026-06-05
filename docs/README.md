@@ -4,6 +4,20 @@ This directory contains the authoritative documentation for rofihosted. Each
 document below is canonical for its subject; working notes and superseded
 fragments have been consolidated into these references.
 
+```mermaid
+flowchart TD
+    START([New here?]) --> RM["../README.md<br/>what it is, getting started"]
+    RM --> WHO{"What do you want to do?"}
+    WHO -->|"Understand the design"| ARCH["ARCHITECTURE.md"]
+    WHO -->|"Deploy / operate it"| OPS["OPERATIONS.md"]
+    WHO -->|"Use the API or CLI"| API["API.md + ../cli/README.md"]
+    WHO -->|"Review the security model"| SEC["SECURITY.md"]
+    WHO -->|"Rebuild after a disaster"| REC["RECOVERY.md"]
+    WHO -->|"See what's planned"| ENG["ENGINEERING-REVIEW.md"]
+    ARCH -.-> SEC
+    OPS -.-> REC
+```
+
 ## Reference set
 
 | Document | Subject | Read this when you want to… |

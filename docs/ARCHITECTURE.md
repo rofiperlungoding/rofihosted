@@ -43,6 +43,25 @@ persistent outbound connection to the Cloudflare edge and forwards requests to
 the local port. There is no inbound port exposed on the device or the home
 network.
 
+```mermaid
+flowchart TB
+    EDGE["Cloudflare edge"]
+    subgraph DEV["Android device · Termux"]
+        direction TB
+        CFD["cloudflared<br/>outbound tunnel"]
+        WD["watchdog.sh<br/>HTTP health probe · RSS ceiling"]
+        subgraph HP["hp-server · single Zig binary"]
+            direction TB
+            POOL["httpz worker pool<br/>127.0.0.1:8080"]
+            BG["background threads<br/>uptime · rotation · SSE heartbeat<br/>stats · tunnel-health · backups · AI"]
+        end
+        EDGE <-->|encrypted tunnel| CFD
+        CFD --> POOL
+        WD -.->|"respawn if dead/unhealthy"| HP
+        WD -.->|"respawn if tunnel drops"| CFD
+    end
+```
+
 Inside `hp-server`, the main thread starts the httpz worker pool and then spawns
 a set of long-lived background threads:
 
@@ -86,6 +105,31 @@ pipeline before dispatching by hostname:
 12. After the handler returns, record the visit to the append-only log and
     publish it to the SSE event bus.
 
+```mermaid
+flowchart TD
+    A["Request via cloudflared"] --> B["Strict security headers"]
+    B --> C["Resolve IP / UA / method / Host;<br/>evaluate session cookie"]
+    C --> D{"IP on blocklist?"}
+    D -->|yes| D403["403"]
+    D -->|no| E["Classify:<br/>self / unknown / bot / scanner / blocked"]
+    E --> F{"Geo-blocked?<br/>(never for auth or local)"}
+    F -->|yes| F403["403"]
+    F -->|no| G["Scanner -> count toward auto-ban<br/>optional honeypot content"]
+    G --> H{"Rate limit OK?<br/>(skip operator & /health)"}
+    H -->|exceeded| H429["429 Retry-After"]
+    H -->|ok| I{"Project subdomain?"}
+    I -->|static| ISTAT["serve current release"]
+    I -->|backend| IPROX["reverse-proxy to local port"]
+    I -->|no| J{"/v1/* API?"}
+    J -->|yes| JAPI["API-key auth + dispatch"]
+    J -->|no| K["Dispatch by host:<br/>landing / status / admin / app"]
+    ISTAT --> L
+    IPROX --> L
+    JAPI --> L
+    K --> L["Handler returns response"]
+    L --> M["Append visit to JSONL<br/>+ publish to SSE bus"]
+```
+
 ---
 
 ## 4. Host routing
@@ -100,6 +144,28 @@ admin.rofihosted.space      -> operator console   (requires role = admin)
 app.rofihosted.space        -> tenant console      (requires authentication)
 <sub>.rofihosted.space      -> project router (auth intercept, static, or proxy)
 www / dashboard / api / files -> redirects to canonical locations
+```
+
+```mermaid
+flowchart TD
+    REQ["Incoming request"] --> HOST{"Host header?"}
+    HOST -->|"rofihosted.space"| LAND["Landing · signup · /health · static"]
+    HOST -->|"status.*"| STAT["Status page · GET /api/status"]
+    HOST -->|"admin.*"| ADM{"authenticated<br/>admin?"}
+    HOST -->|"app.*"| APP{"authenticated?"}
+    HOST -->|"&lt;sub&gt;.*"| SUB["Project router"]
+    HOST -->|"www / dashboard / api / files"| RED["301/302 redirect"]
+
+    ADM -->|"non-admin"| R2T["302 -> app host"]
+    ADM -->|"admin"| OPCON["Operator console"]
+    APP -->|"no"| LOGIN["302 -> /login"]
+    APP -->|"admin (page nav)"| R2A["302 -> admin host"]
+    APP -->|"tenant"| TCON["Tenant console"]
+
+    SUB --> S1["/auth/* -> per-project auth intercept"]
+    SUB --> S2["/v1/github/&lt;id&gt; -> HMAC webhook"]
+    SUB --> S3["static -> current release dir"]
+    SUB --> S4["backend -> reverse proxy to local port"]
 ```
 
 Both consoles are served by one handler, `handleConsole`, parameterized by a
@@ -212,6 +278,15 @@ reads new rows from the last-synced byte offset every five minutes and batches
 them into a single transaction. Queries use the cache when healthy and fall
 back to a JSONL scan otherwise; responses report which source served them.
 
+```mermaid
+flowchart LR
+    H["HTTP handlers"] -->|append-only write| J[("visits.jsonl<br/>source of truth")]
+    J -->|"every 5 min,<br/>from last byte offset"| SY["incremental sync<br/>(single batched txn)"]
+    SY --> DB[("cache.db<br/>visits + indexes + FTS5")]
+    QB["AI query bar · dashboards"] -->|read when healthy| DB
+    QB -.->|fallback| J
+```
+
 SQLite is accessed through a pool of persistent `sqlite3` CLI subprocesses
 rather than a linked library, because Termux does not ship the CRT files needed
 to link `libsqlite3` reliably. A sentinel-based protocol marks query boundaries
@@ -244,12 +319,33 @@ the handler, per POSIX guidance.
 
 ## 8. Deployment pipeline
 
-```
-git push -> GitHub Actions -> POST /v1/system/update (admin API key)
-                                      |
-                                      v
-                          self-update.sh on the device:
-              fetch -> reset --hard -> rsync sources -> rebuild -> respawn
+Deployment is gated: a push only reaches the device after CI passes, and CI
+cross-compiles the device target (`aarch64-linux-android`) so an Android-only
+build break is caught before it can be deployed.
+
+```mermaid
+sequenceDiagram
+    actor Dev
+    participant GH as GitHub
+    participant CI as Actions · zig-ci
+    participant DEP as Actions · auto-deploy
+    participant HP as hp-server (device)
+    participant WD as watchdog.sh
+
+    Dev->>GH: git push (main)
+    GH->>CI: fmt · build x86_64 · build phone · test
+    alt CI red
+        CI-->>Dev: fail (device untouched)
+    else CI green
+        CI->>DEP: workflow_run success
+        DEP->>HP: POST /v1/system/update (admin API key)
+        HP->>HP: self-update.sh — fetch, reset --hard, rsync
+        HP->>HP: snapshot current binary, rebuild
+        HP-->>WD: SIGTERM (after response flushes)
+        WD->>HP: respawn new binary (~5s)
+        Note over HP: rollback sentinel restores the<br/>previous binary if /health stays down
+        DEP->>HP: poll /v1/system/version until SHA advances
+    end
 ```
 
 The device holds a Git clone (`~/rofihosted-src`) separate from the build tree

@@ -35,6 +35,59 @@ addressed first because they affect availability directly.
 Findings are grouped into four priority tiers (P0–P3). Each item states the
 observation, its impact, and a concrete recommendation.
 
+The full backlog at a glance, grouped by the four priority tiers defined above:
+
+```mermaid
+flowchart TB
+    BL(["Prioritized backlog · grouped by tier"])
+    BL --> P0
+    BL --> P1
+    BL --> P2
+    BL --> P3
+
+    subgraph P0["P0 · Critical — affects availability/correctness; address first"]
+        direction TB
+        P0_1["P0-1 · Inconsistent process-match patterns<br/>cause duplicate server instances"]
+        P0_2["P0-2 · On-device compilation is a<br/>single point of deploy failure"]
+        P0_3["P0-3 · External uptime probes are unreliable<br/>on Termux and emit false alerts"]
+    end
+
+    subgraph P1["P1 · High — security, reliability, maintainability"]
+        direction TB
+        P1_1["P1-1 · Hardcoded Termux absolute paths<br/>throughout the codebase"]
+        P1_2["P1-2 · Thread-per-request work spawning<br/>is unbounded"]
+        P1_3["P1-3 · Client IP is derived from<br/>spoofable headers as a fallback"]
+        P1_4["P1-4 · Content Security Policy permits<br/>unsafe-inline"]
+        P1_5["P1-5 · Thin automated test coverage;<br/>no integration tests in CI"]
+    end
+
+    subgraph P2["P2 · Medium — robustness, clarity, performance under growth"]
+        direction TB
+        P2_1["P2-1 · main.zig is a single<br/>~8,000-line module"]
+        P2_2["P2-2 · SQLite and outbound HTTP<br/>run as subprocesses"]
+        P2_3["P2-3 · Multi-tenancy is partially implemented"]
+        P2_4["P2-4 · Rate limiter fails open and holds<br/>a global lock during cleanup"]
+        P2_5["P2-5 · Observability stops at<br/>JSONL files and Telegram"]
+    end
+
+    subgraph P3["P3 · Low — hygiene and polish"]
+        direction TB
+        P3_1["P3-1 · Documentation sprawl and drift"]
+        P3_2["P3-2 · Manual asset cache-busting<br/>is error-prone"]
+        P3_3["P3-3 · Silent error suppression in places"]
+        P3_4["P3-4 · Plaintext secrets file vs. encrypted<br/>project vault inconsistency"]
+    end
+
+    classDef p0 fill:#0f172a,stroke:#f87171,color:#e2e8f0;
+    classDef p1 fill:#0f172a,stroke:#fbbf24,color:#e2e8f0;
+    classDef p2 fill:#0f172a,stroke:#22d3ee,color:#e2e8f0;
+    classDef p3 fill:#1e293b,stroke:#64748b,color:#e2e8f0;
+    class P0_1,P0_2,P0_3 p0;
+    class P1_1,P1_2,P1_3,P1_4,P1_5 p1;
+    class P2_1,P2_2,P2_3,P2_4,P2_5 p2;
+    class P3_1,P3_2,P3_3,P3_4 p3;
+```
+
 ---
 
 ## 2. Methodology and Scope
