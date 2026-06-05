@@ -1,0 +1,15 @@
+# Keep shell scripts LF-only. These run on the phone under Termux/bash, where
+# Windows CRLF endings cause `$'\r': command not found` and syntax errors -
+# which, in a login file like ~/.bash_profile, would spam on every SSH login.
+# Committing/checking out on Windows must never reintroduce CRLF.
+*.sh            text eol=lf
+scripts/hp-bash_profile text eol=lf
+*.mjs           text eol=lf
+*.zig           text eol=lf
+
+# Binary assets: never touch line endings or diff as text.
+*.otf   binary
+*.woff2 binary
+*.png   binary
+*.jpg   binary
+*.ico   binary

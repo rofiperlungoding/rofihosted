@@ -27,6 +27,32 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the server");
     run_step.dependOn(&run_cmd.step);
 
+    // `zig build phone` - cross-compile for the device (aarch64-linux-android,
+    // ReleaseFast), the EXACT target the phone builds in Termux. Run this
+    // locally before pushing to catch on-device build breakage up front,
+    // instead of discovering it after a deploy when the phone fails to rebuild.
+    // Works from any host (Windows/macOS/Linux) since it's a pure cross-compile.
+    {
+        const phone_query = std.Target.Query.parse(
+            .{ .arch_os_abi = "aarch64-linux-android" },
+        ) catch unreachable;
+        const phone_target = b.resolveTargetQuery(phone_query);
+        const phone_exe = b.addExecutable(.{
+            .name = "hp-server",
+            .root_source_file = b.path("src/main.zig"),
+            .target = phone_target,
+            .optimize = .ReleaseFast,
+        });
+        const phone_httpz = b.dependency("httpz", .{
+            .target = phone_target,
+            .optimize = .ReleaseFast,
+        });
+        phone_exe.root_module.addImport("httpz", phone_httpz.module("httpz"));
+
+        const phone_step = b.step("phone", "Cross-compile for the phone (aarch64-linux-android, ReleaseFast)");
+        phone_step.dependOn(&phone_exe.step);
+    }
+
     // Unit tests. Each listed file is a self-contained module whose tests do
     // not touch the filesystem or network, so they run cleanly in CI.
     const test_step = b.step("test", "Run unit tests");

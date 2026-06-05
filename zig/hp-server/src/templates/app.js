@@ -1,6 +1,31 @@
 // Shared app-shell logic for app.rofihosted.space pages.
 // Realtime SSE bus + page-level subscribers. No polling.
 window.RH = (function () {
+  // Easter egg: greet anyone who opens the dev console. Wrapped in try/catch
+  // and a once-guard so it can never interfere with app boot.
+  try {
+    if (!window.__rhHi) {
+      window.__rhHi = true;
+      const art = [
+        '████   ███  █████ █████ █   █  ███   ████ █████ █████ ████ ',
+        '█   █ █   █ █       █   █   █ █   █ █       █   █     █   █',
+        '████  █   █ ████    █   █████ █   █  ███    █   ████  █   █',
+        '█  █  █   █ █       █   █   █ █   █     █   █   █     █   █',
+        '█   █  ███  █     █████ █   █  ███  ████    █   █████ ████ ',
+      ].join('\n');
+      console.log(
+        '%c' + art,
+        'color:#22d3ee;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;line-height:1.15;text-shadow:0 0 6px rgba(34,211,238,.45)'
+      );
+      console.log(
+        '%crofihosted%c  phone-powered hosting — a Sharp Aquos pretending to be a VPS.\n%cthe whole stack is hand-written Zig. you found the easter egg. :)',
+        'color:#a78bfa;font-weight:700;font-size:13px',
+        'color:#94a3b8;font-size:12px',
+        'color:#64748b;font-size:11px'
+      );
+    }
+  } catch (e) { /* console art is non-essential */ }
+
   const HIST = 60;
   const cpuHist = [], memHist = [];
 

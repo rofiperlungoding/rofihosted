@@ -62,6 +62,29 @@ function ok(msg) {
   console.log(`OK ${msg}`);
 }
 
+// Easter egg: ROFIHOSTED block banner. Printed on the bare `rh` / `rh help`
+// screen and after a successful `rh login`. TTY-guarded so piped/scripted
+// output (rh ls | ..., CI) stays clean. Respects NO_COLOR.
+function banner() {
+  if (!process.stdout.isTTY) return;
+  const color = !process.env.NO_COLOR;
+  const c = color ? '\x1b[38;5;45m' : '';   // cyan
+  const m = color ? '\x1b[38;5;213m' : '';  // magenta
+  const d = color ? '\x1b[2m' : '';
+  const x = color ? '\x1b[0m' : '';
+  const art = [
+    '████   ███  █████ █████ █   █  ███   ████ █████ █████ ████ ',
+    '█   █ █   █ █       █   █   █ █   █ █       █   █     █   █',
+    '████  █   █ ████    █   █████ █   █  ███    █   ████  █   █',
+    '█  █  █   █ █       █   █   █ █   █     █   █   █     █   █',
+    '█   █  ███  █     █████ █   █  ███  ████    █   █████ ████ ',
+  ];
+  console.log();
+  for (const line of art) console.log(c + line + x);
+  console.log(`${m}  phone-powered hosting${x} ${d}· a Sharp Aquos doing a VPS's job${x}`);
+  console.log();
+}
+
 async function api(base, apiKey, path, opts = {}) {
   const headers = { 'X-API-Key': apiKey, ...(opts.headers || {}) };
   const res = await fetch(`${base}${path}`, { ...opts, headers });
@@ -94,6 +117,7 @@ async function cmdLogin() {
     const me = await api(base, apiKey, '/v1/whoami');
     if (!me.ok) throw new Error(me.err || 'verify failed');
     await saveConfig({ api_key: apiKey, base });
+    banner();
     ok(`saved ${CONFIG_PATH} (key="${me.name}")`);
   } catch (e) {
     fail(`could not verify: ${e.message}`);
@@ -914,6 +938,7 @@ async function main() {
   }
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    banner();
     console.log(`rh - rofihosted CLI`);
     console.log();
     console.log(`Account & system:`);

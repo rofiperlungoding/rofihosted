@@ -1,0 +1,17 @@
+# hp-server login profile (deployed to ~/.bash_profile on the phone).
+#
+# Purpose: print a live status summary on every INTERACTIVE ssh login so the
+# operator immediately sees what's running. Kept deliberately minimal and
+# non-fatal - a broken login file must never block shell access during a
+# recovery, so every line is guarded.
+#
+# The `case "$-"` interactive guard is important: it ensures non-interactive
+# transports (scp, rsync, `ssh hp 'cmd'`, git-over-ssh) get a clean, silent
+# stdout and are never slowed or corrupted by status output.
+
+# Standard: pull in ~/.bashrc for interactive shells if it exists.
+[ -f ~/.bashrc ] && . ~/.bashrc
+
+case "$-" in
+  *i*) [ -x ~/hp-status.sh ] && ~/hp-status.sh ;;
+esac

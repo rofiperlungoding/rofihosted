@@ -29,6 +29,14 @@ jobs:
         working-directory: zig/hp-server
         run: zig build -Doptimize=ReleaseFast
 
+      # Cross-compile for the actual device target. The phone builds
+      # aarch64-linux-android in Termux; native x86_64 success does NOT
+      # guarantee the on-device build works. This step is the gate that keeps
+      # an android-only build break from ever reaching the phone.
+      - name: Build (phone target, aarch64-linux-android)
+        working-directory: zig/hp-server
+        run: zig build phone
+
       - name: Unit tests
         working-directory: zig/hp-server
         run: zig build test

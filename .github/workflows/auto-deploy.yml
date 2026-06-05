@@ -1,7 +1,13 @@
 name: Auto-deploy to phone
 
+# Gate: deploy ONLY after zig-ci passes on main. Previously this fired on push
+# in parallel with CI, so a commit that broke the on-device build could still
+# be sent to the phone (which would then fail to rebuild). Chaining off
+# zig-ci's success means a red build never reaches the device.
 on:
-  push:
+  workflow_run:
+    workflows: ["zig-ci"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -13,6 +19,9 @@ concurrency:
 
 jobs:
   deploy:
+    # workflow_run fires on every CI completion (success OR failure); only
+    # proceed when CI was green. Manual dispatch always allowed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -69,7 +78,10 @@ jobs:
       - name: Verify hp-server bounced back
         env:
           API_KEY: ${{ secrets.HP_ADMIN_API_KEY }}
-          EXPECTED_SHA: ${{ github.sha }}
+          # On workflow_run events github.sha points at the default branch tip,
+          # not the commit CI actually validated. head_sha is the real commit;
+          # fall back to github.sha for manual dispatch.
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           # Wait for watchdog to respawn (5-15s typically)
           attempts=0
