@@ -4,6 +4,26 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Changed: Four-surface subdomain split + redesigned UI system (2026-06-05)
+
+A full front-of-house overhaul. Routing, design language, and a real public status page.
+
+**Routing (subdomain split):**
+- `rofihosted.space` - public landing only (new minimal design).
+- `status.rofihosted.space` - **new public status page** backed by `GET /api/status`, built from real signals (web reachability + live Cloudflare tunnel state). External reference probes (google/github/cloudflare) deliberately do **not** drive the public overall, since they can fail under Termux DNS.
+- `admin.rofihosted.space` - operator console, gated to `role=admin` at the host level (tenants hitting it are 302'd to the app host).
+- `app.rofihosted.space` - tenant console; operators are 302'd to the admin host for page loads (API calls pass through).
+- Role-aware login + apex redirects (operators -> admin, tenants -> app). Logout -> apex. `dashboard`/`api`/`files` legacy subdomains now redirect to admin. `admin` added to the reserved-subdomain list so no project can claim it.
+- `handleApp` refactored to `handleConsole(..., surface)`; new `handleStatus` + `apiStatus`.
+
+**Design system (theme.css / app.css rebuilt, class API kept stable so every page adopts it):**
+- **SF Pro Display**, subset to Latin and shipped as woff2 (~35 KB/weight, 5 weights, served from `/fonts`, embedded in the binary).
+- **Zen-green signature** (`#15774b` light / `#4cc488` dark) that doubles as the "operational" status colour - the only chroma on screen carries meaning (green up / amber degraded / red down).
+- Neutral surfaces, tighter radii (cards 10px, buttons 8px), bare Simple Line Icons (no chip containers), a gently "breathing" healthy status dot.
+- New minimal landing (Microsoft-clean), redesigned probe metrics, asset cache bumped to `v=50`.
+
+**Verification:** cross-compiled clean (x86_64-linux-gnu + aarch64 ReleaseFast); deployed to the phone; all four hosts return 200 over Cloudflare; fonts serve as `font/woff2`; `/api/status` reports operational with live tunnel data; operator login -> admin console renders; role bounces are 302 (non-cacheable); single hp-server + watchdog, no errors in log.
+
 ### Added: Transactional Email via Brevo HTTP API (2026-06-05)
 
 Wired up real email sending for the signup verification flow (anti-duplicate Layer 3).
