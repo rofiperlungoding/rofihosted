@@ -28,6 +28,10 @@
   .auth-form-wrap { width: 100%; max-width: 440px; }
 
   .auth-editorial {
+    /* Always-dark brand panel: pin paper/ink locally so the theme tokens
+       (which swap between light/dark mode) can't invert this panel. */
+    --paper: #f3f1ea;
+    --ink: #14161a;
     display: none;
     background: var(--ink);
     color: var(--paper);
