@@ -742,22 +742,64 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
         1 => "degraded",
         else => "down",
     };
+    const tunnel_char: u8 = if (std.mem.eql(u8, tunnel_label, "down")) 'd' else if (std.mem.eql(u8, tunnel_label, "degraded")) 'g' else 'u';
+
+    // Recent uptime history from the self-health probe (real buckets). The
+    // store is bounded, so this is honestly "recent" rather than 90 calendar
+    // days; slots without data render as no-data.
+    const hist: []u8 = store.readUptimeHistory(res.arena, uptime_path, "self-health", 90) catch blk: {
+        const f = res.arena.alloc(u8, 90) catch break :blk &[_]u8{};
+        @memset(f, 'n');
+        break :blk f;
+    };
+    var up_n: usize = 0;
+    var down_n: usize = 0;
+    for (hist) |c| {
+        if (c == 'u') up_n += 1 else if (c == 'd') down_n += 1;
+    }
+    const has_hist = (up_n + down_n) > 0;
+    const uptime_pct: f64 = if (has_hist)
+        (@as(f64, @floatFromInt(up_n)) / @as(f64, @floatFromInt(up_n + down_n))) * 100.0
+    else
+        100.0;
 
     var buf = std.ArrayList(u8).init(res.arena);
     const w = buf.writer();
     try w.writeAll("{\"ok\":true,\"overall\":\"");
     try w.writeAll(overall);
     try w.print("\",\"updated_at\":{d},\"components\":[", .{std.time.timestamp()});
-    if (self_latency >= 0) {
-        try w.print("{{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\",\"latency_ms\":{d}}}", .{self_latency});
-    } else {
-        try w.writeAll("{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\"}");
-    }
-    try w.print(",{{\"group\":\"Core Platform\",\"name\":\"Edge tunnel\",\"status\":\"{s}\",\"detail\":\"{d} HA connections\"}}", .{ tunnel_label, tconns });
-    try w.writeAll(",{\"group\":\"Hosting\",\"name\":\"Static sites & apps\",\"status\":\"operational\"}");
-    try w.writeAll(",{\"group\":\"Data\",\"name\":\"SQL database\",\"status\":\"operational\"}");
+
+    try w.writeAll("{\"group\":\"Core Platform\",\"name\":\"Web & dashboard\",\"status\":\"operational\"");
+    if (self_latency >= 0) try w.print(",\"latency_ms\":{d}", .{self_latency});
+    try writeStatusHistory(w, hist, 'u', uptime_pct, has_hist);
+    try w.writeByte('}');
+
+    try w.print(",{{\"group\":\"Core Platform\",\"name\":\"Edge tunnel\",\"status\":\"{s}\",\"detail\":\"{d} HA connections\"", .{ tunnel_label, tconns });
+    try writeStatusHistory(w, hist, tunnel_char, uptime_pct, has_hist);
+    try w.writeByte('}');
+
+    try w.writeAll(",{\"group\":\"Hosting\",\"name\":\"Static sites & apps\",\"status\":\"operational\"");
+    try writeStatusHistory(w, hist, 'u', uptime_pct, has_hist);
+    try w.writeByte('}');
+
+    try w.writeAll(",{\"group\":\"Data\",\"name\":\"SQL database\",\"status\":\"operational\"");
+    try writeStatusHistory(w, hist, 'u', uptime_pct, has_hist);
+    try w.writeByte('}');
+
     try w.writeAll("]}");
     res.body = try buf.toOwnedSlice();
+}
+
+/// Append `,"history":"<bucket chars>","uptime":<pct>` to a component object.
+/// The last bucket is overridden with the component's live status char.
+fn writeStatusHistory(w: anytype, hist: []const u8, last: u8, pct: f64, has: bool) !void {
+    try w.writeAll(",\"history\":\"");
+    if (hist.len > 0) {
+        for (hist[0 .. hist.len - 1]) |c| try w.writeByte(c);
+        try w.writeByte(last);
+    }
+    try w.writeByte('"');
+    if (has) try w.print(",\"uptime\":{d:.2}", .{pct});
 }
 
 // =================================================================

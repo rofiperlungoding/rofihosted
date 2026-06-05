@@ -64,6 +64,41 @@ pub fn readLatestUptime(allocator: std.mem.Allocator, path: []const u8) ![]Uptim
     return out;
 }
 
+/// Build a recent uptime history for `target` as `slots` buckets, oldest to
+/// newest. Each byte is 'u' (up), 'd' (down), or 'n' (no data). Buckets span
+/// the actual time range of the available records; since the JSONL store is
+/// bounded, this is honestly "recent" history, and slots with no probe stay
+/// 'n'. Caller owns the returned slice (length == slots).
+pub fn readUptimeHistory(allocator: std.mem.Allocator, path: []const u8, target: []const u8, slots: usize) ![]u8 {
+    const out = try allocator.alloc(u8, slots);
+    @memset(out, 'n');
+    if (slots == 0) return out;
+    const all = readJsonl(UptimeRecord, allocator, path, 4096) catch return out;
+
+    var min_t: i64 = std.math.maxInt(i64);
+    var max_t: i64 = std.math.minInt(i64);
+    var count: usize = 0;
+    for (all) |r| {
+        if (!std.mem.eql(u8, r.target, target)) continue;
+        if (r.checked_at < min_t) min_t = r.checked_at;
+        if (r.checked_at > max_t) max_t = r.checked_at;
+        count += 1;
+    }
+    if (count == 0) return out;
+    const span: i64 = if (max_t > min_t) max_t - min_t else 1;
+    for (all) |r| {
+        if (!std.mem.eql(u8, r.target, target)) continue;
+        var idx: usize = @intCast(@divFloor((r.checked_at - min_t) * @as(i64, @intCast(slots - 1)), span));
+        if (idx >= slots) idx = slots - 1;
+        if (!r.ok) {
+            out[idx] = 'd';
+        } else if (out[idx] != 'd') {
+            out[idx] = 'u';
+        }
+    }
+    return out;
+}
+
 fn readJsonl(comptime T: type, allocator: std.mem.Allocator, path: []const u8, limit: usize) ![]T {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return try allocator.alloc(T, 0),

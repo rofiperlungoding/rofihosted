@@ -27,12 +27,19 @@
 
   .grp { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 1rem; overflow: hidden; }
   .grp-top { padding: .85rem 1.3rem; border-bottom: 1px solid var(--rule-soft); background: var(--paper-2); font-weight: 700; font-size: .85rem; }
-  .cmp { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .95rem 1.3rem; border-bottom: 1px solid var(--rule-soft); }
+  .cmp { padding: 1.05rem 1.3rem; border-bottom: 1px solid var(--rule-soft); }
   .cmp:last-child { border-bottom: 0; }
+  .cmp-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .cmp .nm { font-size: .92rem; font-weight: 600; }
   .cmp .dt { font-size: .76rem; color: var(--text-3); margin-top: .1rem; font-family: var(--mono); }
   .cmp .st { font-size: .83rem; font-weight: 600; display: inline-flex; align-items: center; gap: .5rem; white-space: nowrap; }
   .cmp .st.op { color: var(--success); } .cmp .st.deg { color: var(--warning); } .cmp .st.down { color: var(--error); }
+  .bars { display: flex; gap: 2px; height: 26px; margin-top: .8rem; }
+  .bars i { flex: 1; border-radius: 2px; background: var(--success); transition: opacity .1s; }
+  .bars i.d { background: var(--error); } .bars i.g { background: var(--warning); } .bars i.n { background: var(--rule); }
+  .bars i:hover { opacity: .6; }
+  .bars-meta { display: flex; justify-content: space-between; margin-top: .45rem; font-size: .72rem; color: var(--text-3); }
+  .bars-meta .pct { font-weight: 600; color: var(--text-2); }
 
   .stfoot { margin-top: 2.5rem; text-align: center; color: var(--text-3); font-size: .8rem; padding-bottom: 1rem; }
   .stfoot a { color: var(--accent); }
@@ -89,8 +96,15 @@
         var label=c.status==='down'?'Down':(c.status==='degraded'?'Degraded':'Operational');
         var detail=c.detail?esc(c.detail):'';
         if(c.latency_ms!=null) detail=(detail?detail+' \u00b7 ':'')+c.latency_ms+' ms';
-        html+='<div class="cmp"><div><div class="nm">'+esc(c.name)+'</div>'+(detail?'<div class="dt">'+detail+'</div>':'')+'</div>'+
-          '<div class="st '+st+'">'+label+' <span class="s-dot '+(st==='op'?'ring op':st)+'"></span></div></div>';
+        var bars='';
+        var hist=c.history||'';
+        for(var i=0;i<hist.length;i++){var ch=hist[i];var cl=ch==='d'?'d':(ch==='g'?'g':(ch==='n'?'n':''));bars+='<i class="'+cl+'"></i>';}
+        var pct=(c.uptime!=null)?(c.uptime.toFixed(2)+'% uptime'):'';
+        html+='<div class="cmp">'+
+          '<div class="cmp-row"><div><div class="nm">'+esc(c.name)+'</div>'+(detail?'<div class="dt">'+detail+'</div>':'')+'</div>'+
+          '<div class="st '+st+'">'+label+' <span class="s-dot '+(st==='op'?'ring op':st)+'"></span></div></div>'+
+          (bars?('<div class="bars">'+bars+'</div><div class="bars-meta"><span>recent</span>'+(pct?'<span class="pct">'+pct+'</span>':'<span></span>')+'<span>now</span></div>'):'')+
+          '</div>';
       });
       html+='</div>';
     });
