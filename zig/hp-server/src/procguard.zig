@@ -28,19 +28,44 @@ pub fn acquireOrExit(pidfile_rel: []const u8) void {
         return;
     };
 
-    std.posix.flock(fd, std.posix.LOCK.EX | std.posix.LOCK.NB) catch |e| switch (e) {
-        // Another live instance holds the lock: this is the case we exist to
-        // prevent. Refuse to start.
+    std.posix.flock(fd, std.posix.LOCK.EX | std.posix.LOCK.NB) catch |first_err| switch (first_err) {
+        // Another instance currently holds the lock. During a self-update
+        // restart the outgoing instance is usually mid-shutdown and about to
+        // release it, so retry briefly instead of refusing immediately. This
+        // bridges the kill->release race that previously left the new binary
+        // unable to start within the rollback window, causing spurious
+        // rollbacks. We still refuse (exit 1) if the lock is held for the whole
+        // window, preserving the duplicate-instance guarantee.
         error.WouldBlock => {
-            std.log.err("procguard: another hp-server instance holds {s}; refusing to start", .{path});
-            std.posix.close(fd);
-            std.process.exit(1);
+            var acquired = false;
+            var attempts: u8 = 0;
+            const max_attempts: u8 = 30; // ~15s at 500ms each
+            while (attempts < max_attempts) : (attempts += 1) {
+                std.Thread.sleep(500 * std.time.ns_per_ms);
+                if (std.posix.flock(fd, std.posix.LOCK.EX | std.posix.LOCK.NB)) {
+                    acquired = true;
+                    break;
+                } else |retry_err| switch (retry_err) {
+                    error.WouldBlock => continue,
+                    else => {
+                        std.log.warn("procguard: flock retry on {s} failed: {} (continuing without lock)", .{ path, retry_err });
+                        std.posix.close(fd);
+                        return;
+                    },
+                }
+            }
+            if (!acquired) {
+                std.log.err("procguard: another hp-server instance still holds {s} after ~15s; refusing to start", .{path});
+                std.posix.close(fd);
+                std.process.exit(1);
+            }
+            std.log.info("procguard: acquired lock after waiting for the previous instance to exit", .{});
         },
         // flock unsupported on this fs, out of locks, or some other transient
         // problem: do NOT refuse to start (that would self-inflict downtime).
         // Continue without the guard; the lifecycle scripts remain a backstop.
         else => {
-            std.log.warn("procguard: flock on {s} failed: {} (continuing without lock)", .{ path, e });
+            std.log.warn("procguard: flock on {s} failed: {} (continuing without lock)", .{ path, first_err });
             std.posix.close(fd);
             return;
         },

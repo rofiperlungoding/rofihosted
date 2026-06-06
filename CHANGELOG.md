@@ -4,6 +4,17 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Reliability (P0-1): procguard waits out the previous instance on restart (2026-06-06)
+
+Self-update restarts were racing the single-instance lock: the incoming binary
+could try to acquire the `~/.hp-server.pid` flock while the outgoing instance
+was still releasing it, hit `procguard`'s immediate refusal, and exit — leaving
+`/health` down long enough to trigger an auto-rollback (observed rolling back an
+otherwise-healthy build). `procguard.acquireOrExit` now **retries the flock for
+~15 s** before giving up, bridging the kill→release window so restarts come back
+cleanly. It still refuses (exit 1) if the lock is held for the whole window, so
+the duplicate-instance guarantee is preserved. (`procguard.zig`)
+
 ### Hardening: collision-safe SQLite result framing (2026-06-06)
 
 The `sqlite3` worker pool marked end-of-output with a predictable counter
