@@ -276,8 +276,13 @@ const Worker = struct {
 
         try self.ensureAlive();
 
-        self.seq +%= 1;
-        const sentinel = try std.fmt.allocPrint(allocator, "__SQL_DONE_{d}__", .{self.seq});
+        // Per-query RANDOM sentinel. A predictable counter could be guessed,
+        // or appear verbatim inside adversarial result data, and truncate the
+        // frame early. A random nonce makes accidental or malicious collision
+        // cryptographically improbable.
+        var nonce_bytes: [12]u8 = undefined;
+        std.crypto.random.bytes(&nonce_bytes);
+        const sentinel = try std.fmt.allocPrint(allocator, "__SQL_DONE_{s}__", .{std.fmt.fmtSliceHexLower(&nonce_bytes)});
         defer allocator.free(sentinel);
 
         // Build full SQL: user SQL + sentinel marker
@@ -320,8 +325,10 @@ const Worker = struct {
                 self.kill();
                 return error.OutOfMemory;
             }
-            // Look for sentinel (it should be on a fresh line)
-            if (std.mem.indexOf(u8, out.items, sentinel)) |idx| {
+            // Look for the sentinel anchored to a line start (the SELECT emits
+            // it on its own line). Anchoring + the random nonce prevent a row
+            // value that merely contains the marker text from truncating early.
+            if (findLineAnchored(out.items, sentinel)) |idx| {
                 // Trim everything from the sentinel onward (and the surrounding
                 // newlines / next prompt)
                 var trim_to = idx;
@@ -336,4 +343,30 @@ test "config validation" {
     const cfg = Config{ .db_path = "/tmp/test.db", .workers = 2 };
     try std.testing.expect(cfg.workers == 2);
     try std.testing.expect(cfg.query_timeout_ms == 15000);
+}
+
+/// Find `needle` only where it begins a line (preceded by '\n' or at offset 0).
+/// Used to locate the result sentinel so a marker-like substring inside a row
+/// value cannot be mistaken for the end-of-output marker.
+fn findLineAnchored(hay: []const u8, needle: []const u8) ?usize {
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, hay, from, needle)) |idx| {
+        if (idx == 0 or hay[idx - 1] == '\n') return idx;
+        from = idx + 1;
+    }
+    return null;
+}
+
+test "findLineAnchored ignores mid-line matches" {
+    const S = "__SQL_DONE_abc__";
+    // Mid-line occurrence (inside a row value) must be skipped...
+    const buf = "value containing __SQL_DONE_abc__ inline\n__SQL_DONE_abc__\n";
+    const idx = findLineAnchored(buf, S).?;
+    try std.testing.expect(buf[idx - 1] == '\n');
+    // ...and the anchored one is the second occurrence (line start).
+    try std.testing.expect(idx > 10);
+    // At offset 0 counts as a line start.
+    try std.testing.expectEqual(@as(?usize, 0), findLineAnchored("__SQL_DONE_abc__\n", S));
+    // No anchored match -> null.
+    try std.testing.expectEqual(@as(?usize, null), findLineAnchored("x __SQL_DONE_abc__ y", S));
 }

@@ -64,6 +64,7 @@ pub fn build(b: *std.Build) void {
         "src/webhook.zig", // SSRF host-guard tests
         "src/proxy.zig", // session-cookie stripping tests (needs httpz import)
         "src/users.zig", // argon2id hash/verify + legacy fallback tests
+        "src/dbpool.zig", // sentinel line-anchoring tests
     };
     for (test_files) |tf| {
         const unit_test = b.addTest(.{

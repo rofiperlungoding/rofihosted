@@ -4,6 +4,15 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Hardening: collision-safe SQLite result framing (2026-06-06)
+
+The `sqlite3` worker pool marked end-of-output with a predictable counter
+(`__SQL_DONE_<n>__`) located with an unanchored substring search — a row value
+containing that text could truncate the result. Now the sentinel is a per-query
+**random nonce** and the search is **anchored to a line start**, so neither
+accidental nor adversarial result data can end the frame early. (`dbpool.zig`,
+unit-tested.)
+
 ### Security: tenant passwords now hashed with Argon2id (2026-06-06)
 
 Replaces the single-round HMAC-SHA256 password hash (fast, weak against offline
