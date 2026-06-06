@@ -235,10 +235,19 @@ flowchart TD
 - **Prompt-injection defense.** All untrusted data passed to the AI layer is
   wrapped in delimited blocks and sanitized; system prompts instruct the model
   to treat that content strictly as data.
-- **Per-project isolation.** Each project has its own SQLite database, its own
-  AES-256-GCM secrets vault keyed to the pepper and project ID, and its own JWT
-  signing key, so one project can neither read another's data nor mint tokens
-  another would accept.
+- **Per-project cryptographic separation.** Each project has its own SQLite
+  database, its own AES-256-GCM secrets vault, and its own JWT signing key, all
+  derived from the install pepper and the project ID. These keys protect against
+  parties who do not possess the pepper. **Important:** they are *not* an
+  operating-system isolation boundary. Under Termux every process shares one
+  Android UID, so a deployed backend process can read the pepper
+  (`~/.hp-server-secret.bin`) and therefore derive any project's keys. Genuine
+  per-process isolation is not available on a non-rooted device. To keep the
+  separation real, **backend (process-executing) deployment is restricted to the
+  operator**; tenant accounts get static hosting, a managed per-project database,
+  and authentication-as-a-service only. Isolation between any operator-deployed
+  backend and the rest of the system remains administrative (operator-trusted),
+  not technical.
 - **GitHub webhooks** are verified with HMAC-SHA256 and a constant-time
   comparison against a per-project secret.
 

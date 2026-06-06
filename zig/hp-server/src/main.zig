@@ -7429,6 +7429,22 @@ fn apiProjectsCreate(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         return;
     };
 
+    // Backend (process-executing) runtimes run as a supervised child of
+    // hp-server and therefore under the same Android UID, which can read the
+    // install pepper (~/.hp-server-secret.bin) and thus every tenant's secrets,
+    // JWT keys, and session HMACs. Real per-process isolation is not available
+    // on a non-rooted Termux device, so backend deployment is restricted to the
+    // operator. Tenants get static hosting + per-project DB + auth-as-a-service.
+    if (ident.role != .admin and runtime != .static) {
+        res.status = 403;
+        try res.json(.{
+            .ok = false,
+            .err = "backend_deploy_operator_only",
+            .hint = "tenant accounts can deploy static sites; backend runtimes are restricted to the operator",
+        }, .{});
+        return;
+    }
+
     const project = app.projects.create(.{
         .name = name,
         .subdomain = subdomain,
@@ -7711,6 +7727,21 @@ fn apiProjectsAutoDeploy(app: *App, req: *httpz.Request, res: *httpz.Response) !
     };
 
     const runtime = projects.Runtime.fromString(preview.runtime) orelse projects.Runtime.generic;
+
+    // Backend deploy is operator-only (see apiProjectsCreate for the full
+    // rationale: a tenant backend runs under the shared Termux UID and can read
+    // the pepper). The analyzer may detect a backend runtime from the repo; if
+    // the caller is a tenant, refuse before anything is created or cloned-built.
+    if (ident.role != .admin and runtime != .static) {
+        res.status = 403;
+        try res.json(.{
+            .ok = false,
+            .err = "backend_deploy_operator_only",
+            .hint = "this repository looks like a backend app; tenant accounts can deploy static sites only. Ask the operator to deploy backends.",
+            .detected_runtime = runtime.toString(),
+        }, .{});
+        return;
+    }
 
     // Owner: tenants always own; admins own unless they explicitly pass
     // `owner_id=` (e.g. via MCP for assigning to a tenant).
