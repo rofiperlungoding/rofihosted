@@ -89,7 +89,17 @@ pub fn proxy(
     };
     for (passthru) |hname| {
         if (req.header(hname)) |hv| {
-            try w.print("{s}: {s}\r\n", .{ hname, hv });
+            if (std.mem.eql(u8, hname, "cookie")) {
+                // Never forward the platform/operator session cookie
+                // (rofi_session) to an untrusted project process: a malicious
+                // tenant app could otherwise harvest the operator's session.
+                // Other cookies (the project's own) are forwarded unchanged.
+                const filtered = filterSessionCookie(allocator, hv) catch hv;
+                defer if (filtered.ptr != hv.ptr) allocator.free(filtered);
+                if (filtered.len > 0) try w.print("cookie: {s}\r\n", .{filtered});
+            } else {
+                try w.print("{s}: {s}\r\n", .{ hname, hv });
+            }
         }
     }
     try w.writeAll("\r\n");
@@ -211,6 +221,42 @@ pub fn proxy(
     }
 
     res.body = try res.arena.dupe(u8, body_bytes);
+}
+
+const SESSION_COOKIE = "rofi_session";
+
+/// Rebuild a Cookie header value with the platform session cookie removed.
+/// Returns the original slice unchanged (same .ptr) when there is nothing to
+/// strip, otherwise an owned slice the caller must free.
+fn filterSessionCookie(allocator: std.mem.Allocator, cookie: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, cookie, SESSION_COOKIE ++ "=") == null) return cookie;
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+    var it = std.mem.splitScalar(u8, cookie, ';');
+    while (it.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t");
+        if (trimmed.len == 0) continue;
+        if (std.mem.startsWith(u8, trimmed, SESSION_COOKIE ++ "=")) continue;
+        if (out.items.len > 0) try out.appendSlice("; ");
+        try out.appendSlice(trimmed);
+    }
+    return out.toOwnedSlice();
+}
+
+test "filterSessionCookie strips only rofi_session" {
+    const a = std.testing.allocator;
+    // Strips the session cookie, keeps the rest.
+    const r1 = try filterSessionCookie(a, "a=1; rofi_session=secret; b=2");
+    defer a.free(r1);
+    try std.testing.expectEqualStrings("a=1; b=2", r1);
+    // Nothing to strip -> returns the original slice unchanged.
+    const in2 = "a=1; b=2";
+    const r2 = try filterSessionCookie(a, in2);
+    try std.testing.expect(r2.ptr == in2.ptr);
+    // Only the session cookie -> empty result.
+    const r3 = try filterSessionCookie(a, "rofi_session=abc");
+    defer a.free(r3);
+    try std.testing.expectEqualStrings("", r3);
 }
 
 fn findHeader(headers_block: []const u8, name_lower: []const u8) ?[]const u8 {
