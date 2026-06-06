@@ -25,11 +25,14 @@ but is not required for any documented workflow.
 
 ## 2. Deploying a change
 
-The normal path is fully automated:
+Changes land on `main` through a pull request, never by pushing to `main`
+directly (`main` is production). See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for
+the branch workflow. Once a PR is merged, deployment is fully automated:
 
-1. Push to the default branch on GitHub.
-2. GitHub Actions calls `POST /v1/system/update` on the device with the admin
-   API key.
+1. The merge to `main` runs `zig-ci` (format, x86_64 builds, device-target
+   build, tests).
+2. On CI success, GitHub Actions calls `POST /v1/system/update` on the device
+   with the admin API key (`HP_ADMIN_API_KEY` repository secret).
 3. The device runs `self-update.sh`: fetch, reset to the remote head, rsync
    sources into the build tree, rebuild, and respawn through the watchdog.
 4. Commits that touch only scripts or documentation skip the rebuild and

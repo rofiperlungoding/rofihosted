@@ -4,6 +4,47 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Fixed + Changed: API keys, CI/CD hardening, docs, and dev workflow (2026-06-06)
+
+**Fixed: API keys created with the `admin` scope were not admin, and keys could not be deleted.**
+- Root cause: the Settings and Security pages submitted forms via `new FormData()`
+  (`multipart/form-data`), but the server's `req.formData()` parses only
+  `application/x-www-form-urlencoded`. Every field was dropped, so created keys
+  silently defaulted to `scope=sql` and the revoke handler never received an `id`.
+- Frontend now posts URL-encoded (like the rest of the app) in
+  `app-settings.html` and `app-security.html`.
+- `apikey.revoke` now hard-deletes the record (removes it from disk) instead of
+  tombstoning, so dead keys stop accumulating; the UI action is relabeled *Delete*.
+- Added `apikey.zig` to the test suite with admin-scope regression guards.
+
+**Changed: deploy is now gated on CI and validated for the device target.**
+- `zig-ci` additionally cross-compiles the phone target (`aarch64-linux-android`)
+  via a new `zig build phone` step, so an Android-only build break is caught
+  before deploy.
+- `auto-deploy` now triggers on `zig-ci` success (`workflow_run`) rather than in
+  parallel with it; a red build can no longer reach the phone. The
+  `HP_ADMIN_API_KEY` deploy secret is configured, so auto-deploy works end-to-end.
+
+**Added: development workflow + richer docs.**
+- New [`CONTRIBUTING.md`](CONTRIBUTING.md): trunk-based flow (feature branch ->
+  PR -> green CI -> squash-merge to a protected `main` -> auto-deploy). `main`
+  is production and is no longer committed to directly.
+- Mermaid diagrams added across all docs (`README`, `docs/*`, `cli/README`) for
+  architecture, request lifecycle, deploy/CI, security, recovery, and CLI flow.
+
+**Added: SSH ergonomics + branding.**
+- `scripts/hp-status.sh` + `~/.bash_profile`: a live status summary on every
+  interactive SSH login (read-only, interactive-guarded).
+- `.gitattributes` forces LF on `.sh`/`.zig`/`.mjs` so Termux never chokes on CRLF.
+- CLI rebranded: the package installs both `rofihosted` (full) and `rh` (alias),
+  with npm SEO metadata. A `ROFIHOSTED` ASCII banner greets `rofihosted`/`rh` and
+  the browser dev console.
+
+**Added: server metrics.**
+- `/metrics` now exports `http_requests_total` by status class,
+  `auth_failures_total`, `ratelimit_denied_total`, worker-pool job counters, and
+  the fail-closed `ratelimit_alloc_denied_total`.
+
 ### Changed: Engineering review + documentation consolidation (2026-06-05)
 
 A documentation-only release (no binary changes, no deploy required). The goal
