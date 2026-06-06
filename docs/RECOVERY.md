@@ -7,6 +7,26 @@ backup exists in Cloudflare R2 (or a local snapshot is at hand).
 Recovery objective: a working server, reachable at the production hostnames,
 with all projects, users, credentials, and history intact.
 
+## Single-device SPOF, RTO, and RPO
+
+Be honest about the reliability model: the entire platform — control plane, all
+tenant projects, and the secret material — runs on **one phone**. That phone is
+a **single point of failure**. The battery acts as a built-in UPS for power
+continuity, and the watchdog restarts crashed processes, but neither helps if
+the OS itself is killed, storage corrupts, or the hardware fails. This is an
+accepted trade-off for a personal/portfolio system; it is **not** a
+high-availability design and should not be presented as one.
+
+- **RPO (data loss window):** at most the interval since the last good backup.
+  Append-only JSONL plus per-project DBs are snapshotted to Cloudflare R2 hourly
+  and rotated locally, so the realistic RPO is **≤ 1 hour**.
+- **RTO (time to restore):** a manual bring-up onto a fresh device per the
+  procedure below — realistically **30–90 minutes**, dominated by installing the
+  toolchain and the first on-device build.
+- **Mitigation:** keep the R2 snapshot current, keep the pepper backed up (its
+  loss is unrecoverable — Section 5), and run this runbook as a drill
+  periodically so the RTO is real rather than theoretical.
+
 The end-to-end bring-up sequence, from a fresh device to a verified server:
 
 ```mermaid
