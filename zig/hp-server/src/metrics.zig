@@ -182,6 +182,30 @@ pub const CacheMetrics = struct {
     }
 };
 
+/// Server-level request and security counters, separate from the cache
+/// metrics above. Gives an at-a-glance view of request volume by status class
+/// plus the two security signals most worth alerting on.
+pub const ServerMetrics = struct {
+    requests_2xx: Counter = .{},
+    requests_3xx: Counter = .{},
+    requests_4xx: Counter = .{},
+    requests_5xx: Counter = .{},
+    auth_failures: Counter = .{},
+    ratelimit_denied: Counter = .{},
+
+    pub fn recordStatus(self: *ServerMetrics, status: u16) void {
+        if (status >= 500) {
+            self.requests_5xx.inc();
+        } else if (status >= 400) {
+            self.requests_4xx.inc();
+        } else if (status >= 300) {
+            self.requests_3xx.inc();
+        } else if (status >= 200) {
+            self.requests_2xx.inc();
+        }
+    }
+};
+
 /// Global metrics hub
 pub const MetricsHub = struct {
     allocator: std.mem.Allocator,
@@ -192,6 +216,9 @@ pub const MetricsHub = struct {
     semantic: CacheMetrics = .{},
     static_files: CacheMetrics = .{},
     annotations: CacheMetrics = .{},
+
+    // Server-level request/security metrics
+    server: ServerMetrics = .{},
 
     pub fn init(allocator: std.mem.Allocator) *MetricsHub {
         const hub = allocator.create(MetricsHub) catch unreachable;
@@ -247,6 +274,22 @@ pub const MetricsHub = struct {
         try self.writeGauge(writer, "cache_entries", "dbcache", self.dbcache.entry_count.get());
         try self.writeGauge(writer, "cache_entries", "semantic", self.semantic.entry_count.get());
         try self.writeGauge(writer, "cache_entries", "static_files", self.static_files.entry_count.get());
+
+        // Server-level request and security counters.
+        try writer.writeAll("# HELP http_requests_total Total HTTP responses by status class\n");
+        try writer.writeAll("# TYPE http_requests_total counter\n");
+        try writer.print("http_requests_total{{class=\"2xx\"}} {d}\n", .{self.server.requests_2xx.get()});
+        try writer.print("http_requests_total{{class=\"3xx\"}} {d}\n", .{self.server.requests_3xx.get()});
+        try writer.print("http_requests_total{{class=\"4xx\"}} {d}\n", .{self.server.requests_4xx.get()});
+        try writer.print("http_requests_total{{class=\"5xx\"}} {d}\n", .{self.server.requests_5xx.get()});
+
+        try writer.writeAll("# HELP auth_failures_total Failed authentication attempts\n");
+        try writer.writeAll("# TYPE auth_failures_total counter\n");
+        try writer.print("auth_failures_total {d}\n", .{self.server.auth_failures.get()});
+
+        try writer.writeAll("# HELP ratelimit_denied_total Requests denied by the rate limiter\n");
+        try writer.writeAll("# TYPE ratelimit_denied_total counter\n");
+        try writer.print("ratelimit_denied_total {d}\n", .{self.server.ratelimit_denied.get()});
     }
 
     fn writeCounter(self: *MetricsHub, writer: anytype, name: []const u8, cache: []const u8, value: u64) !void {

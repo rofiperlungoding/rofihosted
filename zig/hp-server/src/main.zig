@@ -514,6 +514,7 @@ fn hostRouter(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     // Rate limit (skip /health, skip self)
     if (!is_local and cls != .self and !std.mem.eql(u8, path, "/health")) {
         if (!app.rate_limiter.allow(ip)) {
+            app.metrics_hub.server.ratelimit_denied.inc();
             res.status = 429;
             res.header("Retry-After", "60");
             res.content_type = .TEXT;
@@ -1246,6 +1247,7 @@ fn handleLoginSubmit(app: *App, req: *httpz.Request, res: *httpz.Response, defau
     const cur_host = if (std.mem.indexOfScalar(u8, host_full, ':')) |ci| host_full[0..ci] else host_full;
 
     if (!ok) {
+        app.metrics_hub.server.auth_failures.inc();
         const target = try std.fmt.allocPrint(res.arena, "https://{s}/login?error=1&next={s}", .{ cur_host, next });
         res.status = 302;
         res.header("Location", target);
@@ -1389,6 +1391,9 @@ fn logVisitFull(
     app.visit_buf.append(visit) catch |e| {
         std.log.warn("visit_buf append failed: {}", .{e});
     };
+
+    // Server-level request counter by status class (single hook, every request).
+    app.metrics_hub.server.recordStatus(status);
 
     // Realtime broadcast
     app.bus.publish(.visit, visit);
@@ -3064,6 +3069,32 @@ fn apiMetrics(app: *App, res: *httpz.Response) !void {
     defer buf.deinit();
 
     try app.metrics_hub.exportPrometheus(buf.writer());
+
+    // Worker pool + rate limiter internals (live in their own modules, so
+    // appended here rather than in the hub). These surface the new bounded-pool
+    // backpressure and the fail-closed rate-limiter signal.
+    const wp = app.workerpool;
+    wp.mutex.lock();
+    const wp_submitted = wp.submitted;
+    const wp_dropped = wp.dropped;
+    const wp_completed = wp.completed;
+    const wp_queued = wp.len;
+    wp.mutex.unlock();
+    buf.writer().print(
+        \\# HELP workerpool_jobs_total Background AI jobs by outcome
+        \\# TYPE workerpool_jobs_total counter
+        \\workerpool_jobs_total{{outcome="submitted"}} {d}
+        \\workerpool_jobs_total{{outcome="completed"}} {d}
+        \\workerpool_jobs_total{{outcome="dropped"}} {d}
+        \\# HELP workerpool_queue_depth Jobs currently queued
+        \\# TYPE workerpool_queue_depth gauge
+        \\workerpool_queue_depth {d}
+        \\# HELP ratelimit_alloc_denied_total Admissions denied due to allocation failure (fail-closed)
+        \\# TYPE ratelimit_alloc_denied_total counter
+        \\ratelimit_alloc_denied_total {d}
+        \\
+    , .{ wp_submitted, wp_completed, wp_dropped, wp_queued, app.rate_limiter.alloc_denied }) catch {};
+
     res.body = try app.allocator.dupe(u8, buf.items);
 }
 
