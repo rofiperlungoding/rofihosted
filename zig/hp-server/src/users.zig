@@ -365,9 +365,21 @@ pub const Manager = struct {
         const i = idx orelse return error.UserNotFound;
         const u = self.users.items[i];
 
-        const computed = computePasswordHash(self.allocator, self.pepper, u.salt, password) catch return error.WrongPassword;
-        defer self.allocator.free(computed);
-        if (!constantTimeEqual(computed, u.password_hash)) return error.WrongPassword;
+        const computed_ok = passwordMatches(self.allocator, self.pepper, u.password_hash, u.salt, password);
+        if (!computed_ok) return error.WrongPassword;
+
+        // Migrate a legacy HMAC hash to argon2id on successful login (rehash
+        // on login). Best-effort: a failure here never blocks the login.
+        if (!std.mem.startsWith(u8, u.password_hash, "$argon2")) {
+            if (hashPassword(self.allocator, self.pepper, password)) |new_phc| {
+                defer self.allocator.free(new_phc);
+                const arena = self.arena.allocator();
+                if (arena.dupe(u8, new_phc)) |dup| {
+                    self.users.items[i].password_hash = dup;
+                    self.users.items[i].salt = ""; // unused for argon2 records
+                } else |_| {}
+            } else |_| {}
+        }
 
         // Update last_login (best-effort persistence)
         self.users.items[i].last_login = std.time.timestamp();
@@ -415,7 +427,7 @@ pub const Manager = struct {
         std.crypto.random.bytes(&salt_bytes);
         const salt = std.fmt.allocPrint(arena, "{s}", .{std.fmt.fmtSliceHexLower(&salt_bytes)}) catch return error.OutOfMemory;
 
-        const ph_owned = computePasswordHash(self.allocator, self.pepper, salt, input.password) catch return error.OutOfMemory;
+        const ph_owned = hashPassword(self.allocator, self.pepper, input.password) catch return error.OutOfMemory;
         defer self.allocator.free(ph_owned);
         const password_hash = arena.dupe(u8, ph_owned) catch return error.OutOfMemory;
 
@@ -516,7 +528,7 @@ pub const Manager = struct {
                 std.crypto.random.bytes(&salt_bytes);
                 const arena = self.arena.allocator();
                 const salt = try std.fmt.allocPrint(arena, "{s}", .{std.fmt.fmtSliceHexLower(&salt_bytes)});
-                const ph = try computePasswordHash(self.allocator, self.pepper, salt, new_password);
+                const ph = try hashPassword(self.allocator, self.pepper, new_password);
                 defer self.allocator.free(ph);
                 self.users.items[i].salt = salt;
                 self.users.items[i].password_hash = try arena.dupe(u8, ph);
@@ -575,6 +587,73 @@ pub const Manager = struct {
         };
     }
 };
+
+const argon2 = std.crypto.pwhash.argon2;
+
+// argon2id parameters tuned for a phone: ~19 MiB, 2 iterations, 1 lane.
+// Matches the OWASP minimum recommendation while staying cheap enough for
+// interactive logins on a Snapdragon 720G.
+const ARGON2_PARAMS = argon2.Params{ .t = 2, .m = 19 * 1024, .p = 1 };
+
+/// Bind the pepper into the password before hashing, so a leaked hash file is
+/// useless without the (separately stored) pepper. Returns 64 hex chars.
+fn pepperedInput(pepper: []const u8, password: []const u8) [64]u8 {
+    var mac: [32]u8 = undefined;
+    std.crypto.auth.hmac.sha2.HmacSha256.create(&mac, password, pepper);
+    var hex: [64]u8 = undefined;
+    _ = std.fmt.bufPrint(&hex, "{s}", .{std.fmt.fmtSliceHexLower(&mac)}) catch unreachable;
+    return hex;
+}
+
+/// New-format password hash: an argon2id PHC string over the peppered input.
+/// The PHC string embeds its own salt and parameters, so the separate `salt`
+/// field is unused for argon2 records.
+pub fn hashPassword(allocator: std.mem.Allocator, pepper: []const u8, password: []const u8) ![]u8 {
+    const input = pepperedInput(pepper, password);
+    var buf: [256]u8 = undefined;
+    const phc = try argon2.strHash(
+        &input,
+        .{ .allocator = allocator, .params = ARGON2_PARAMS, .mode = .argon2id },
+        &buf,
+    );
+    return allocator.dupe(u8, phc);
+}
+
+/// Verify a password against either the new argon2id PHC format or the legacy
+/// HMAC-SHA256 hex format. Constant-time for the legacy path; argon2 verify is
+/// inherently comparison-safe.
+pub fn passwordMatches(
+    allocator: std.mem.Allocator,
+    pepper: []const u8,
+    stored: []const u8,
+    salt: []const u8,
+    password: []const u8,
+) bool {
+    if (std.mem.startsWith(u8, stored, "$argon2")) {
+        const input = pepperedInput(pepper, password);
+        argon2.strVerify(stored, &input, .{ .allocator = allocator }) catch return false;
+        return true;
+    }
+    const computed = computePasswordHash(allocator, pepper, salt, password) catch return false;
+    defer allocator.free(computed);
+    return constantTimeEqual(computed, stored);
+}
+
+test "argon2 hash/verify roundtrip and legacy fallback" {
+    const a = std.testing.allocator;
+    const pepper = "test-pepper-123";
+    const phc = try hashPassword(a, pepper, "correct horse battery");
+    defer a.free(phc);
+    try std.testing.expect(std.mem.startsWith(u8, phc, "$argon2id$"));
+    try std.testing.expect(passwordMatches(a, pepper, phc, "", "correct horse battery"));
+    try std.testing.expect(!passwordMatches(a, pepper, phc, "", "wrong"));
+    // Legacy HMAC records must still verify (and reject wrong passwords).
+    const salt = "abcd1234";
+    const legacy = try computePasswordHash(a, pepper, salt, "legacypw");
+    defer a.free(legacy);
+    try std.testing.expect(passwordMatches(a, pepper, legacy, salt, "legacypw"));
+    try std.testing.expect(!passwordMatches(a, pepper, legacy, salt, "nope"));
+}
 
 pub fn computePasswordHash(allocator: std.mem.Allocator, pepper: []const u8, salt: []const u8, password: []const u8) ![]u8 {
     var msg = std.ArrayList(u8).init(allocator);
