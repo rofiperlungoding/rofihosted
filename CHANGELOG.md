@@ -4,6 +4,20 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Security: tenant passwords now hashed with Argon2id (2026-06-06)
+
+Replaces the single-round HMAC-SHA256 password hash (fast, weak against offline
+brute force) with **Argon2id** (memory-hard: ~19 MiB, t=2). The install pepper
+is bound in as a secret input (HMAC over the password before the KDF), so a
+leaked hash file remains useless without the separately stored pepper.
+
+- New `users.hashPassword` / `passwordMatches`; `create` and `changePassword`
+  now produce argon2id PHC strings. (`users.zig`)
+- **Rehash on login:** legacy HMAC hashes are verified, then transparently
+  upgraded to argon2id on the next successful login — no forced reset.
+- Operator login (legacy `~/.hp-server-creds.txt`, handled in `auth.zig`) is
+  unaffected. Unit tests cover the argon2 roundtrip and legacy fallback.
+
 ### Security: stop leaking the operator session to project apps + webhook SSRF guard (2026-06-06)
 
 - **Reverse proxy:** the proxy no longer forwards the platform session cookie
