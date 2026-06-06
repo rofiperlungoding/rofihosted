@@ -199,12 +199,12 @@ flowchart TD
     Q -->|"Just deploy an app"| T1
     Q -->|"Run the platform myself"| S1
 
-    subgraph TENANT["Path A · Deploy as a tenant"]
+    subgraph TENANT["Path A · Deploy a static site (tenant)"]
         direction TB
-        T1["rofihosted signup<br/>(or sign up in the dashboard)"] --> T2["create an admin-scoped API key"]
+        T1["rofihosted signup<br/>(or sign up in the dashboard)"] --> T2["create an API key"]
         T2 --> T3["rofihosted login"]
-        T3 --> T4["rofihosted deploy https://github.com/you/app"]
-        T4 --> T5(["Live at https://app-name.rofihosted.space"])
+        T3 --> T4["rofihosted deploy ./dist my-site<br/>(static build)"]
+        T4 --> T5(["Live at https://my-site.rofihosted.space"])
     end
 
     subgraph SELFHOST["Path B · Self-host on a phone"]
@@ -218,20 +218,28 @@ flowchart TD
     S4 --> DOCS2["See docs/RECOVERY.md for the full bring-up"]
 ```
 
-### Path A — deploy an app (tenant)
+### Path A — deploy a site (tenant)
+
+Tenant accounts get **static hosting, a managed per-project database, and
+authentication-as-a-service**. Backend (process-executing) apps are deployed by
+the operator only — see the note below. Create a project and deploy a static
+build from the dashboard at `app.rofihosted.space`, or with the CLI:
 
 ```sh
 npm install -g rofihosted        # installs both 'rofihosted' and the 'rh' alias
-
-rofihosted signup                # create an account (or use the dashboard)
-rofihosted login                 # paste an admin-scoped API key
-rofihosted deploy https://github.com/you/your-app
-#   the server clones, detects the stack, builds, and streams the log live
-#   -> https://your-app.rofihosted.space
+rofihosted login                 # paste your API key (from the dashboard)
+rofihosted deploy ./dist my-site # upload a static build
+#   -> https://my-site.rofihosted.space
 ```
 
 Everyday commands: `rh status`, `rh ls`, `rh logs <sub>`, `rh secret set <sub> <key>`,
 `rh sql <sub> "<query>"`. Full reference in [`cli/README.md`](cli/README.md).
+
+> **Why backends are operator-only:** every process on the device shares one
+> Termux user, so a deployed backend could read the install pepper and thus all
+> tenants' secrets. Until true isolation exists (a separate compute device),
+> running arbitrary backend code is restricted to the operator. See
+> [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ### Path B — run your own instance
 

@@ -4,6 +4,24 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Security: backend deployment is now operator-only (2026-06-06)
+
+Closes a multi-tenant isolation gap surfaced by an external review. Because all
+Termux processes share one Android UID, a tenant-deployed backend process could
+read the install pepper (`~/.hp-server-secret.bin`) and thereby derive every
+project's secrets, JWT keys, and session HMACs — defeating the documented
+per-project isolation. (Triage: no non-static tenant backend had ever run, so
+the pepper was not exposed; no rotation was required.)
+
+- **Gate:** `/api/projects/create` and `/api/projects/auto-deploy` now reject a
+  non-`static` runtime for non-admin callers (`backend_deploy_operator_only`).
+  The MCP tools and the `/v1/*` project endpoints were already admin-scoped, and
+  project `update` cannot change a runtime, so this closes the tenant path.
+- **Docs:** `docs/SECURITY.md` now states the accurate guarantee — per-project
+  *cryptographic* separation that is not an OS isolation boundary, with backend
+  deploy restricted to the operator. `README.md` positioning corrected: tenants
+  get static hosting + managed DB + auth; backends are operator-only.
+
 ### Fixed + Changed: API keys, CI/CD hardening, docs, and dev workflow (2026-06-06)
 
 **Fixed: API keys created with the `admin` scope were not admin, and keys could not be deleted.**
