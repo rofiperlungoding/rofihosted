@@ -231,7 +231,7 @@
       <div class="form-card">
         <h2>API keys</h2>
         <p class="lead">Tokens for <code>/v1/*</code> endpoints. Different from your operator login (which uses cookies).</p>
-        <p class="hint">A new key is shown once at creation. Save it somewhere safe; we only store its hash. Revoke any time, no grace period.</p>
+        <p class="hint">A new key is shown once at creation. Save it somewhere safe; we only store its hash. Delete any time, no grace period.</p>
 
         <div class="form-row">
           <label class="input-label" for="apikey-name">Key name</label>
@@ -430,7 +430,7 @@
 
     document.getElementById('geoblock-form').addEventListener('submit', function (e) {
       e.preventDefault();
-      var fd = new FormData();
+      var fd = new URLSearchParams();
       fd.append('enabled', document.getElementById('geo-enabled').checked ? 'on' : 'off');
       fd.append('allow', document.getElementById('geo-allow').value);
       fetch('/api/geoblock/update', { method: 'POST', body: fd })
@@ -449,7 +449,7 @@
 
     document.getElementById('honey-form').addEventListener('submit', function (e) {
       e.preventDefault();
-      var fd = new FormData();
+      var fd = new URLSearchParams();
       fd.append('enabled', document.getElementById('honey-enabled').checked ? 'on' : 'off');
       fetch('/api/honeypot/update', { method: 'POST', body: fd })
         .then(function (r) { return r.json(); })
@@ -494,7 +494,7 @@
           return '<span class="pill-sm ' + escHtml(s) + '">' + escHtml(s) + '</span>';
         }).join('');
         var statusHtml = k.revoked ? '<span class="badge-revoked">revoked</span>' : '<span class="badge-active">active</span>';
-        var action = k.revoked ? '' : '<button type="button" class="btn btn-sm" data-id="' + escHtml(k.id) + '">Revoke</button>';
+        var action = k.revoked ? '' : '<button type="button" class="btn btn-sm" data-id="' + escHtml(k.id) + '">Delete</button>';
         tr.innerHTML = '<td>' + escHtml(k.name) + '</td><td>' + scopeHtml + '</td><td>' + fmtTs(k.created_at) + '</td><td>' + (k.last_used ? fmtTs(k.last_used) : 'never') + '</td><td>' + statusHtml + '</td><td>' + action + '</td>';
         var btn = tr.querySelector('button');
         if (btn) btn.addEventListener('click', function () { revokeKey(k.id); });
@@ -505,7 +505,7 @@
       fetch('/api/apikeys').then(function (r) { return r.json(); }).then(function (j) { if (j.ok) renderApikeys(j.keys); }).catch(function () {});
     }
     function revokeKey(id) {
-      var fd = new FormData(); fd.append('id', id);
+      var fd = new URLSearchParams(); fd.append('id', id);
       fetch('/api/apikeys/revoke', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function () { loadApikeys(); });
     }
     document.getElementById('apikey-create-btn').addEventListener('click', function () {
@@ -517,7 +517,7 @@
       if (document.getElementById('apikey-scope-admin').checked) scopes.push('admin');
       if (!scopes.length) { showAlert('apikey-fresh', 'Pick at least one scope.', 'error'); return; }
       this.disabled = true;
-      var fd = new FormData(); fd.append('name', name); fd.append('scopes', scopes.join(','));
+      var fd = new URLSearchParams(); fd.append('name', name); fd.append('scopes', scopes.join(','));
       fetch('/api/apikeys/create', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
         document.getElementById('apikey-create-btn').disabled = false;
         if (!j.ok) { showAlert('apikey-fresh', 'Create failed: ' + escHtml(j.err || 'unknown'), 'error'); return; }
@@ -545,7 +545,7 @@
         tr.innerHTML = '<td>' + escHtml(h.name) + '</td><td style="word-break:break-all; max-width:180px">' + escHtml(h.url) + '</td><td>' + evHtml + '</td><td>' + h.fires + (h.failures ? '/' + h.failures + ' fail' : '') + '</td><td>' + status + '</td><td><button type="button" class="btn btn-sm" data-id="' + escHtml(h.id) + '">Delete</button></td>';
         var btn = tr.querySelector('button');
         if (btn) btn.addEventListener('click', function () {
-          var fd = new FormData(); fd.append('id', h.id);
+          var fd = new URLSearchParams(); fd.append('id', h.id);
           fetch('/api/webhooks/delete', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function () { loadWebhooks(); });
         });
         rows.appendChild(tr);
@@ -560,7 +560,7 @@
       var events = (document.getElementById('wh-events').value || '').trim();
       if (!name || !url || !events) { showAlert('wh-alert', 'Name, URL, and events all required.', 'error'); return; }
       this.disabled = true;
-      var fd = new FormData(); fd.append('name', name); fd.append('url', url); fd.append('events', events);
+      var fd = new URLSearchParams(); fd.append('name', name); fd.append('url', url); fd.append('events', events);
       fetch('/api/webhooks/create', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
         document.getElementById('wh-create-btn').disabled = false;
         if (!j.ok) { showAlert('wh-alert', 'Create failed: ' + escHtml(j.err || 'unknown'), 'error'); return; }

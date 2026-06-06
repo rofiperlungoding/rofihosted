@@ -677,14 +677,14 @@ async function refresh() {
 }
 
 async function blockIp(ip, reason) {
-  const fd = new FormData();
+  const fd = new URLSearchParams();
   fd.append('ip', ip);
   if (reason) fd.append('reason', reason);
   await fetch('/api/security/block', { method: 'POST', body: fd });
   refresh();
 }
 async function unblockIp(ip) {
-  const fd = new FormData();
+  const fd = new URLSearchParams();
   fd.append('ip', ip);
   await fetch('/api/security/unblock', { method: 'POST', body: fd });
   refresh();
@@ -727,7 +727,7 @@ async function openExplain(ip) {
 
   // Try streaming first for live token-by-token UX
   try {
-    const fd = new FormData();
+    const fd = new URLSearchParams();
     fd.append('ip', ip);
     const streamRes = await fetch('/api/ai/explain/stream', { method: 'POST', body: fd });
     if (streamRes.ok && streamRes.headers.get('content-type') && streamRes.headers.get('content-type').indexOf('text/event-stream') >= 0) {
@@ -767,7 +767,7 @@ async function openExplain(ip) {
       }
       // After streaming, also fetch the structured assessment for the pills
       try {
-        const fd2 = new FormData();
+        const fd2 = new URLSearchParams();
         fd2.append('ip', ip);
         const r2 = await fetch('/api/ai/explain', { method: 'POST', body: fd2 });
         if (r2.ok) {
@@ -787,7 +787,7 @@ async function openExplain(ip) {
   // Fallback: structured (non-streaming) explain
   bodyEl.innerHTML = '<span class="digest-loading">Asking the model...</span>';
   try {
-    const fd = new FormData();
+    const fd = new URLSearchParams();
     fd.append('ip', ip);
     const r = await fetch('/api/ai/explain', { method: 'POST', body: fd });
     if (!r.ok) {

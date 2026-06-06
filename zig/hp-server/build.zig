@@ -60,6 +60,7 @@ pub fn build(b: *std.Build) void {
         "src/metrics_test.zig", // also pulls in metrics.zig's own tests
         "src/signuplimit.zig",
         "src/emailverify.zig",
+        "src/apikey.zig", // scope-bits + admin-scope regression guards
     };
     for (test_files) |tf| {
         const unit_test = b.addTest(.{

@@ -264,13 +264,18 @@ pub const Manager = struct {
         return null;
     }
 
+    /// Permanently delete a key by id: the record is removed from memory and
+    /// disk entirely, so it no longer clutters the listing and its hash is gone
+    /// for good (the key can never authenticate again). We delete rather than
+    /// tombstone because operators accumulate many dead keys over time and want
+    /// them actually gone; the audit log retains the revoke event for history.
+    /// Returns true if a record was found and removed.
     pub fn revoke(self: *Manager, id: []const u8) !bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-        for (self.records.items) |*r| {
+        for (self.records.items, 0..) |r, i| {
             if (std.mem.eql(u8, r.id, id)) {
-                if (r.revoked_at != 0) return false;
-                r.revoked_at = std.time.timestamp();
+                _ = self.records.orderedRemove(i);
                 try self.rewriteToDisk();
                 return true;
             }
@@ -401,4 +406,44 @@ test "scope bits roundtrip" {
     };
     try std.testing.expect(r.hasScope(.sql));
     try std.testing.expect(!r.hasScope(.read));
+}
+
+test "admin scope is set and detected independently of sql" {
+    // Regression guard for the create flow: a key built with the admin scope
+    // must report hasScope(.admin) and must NOT silently collapse to sql.
+    var admin_only: u8 = 0;
+    admin_only |= @as(u8, 1) << @intFromEnum(Scope.admin);
+    const ra = Record{
+        .id = "a",
+        .name = "deploy",
+        .hash_hex = [_]u8{'a'} ** HASH_HEX_LEN,
+        .created_at = 0,
+        .last_used = 0,
+        .revoked_at = 0,
+        .scopes_bits = admin_only,
+    };
+    try std.testing.expect(ra.hasScope(.admin));
+    try std.testing.expect(!ra.hasScope(.sql));
+
+    // sql + admin together: both detected.
+    var both: u8 = 0;
+    both |= @as(u8, 1) << @intFromEnum(Scope.sql);
+    both |= @as(u8, 1) << @intFromEnum(Scope.admin);
+    const rb = Record{
+        .id = "b",
+        .name = "mixed",
+        .hash_hex = [_]u8{'a'} ** HASH_HEX_LEN,
+        .created_at = 0,
+        .last_used = 0,
+        .revoked_at = 0,
+        .scopes_bits = both,
+    };
+    try std.testing.expect(rb.hasScope(.sql));
+    try std.testing.expect(rb.hasScope(.admin));
+}
+
+test "Scope.fromString parses admin" {
+    try std.testing.expect(Scope.fromString("admin").? == .admin);
+    try std.testing.expect(Scope.fromString("sql").? == .sql);
+    try std.testing.expect(Scope.fromString("bogus") == null);
 }
