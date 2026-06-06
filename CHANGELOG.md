@@ -4,6 +4,21 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Security: stop leaking the operator session to project apps + webhook SSRF guard (2026-06-06)
+
+- **Reverse proxy:** the proxy no longer forwards the platform session cookie
+  (`rofi_session`) to project backends. Previously, when the operator browsed a
+  tenant's subdomain, the browser sent the `.rofihosted.space` session cookie and
+  the proxy forwarded it to the (untrusted) project process, which could harvest
+  it. Other cookies and `Authorization` (needed by per-project auth) still pass
+  through. (`proxy.zig`)
+- **Webhooks:** `webhook.create` now rejects targets on loopback, link-local
+  (incl. `169.254.169.254` cloud metadata), and private ranges, closing an SSRF
+  path to the control plane (`127.0.0.1:8080`) and internal services.
+  (`webhook.zig`)
+- Both behaviors have unit tests; `proxy.zig` and `webhook.zig` were added to the
+  CI test set.
+
 ### Security: backend deployment is now operator-only (2026-06-06)
 
 Closes a multi-tenant isolation gap surfaced by an external review. Because all

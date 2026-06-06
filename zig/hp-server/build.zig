@@ -61,6 +61,8 @@ pub fn build(b: *std.Build) void {
         "src/signuplimit.zig",
         "src/emailverify.zig",
         "src/apikey.zig", // scope-bits + admin-scope regression guards
+        "src/webhook.zig", // SSRF host-guard tests
+        "src/proxy.zig", // session-cookie stripping tests (needs httpz import)
     };
     for (test_files) |tf| {
         const unit_test = b.addTest(.{
@@ -68,6 +70,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
+        // Some tested modules import httpz; provide it to every test module
+        // (harmless for those that don't use it) so they all compile.
+        unit_test.root_module.addImport("httpz", httpz_dep.module("httpz"));
         const run_unit_test = b.addRunArtifact(unit_test);
         test_step.dependOn(&run_unit_test.step);
     }
