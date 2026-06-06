@@ -7,6 +7,45 @@
 
 ---
 
+## 0. Status update (2026-06-06)
+
+A code-grounded re-audit found several items already resolved in code (the
+original backlog was written from documentation). Current state:
+
+**Resolved (verified in code / shipped via PR):**
+- P0-NEW-1 — tenant backend deploy gated to operator-only; SECURITY.md corrected (#2).
+- API-key admin scope + deletion bug (multipart vs urlencoded form parsing).
+- CI now cross-compiles the device target; deploy gated on green CI.
+- P1-3 — security decisions trust only `cf-connecting-ip` (`main.zig`).
+- P2-4 — rate limiter fails closed; idle eviction runs off the hot path (`ratelimit.zig`).
+- P1-2 — background AI/embedding work runs on a bounded pool, drops when full (`workerpool.zig`).
+- P2-2 — boot-time capability check for `curl`/`sqlite3` (`cap.zig`).
+- SEC-PROXY — proxy no longer forwards the operator session cookie to projects; webhook SSRF guard (#3).
+- SEC-PW — tenant passwords migrated to Argon2id with rehash-on-login (#4).
+- SQL-SENT — sqlite3 result sentinel is now a random nonce, line-anchored (#5).
+- REL-SPOF — single-device SPOF / RTO / RPO documented (`docs/RECOVERY.md`).
+- POS-README — README positioning aligned to the operator-only-backend model.
+
+**Deliberately deferred (with rationale):**
+- P1-1 (de-hardcode Termux paths): `paths.zig` exists but most modules still use
+  literals. Low practical value (the production path is always Termux) versus
+  high churn/risk across ~25 files; defer until a second deploy target is real.
+- P1-4 (remove CSP `unsafe-inline`): requires moving inline scripts out of ~15
+  templates + nonce/hash; high risk of breaking the dashboard without browser
+  testing. Plan as a dedicated, manually QA'd change.
+- P2-1 (decompose `main.zig`): large mechanical churn with no functional gain;
+  do opportunistically alongside feature work, not as a big-bang refactor.
+- P3-3 (silent error suppression): broad `catch {}` sweep; low value, touches
+  dozens of sites. Add logging opportunistically when editing those modules.
+- P3-2 (asset cache-busting from build SHA), P2-5 (SLO/burn-rate), SEC-ENV
+  (R2 least-privilege / at-rest env encryption): need a build templating pass /
+  a Prometheus deployment / Cloudflare token scoping respectively — tracked,
+  not yet scheduled.
+
+The sections below are the original review, retained for context.
+
+---
+
 ## 1. Executive Summary
 
 rofihosted is a single-binary personal cloud platform written in Zig 0.14,
