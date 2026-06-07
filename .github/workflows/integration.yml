@@ -31,11 +31,11 @@ jobs:
         working-directory: zig/hp-server
         run: zig build -Doptimize=Debug
 
-      # The server currently hardcodes the Termux home path for its state files
-      # (pepper, creds, registries) instead of resolving $HOME everywhere
-      # (tracked as P1-1). Provide that directory layout so the real binary can
-      # boot here. When P1-1 is done this prep step can be dropped.
-      - name: Provision Termux-style home for the fixed paths
+      # The pepper now resolves from $HOME, but several other state paths are
+      # still hardcoded to the Termux home (P1-1 in progress). Provision that
+      # layout so the binary boots here until those paths are converted too;
+      # each converted path shrinks what this step needs to create.
+      - name: Provision Termux-style home for the remaining fixed paths
         run: |
           sudo mkdir -p /data/data/com.termux/files/home/data/projects \
                         /data/data/com.termux/files/home/data/dbs \

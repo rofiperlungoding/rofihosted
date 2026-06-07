@@ -5,14 +5,18 @@
 //! they cannot forge session cookies without also having read access to this pepper file.
 //! Both files live on the device only and are owner-readable.
 const std = @import("std");
+const paths = @import("paths.zig");
 
-pub const PEPPER_PATH = "/data/data/com.termux/files/home/.hp-server-secret.bin";
+/// Pepper file name, relative to the resolved home directory (see paths.zig).
+pub const PEPPER_FILE = ".hp-server-secret.bin";
 pub const PEPPER_LEN: usize = 32;
 
 /// Load existing pepper, or generate a new one if file doesn't exist.
 /// Always returns a 32-byte slice in `out`.
 pub fn loadOrInit(out: *[PEPPER_LEN]u8) !void {
-    if (std.fs.openFileAbsolute(PEPPER_PATH, .{})) |file| {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const pepper_path = paths.join(&buf, PEPPER_FILE);
+    if (std.fs.openFileAbsolute(pepper_path, .{})) |file| {
         defer file.close();
         const n = file.readAll(out) catch 0;
         if (n == PEPPER_LEN) return;
@@ -21,7 +25,7 @@ pub fn loadOrInit(out: *[PEPPER_LEN]u8) !void {
 
     // Generate fresh random pepper
     std.crypto.random.bytes(out);
-    const file = try std.fs.createFileAbsolute(PEPPER_PATH, .{ .truncate = true, .mode = 0o600 });
+    const file = try std.fs.createFileAbsolute(pepper_path, .{ .truncate = true, .mode = 0o600 });
     defer file.close();
     try file.writeAll(out);
 }
