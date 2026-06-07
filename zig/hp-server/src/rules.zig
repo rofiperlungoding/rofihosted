@@ -19,8 +19,9 @@
 //! that aren't bounded. Rule engine cannot crash the server.
 const std = @import("std");
 const security = @import("security.zig");
+const paths = @import("paths.zig");
 
-pub const PATH = "/data/data/com.termux/files/home/.hp-server-rules.jsonl";
+const FILE = ".hp-server-rules.jsonl";
 
 pub const Trigger = enum {
     on_visit,
@@ -290,6 +291,8 @@ pub const Engine = struct {
     }
 
     fn loadFromFile(self: *Engine) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |e| switch (e) {
             error.FileNotFound => return,
             else => return e,
@@ -325,13 +328,16 @@ pub const Engine = struct {
     }
 
     fn persistLocked(self: *Engine) !void {
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, FILE);
+        const tmp = paths.join(&tbuf, FILE ++ ".tmp");
         {
             const file = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
             defer file.close();
             try std.json.stringify(self.rules.items, .{ .whitespace = .indent_2 }, file.writer());
             try file.writer().writeByte('\n');
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 };
