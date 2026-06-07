@@ -16,7 +16,7 @@ const std = @import("std");
 const projects = @import("projects.zig");
 const projsecrets = @import("projsecrets.zig");
 
-const HOME = "/data/data/com.termux/files/home";
+const paths = @import("paths.zig");
 
 pub const StepKind = enum {
     clone,
@@ -141,7 +141,7 @@ fn deploy(orch: *Orchestrator, project_id: []const u8) !void {
     var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
     std.fs.makeDirAbsolute(projects.projectsDir(&pdbuf)) catch {};
 
-    const work_dir = try std.fmt.allocPrint(orch.allocator, "{s}/data/projects/{s}", .{ HOME, project_id });
+    const work_dir = try std.fmt.allocPrint(orch.allocator, "{s}/data/projects/{s}", .{ paths.home(), project_id });
     defer orch.allocator.free(work_dir);
     std.fs.makeDirAbsolute(work_dir) catch {};
 
@@ -426,7 +426,7 @@ pub fn verifyGithubSignature(secret: []const u8, signature_header: []const u8, b
 
 /// Tail the last N bytes of the build log. Returns owned slice. Caller frees.
 pub fn tailLog(allocator: std.mem.Allocator, project_id: []const u8, max_bytes: usize) ![]u8 {
-    const path = try std.fmt.allocPrint(allocator, "{s}/data/projects/{s}/logs/build.log", .{ HOME, project_id });
+    const path = try std.fmt.allocPrint(allocator, "{s}/data/projects/{s}/logs/build.log", .{ paths.home(), project_id });
     defer allocator.free(path);
 
     const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
@@ -470,7 +470,7 @@ pub fn listReleases(allocator: std.mem.Allocator, project_id: []const u8) ![][]u
     const releases_dir = try std.fmt.allocPrint(
         allocator,
         "{s}/data/projects/{s}/releases",
-        .{ HOME, project_id },
+        .{ paths.home(), project_id },
     );
     defer allocator.free(releases_dir);
 
@@ -505,7 +505,7 @@ pub fn readCurrentRelease(allocator: std.mem.Allocator, project_id: []const u8) 
     const current = try std.fmt.allocPrint(
         allocator,
         "{s}/data/projects/{s}/current",
-        .{ HOME, project_id },
+        .{ paths.home(), project_id },
     );
     defer allocator.free(current);
     var rbuf: [std.fs.max_path_bytes]u8 = undefined;
@@ -529,7 +529,7 @@ pub fn rollbackTo(allocator: std.mem.Allocator, project_id: []const u8, release_
     const target = try std.fmt.allocPrint(
         allocator,
         "{s}/data/projects/{s}/releases/{s}",
-        .{ HOME, project_id, release_name },
+        .{ paths.home(), project_id, release_name },
     );
     defer allocator.free(target);
 
@@ -540,7 +540,7 @@ pub fn rollbackTo(allocator: std.mem.Allocator, project_id: []const u8, release_
     const current = try std.fmt.allocPrint(
         allocator,
         "{s}/data/projects/{s}/current",
-        .{ HOME, project_id },
+        .{ paths.home(), project_id },
     );
     defer allocator.free(current);
 
@@ -568,7 +568,7 @@ pub fn deployZip(orch: *Orchestrator, project_id: []const u8, archive_path: []co
     const project = orch.projects_mgr.getById(project_id) orelse return error.NotFound;
     if (project.runtime != .static) return error.NotStaticProject;
 
-    const work_dir = try std.fmt.allocPrint(orch.allocator, "{s}/data/projects/{s}", .{ HOME, project_id });
+    const work_dir = try std.fmt.allocPrint(orch.allocator, "{s}/data/projects/{s}", .{ paths.home(), project_id });
     defer orch.allocator.free(work_dir);
     std.fs.makeDirAbsolute(work_dir) catch {};
 

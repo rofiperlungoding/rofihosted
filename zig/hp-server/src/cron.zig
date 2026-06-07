@@ -16,9 +16,9 @@
 const std = @import("std");
 const projects = @import("projects.zig");
 const projsecrets = @import("projsecrets.zig");
+const paths = @import("paths.zig");
 
-const HOME = "/data/data/com.termux/files/home";
-const PATH = HOME ++ "/.hp-server-cron.jsonl";
+const CRON_FILE = ".hp-server-cron.jsonl";
 
 pub const Schedule = union(enum) {
     /// Run every N seconds. Used for short intervals.
@@ -75,6 +75,8 @@ pub const Manager = struct {
     }
 
     fn loadFromDisk(self: *Manager) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, CRON_FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
@@ -123,7 +125,10 @@ pub const Manager = struct {
     }
 
     fn rewriteToDisk(self: *Manager) !void {
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, CRON_FILE);
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const tmp = paths.join(&tbuf, CRON_FILE ++ ".tmp");
         var f = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
         defer f.close();
         var buf = std.ArrayList(u8).init(self.allocator);
@@ -153,7 +158,7 @@ pub const Manager = struct {
             );
             try f.writeAll(buf.items);
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 
     pub fn create(
@@ -334,7 +339,7 @@ pub const Manager = struct {
         const task = found orelse return error.NotFound;
         const project = self.projects_mgr.getById(task.project_id) orelse return error.ProjectNotFound;
 
-        const work_root = try std.fmt.allocPrint(self.allocator, "{s}/data/projects/{s}", .{ HOME, task.project_id });
+        const work_root = try std.fmt.allocPrint(self.allocator, "{s}/data/projects/{s}", .{ paths.home(), task.project_id });
         defer self.allocator.free(work_root);
         const current_dir = try std.fmt.allocPrint(self.allocator, "{s}/current", .{work_root});
         defer self.allocator.free(current_dir);
@@ -379,7 +384,7 @@ pub const Manager = struct {
             const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
             try env_map.put(p[0..eq], p[eq + 1 ..]);
         }
-        const db_path = try std.fmt.allocPrint(self.allocator, "{s}/data/dbs/{s}.db", .{ HOME, task.project_id });
+        const db_path = try std.fmt.allocPrint(self.allocator, "{s}/data/dbs/{s}.db", .{ paths.home(), task.project_id });
         defer self.allocator.free(db_path);
         try env_map.put("ROFI_DB_PATH", db_path);
         try env_map.put("ROFI_PROJECT_ID", task.project_id);
