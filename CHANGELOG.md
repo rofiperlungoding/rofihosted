@@ -4,6 +4,14 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve blocklist, login log, and query store paths from $HOME (P1-1, part 4) (2026-06-06)
+
+`security.zig` (`.hp-server-blocklist.txt`, `data/logins.jsonl`) and `query.zig`
+(`data/visits.jsonl`, `data/uptime.jsonl`) now resolve their paths via
+`paths.zig`. Byte-identical on the phone. Remaining: projects (cross-module
+`PROJECTS_DIR`), projsecrets, projauth, dbcache, supervisor, tunnel_health,
+auth creds, and inline literals in main.zig.
+
 ### Refactor: resolve webhooks + rules store paths from $HOME (P1-1, part 3) (2026-06-06)
 
 `webhook.zig` (`.hp-server-webhooks.jsonl`) and `rules.zig`

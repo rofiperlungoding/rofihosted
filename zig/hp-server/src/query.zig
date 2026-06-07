@@ -6,9 +6,10 @@ const std = @import("std");
 const store = @import("store.zig");
 const security = @import("security.zig");
 const dbcache = @import("dbcache.zig");
+const paths = @import("paths.zig");
 
-const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
-const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
+const visits_file = "data/visits.jsonl";
+const uptime_file = "data/uptime.jsonl";
 
 pub const ExecuteContext = struct {
     blocklist: *security.Blocklist,
@@ -182,6 +183,8 @@ fn execCountVisitsFromJsonl(
     since_seconds: i64,
 ) !void {
     const since = std.time.timestamp() - since_seconds;
+    var vbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const visits_path = paths.join(&vbuf, visits_file);
     ctx.store_mutex.lock();
     const visits = store.readVisits(allocator, visits_path, 50000) catch {
         ctx.store_mutex.unlock();
@@ -255,6 +258,8 @@ fn execListTop(
     // Fallback: scan JSONL
     const since = std.time.timestamp() - since_seconds;
 
+    var vbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const visits_path = paths.join(&vbuf, visits_file);
     ctx.store_mutex.lock();
     const visits = store.readVisits(allocator, visits_path, 50000) catch {
         ctx.store_mutex.unlock();
@@ -388,6 +393,8 @@ fn execShowUptime(
     explanation: []const u8,
     out: *std.ArrayList(u8),
 ) !void {
+    var ubuf: [std.fs.max_path_bytes]u8 = undefined;
+    const uptime_path = paths.join(&ubuf, uptime_file);
     ctx.store_mutex.lock();
     const records = store.readLatestUptime(allocator, uptime_path) catch {
         ctx.store_mutex.unlock();
