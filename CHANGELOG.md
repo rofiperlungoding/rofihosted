@@ -4,6 +4,16 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve dbcache + hosted-sites roots from HOME (P1-1, part 11) (2026-06-08)
+
+`dbcache.zig` (the SQLite visits-cache DB) and `hosted.zig` (the static-site
+hosting root) no longer embed a Termux home literal. The cross-module
+constants `dbcache.PATH` and `hosted.HOSTED_ROOT` become the accessors
+`dbcache.dbPath()` and `hosted.hostedRoot()`, which resolve once from HOME via
+`paths.zig` and cache the result (callers in `main.zig` updated). Resolution
+happens after `paths.init()` at startup, so it is byte-identical on the phone.
+Remaining: the inline literals in main.zig.
+
 ### Refactor: resolve cron + builder paths from HOME (P1-1, part 10) (2026-06-08)
 
 `cron.zig` (the `.hp-server-cron.jsonl` store plus the per-task work-root and
