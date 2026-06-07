@@ -4,6 +4,20 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve the pepper path from $HOME, not a hardcoded Termux literal (P1-1, part 1) (2026-06-06)
+
+The integration smoke test (added the same day) revealed the server could not
+boot anywhere but Termux: `secret.zig` created the pepper at a hardcoded
+`/data/data/com.termux/files/home/...` path that does not exist on other hosts.
+`secret.zig` now resolves the pepper file from the home directory via
+`paths.zig` (which reads `$HOME` once at startup, falling back to the Termux
+home). On the phone `$HOME` is the Termux home, so the resolved path is
+byte-identical to the old literal — no behavior change, no pepper regeneration.
+The smoke workflow now boots the server against a throwaway `$HOME` with **no**
+Termux directory provisioning, proving portability. Remaining hardcoded state
+paths (users, projects, api keys, blocklist, data logs) are tracked as the next
+P1-1 increments.
+
 ### CI: integration smoke test (2026-06-06)
 
 Adds a separate, non-required `integration-smoke` workflow that builds the

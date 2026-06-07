@@ -31,17 +31,10 @@ jobs:
         working-directory: zig/hp-server
         run: zig build -Doptimize=Debug
 
-      # The server currently hardcodes the Termux home path for its state files
-      # (pepper, creds, registries) instead of resolving $HOME everywhere
-      # (tracked as P1-1). Provide that directory layout so the real binary can
-      # boot here. When P1-1 is done this prep step can be dropped.
-      - name: Provision Termux-style home for the fixed paths
-        run: |
-          sudo mkdir -p /data/data/com.termux/files/home/data/projects \
-                        /data/data/com.termux/files/home/data/dbs \
-                        /data/data/com.termux/files/home/logs
-          sudo chmod -R 777 /data/data/com.termux/files
-
+      # No Termux-style directory provisioning: the server must boot purely
+      # from the $HOME the smoke script sets. This proves the pepper path
+      # (and the rest, as P1-1 progresses) resolves from $HOME, not a hardcoded
+      # Termux location.
       - name: Boot + smoke test
         working-directory: zig/hp-server
         run: bash ../../scripts/smoke-test.sh zig-out/bin/hp-server
