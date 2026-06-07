@@ -7,6 +7,7 @@
 const std = @import("std");
 const hostinfo = @import("hostinfo.zig");
 const events = @import("events.zig");
+const paths = @import("paths.zig");
 
 pub const State = enum {
     healthy, // at least one active HA connection
@@ -88,8 +89,9 @@ fn attemptRestart(allocator: std.mem.Allocator) !void {
     // separate watchdog (~/watchdog.sh) or the operator to restart cloudflared.
     // For now, just log via a marker file so the operator can see the watchdog acted.
     std.log.warn("tunnel_health: tunnel down >120s, watchdog will trigger restart marker", .{});
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
     const file = std.fs.createFileAbsolute(
-        "/data/data/com.termux/files/home/data/.tunnel-restart-requested",
+        paths.join(&pbuf, "data/.tunnel-restart-requested"),
         .{ .truncate = true, .mode = 0o600 },
     ) catch return;
     defer file.close();
