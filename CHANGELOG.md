@@ -4,6 +4,13 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve invites, fingerprints, audit, AI-call log paths from $HOME (P1-1, part 8) (2026-06-06)
+
+`invites.zig`, `fingerprint.zig`, `audit.zig`, and `ai.zig` (call log) now
+resolve their store paths via `paths.zig`. Byte-identical on the phone.
+Remaining: dbcache, cron, builder, embeddings, honeypot, geoblock, hosted,
+files, and inline literals in main.zig.
+
 ### Refactor: resolve project secrets, auth DB, and supervisor paths from $HOME (P1-1, part 7) (2026-06-06)
 
 `projsecrets.zig` (secrets vault), `projauth.zig` (per-project auth DB dir; the

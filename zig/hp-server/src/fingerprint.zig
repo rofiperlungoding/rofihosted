@@ -8,8 +8,9 @@
 //! Persisted at ~/.hp-server-fingerprints.jsonl.
 
 const std = @import("std");
+const paths = @import("paths.zig");
 
-const PATH = "/data/data/com.termux/files/home/.hp-server-fingerprints.jsonl";
+const FILE = ".hp-server-fingerprints.jsonl";
 
 pub const Fingerprint = struct {
     hash: []const u8, // SHA256 hex of combined fingerprint data
@@ -51,6 +52,8 @@ pub const Manager = struct {
     }
 
     fn loadFromDisk(self: *Manager) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |e| switch (e) {
             error.FileNotFound => return,
             else => return e,
@@ -107,7 +110,10 @@ pub const Manager = struct {
     }
 
     fn rewriteToDisk(self: *Manager) !void {
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, FILE);
+        const tmp = paths.join(&tbuf, FILE ++ ".tmp");
         var f = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
         defer f.close();
         var buf = std.ArrayList(u8).init(self.allocator);
@@ -142,7 +148,7 @@ pub const Manager = struct {
             try w.writeAll("}\n");
             try f.writeAll(buf.items);
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 
     /// Check if a fingerprint can signup. Returns true if allowed, false if

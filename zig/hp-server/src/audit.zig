@@ -3,8 +3,9 @@
 //! this file only contains explicit operator actions like Block IP, Unblock,
 //! Change Credentials, Generate Digest, etc.
 const std = @import("std");
+const paths = @import("paths.zig");
 
-pub const AUDIT_PATH = "/data/data/com.termux/files/home/data/audit.jsonl";
+const AUDIT_FILE = "data/audit.jsonl";
 
 pub const Entry = struct {
     timestamp: i64,
@@ -16,6 +17,8 @@ pub const Entry = struct {
 };
 
 pub fn append(entry: Entry) void {
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const AUDIT_PATH = paths.join(&pbuf, AUDIT_FILE);
     const file = std.fs.cwd().createFile(AUDIT_PATH, .{ .read = false, .truncate = false }) catch return;
     defer file.close();
     file.seekFromEnd(0) catch return;
@@ -28,6 +31,8 @@ pub fn append(entry: Entry) void {
 }
 
 pub fn read(allocator: std.mem.Allocator, limit: usize) ![]Entry {
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const AUDIT_PATH = paths.join(&pbuf, AUDIT_FILE);
     const file = std.fs.cwd().openFile(AUDIT_PATH, .{}) catch |err| switch (err) {
         error.FileNotFound => return try allocator.alloc(Entry, 0),
         else => return err,

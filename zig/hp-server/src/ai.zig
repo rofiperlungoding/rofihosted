@@ -14,6 +14,7 @@
 //! Never the credential file, never visit-log content beyond what the operator explicitly
 //! triggers (e.g. "Explain this IP" button).
 const std = @import("std");
+const paths = @import("paths.zig");
 
 const CHAT_URL = "https://api.mistral.ai/v1/chat/completions";
 const EMBED_URL = "https://api.mistral.ai/v1/embeddings";
@@ -35,7 +36,7 @@ pub const EMBED_DIM: usize = 1024;
 const TIMEOUT_SECONDS: u32 = 25;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
-const AI_CALLS_LOG = "/data/data/com.termux/files/home/data/ai-calls.jsonl";
+const AI_CALLS_FILE = "data/ai-calls.jsonl";
 
 pub const Config = struct {
     key: ?[]u8,
@@ -126,6 +127,8 @@ pub const TokenBucket = struct {
 // Observability log
 // =================================================================
 fn appendCallLog(feature: []const u8, model: []const u8, prompt_tokens: u64, completion_tokens: u64, latency_ms: i64, status: []const u8) void {
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const AI_CALLS_LOG = paths.join(&pbuf, AI_CALLS_FILE);
     const file = std.fs.cwd().createFile(AI_CALLS_LOG, .{ .read = false, .truncate = false }) catch return;
     defer file.close();
     file.seekFromEnd(0) catch return;
