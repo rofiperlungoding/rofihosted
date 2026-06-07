@@ -4,6 +4,14 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve operator creds + tunnel marker paths from $HOME (P1-1, part 5) (2026-06-06)
+
+`auth.zig` (`.hp-server-creds.txt`, the legacy operator credentials) and
+`tunnel_health.zig` (`data/.tunnel-restart-requested` marker) now resolve via
+`paths.zig`. Byte-identical on the phone, so operator login is unaffected.
+Remaining: projects + dbcache (both expose paths cross-module), projsecrets,
+projauth, supervisor, and inline literals in main.zig.
+
 ### Refactor: resolve blocklist, login log, and query store paths from $HOME (P1-1, part 4) (2026-06-06)
 
 `security.zig` (`.hp-server-blocklist.txt`, `data/logins.jsonl`) and `query.zig`

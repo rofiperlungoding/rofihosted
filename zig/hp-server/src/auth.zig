@@ -17,10 +17,11 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const users = @import("users.zig");
+const paths = @import("paths.zig");
 
 const COOKIE_NAME = "rofi_session";
 const SESSION_TTL_SECONDS: i64 = 60 * 60 * 24 * 7; // 7 days
-const CREDS_PATH = "/data/data/com.termux/files/home/.hp-server-creds.txt";
+const CREDS_FILE = ".hp-server-creds.txt";
 
 pub const Config = struct {
     mutex: std.Thread.Mutex,
@@ -106,6 +107,8 @@ pub const Config = struct {
 const Creds = struct { user: []u8, pass: []u8 };
 
 fn loadFromFile(allocator: std.mem.Allocator) !Creds {
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const CREDS_PATH = paths.join(&pbuf, CREDS_FILE);
     const file = try std.fs.openFileAbsolute(CREDS_PATH, .{});
     defer file.close();
     const data = try file.readToEndAlloc(allocator, 8192);
@@ -122,13 +125,16 @@ fn loadFromFile(allocator: std.mem.Allocator) !Creds {
 }
 
 fn saveToFile(user: []const u8, pass: []const u8) !void {
-    const tmp_path = CREDS_PATH ++ ".tmp";
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = paths.join(&pbuf, CREDS_FILE);
+    const tmp_path = paths.join(&tbuf, CREDS_FILE ++ ".tmp");
     {
         const tmp = try std.fs.createFileAbsolute(tmp_path, .{ .truncate = true, .mode = 0o600 });
         defer tmp.close();
         try tmp.writer().print("{s}\n{s}\n", .{ user, pass });
     }
-    try std.fs.renameAbsolute(tmp_path, CREDS_PATH);
+    try std.fs.renameAbsolute(tmp_path, real_path);
 }
 
 fn b64Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
