@@ -73,10 +73,14 @@ flowchart TD
 
 ### Password storage
 
-Multi-user passwords are stored as `HMAC-SHA256(pepper, salt || ":" ||
-password)` with a 16-byte random salt per user, hex-encoded in the record.
-Login comparison is constant-time. (A migration to a memory-hard function such
-as Argon2id is desirable and noted as future work.)
+Multi-user passwords are hashed with **Argon2id**
+(`std.crypto.pwhash.argon2`, tuned to ~19 MiB, 2 iterations, 1 lane), stored as
+a PHC string that embeds its own salt and parameters. Before hashing, the
+password is bound to the install pepper via HMAC-SHA256, so a leaked hash file
+is useless without the separately stored pepper. Legacy records created before
+this migration used `HMAC-SHA256(pepper, salt || ":" || password)`; they are
+verified in constant time and transparently re-hashed to Argon2id on the next
+successful login.
 
 ### The pepper
 

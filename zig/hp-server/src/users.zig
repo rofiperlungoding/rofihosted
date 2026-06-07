@@ -16,9 +16,11 @@
 //!  - self:    user submitted /signup without a code; status=pending until
 //!             an admin clicks Approve in /admin/users.
 //!
-//! Password hashing: HMAC-SHA256(pepper, salt || ":" || password). 16-byte
-//! random salt per user, hex-encoded in the row. Pepper is the same one
-//! auth.zig uses (stored at ~/.hp-server-secret.bin, mode 600).
+//! Password hashing: Argon2id (std.crypto.pwhash.argon2) over a pepper-bound
+//! input; the PHC string embeds its own salt and params. Legacy HMAC-SHA256
+//! records are verified with a constant-time fallback and re-hashed to Argon2id
+//! on the next successful login. Pepper is the same one auth.zig uses (stored
+//! at ~/.hp-server-secret.bin, mode 600).
 
 const std = @import("std");
 

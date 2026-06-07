@@ -4,6 +4,17 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Docs: correct password-hashing description to match the implementation (2026-06-06)
+
+A source-grounded re-audit of the external review found most code findings were
+already implemented (bounded worker pool, Argon2id, boot capability checks,
+collision-safe sqlite sentinel, proxy session-cookie stripping, fail-closed rate
+limiter, cf-connecting-ip-only). The remaining mismatch was documentation:
+`docs/SECURITY.md` and the `users.zig` header still described password hashing
+as HMAC-SHA256 with Argon2id as "future work". Both now accurately describe the
+shipped Argon2id hashing (pepper-bound, PHC string) with constant-time legacy
+fallback and rehash-on-login. No behavior change.
+
 ### Reliability (P0-1): procguard waits out the previous instance on restart (2026-06-06)
 
 Self-update restarts were racing the single-instance lock: the incoming binary
