@@ -4,6 +4,16 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### CI: integration smoke test (2026-06-06)
+
+Adds a separate, non-required `integration-smoke` workflow that builds the
+server, boots it against a throwaway `HOME`, and asserts it actually serves
+(`/health`, apex landing, a static asset, `status /api/status`, and that the
+admin host returns an auth response rather than a 5xx). This catches
+runtime/init/route regressions that the build-only `zig-ci` cannot. It is
+deliberately *not* part of branch protection, so a flaky run never blocks a
+merge. Reusable script at `scripts/smoke-test.sh`.
+
 ### Docs: correct password-hashing description to match the implementation (2026-06-06)
 
 A source-grounded re-audit of the external review found most code findings were

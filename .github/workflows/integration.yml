@@ -1,0 +1,36 @@
+name: integration-smoke
+
+# Boots the actual server binary and asserts it serves. This is a SEPARATE,
+# non-required workflow: it is not part of the branch-protection gate, so a
+# flaky run can never block a merge. It catches runtime/init/route regressions
+# that the build-only zig-ci cannot.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.14.0
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+
+      - name: Ensure runtime deps (curl, sqlite3)
+        run: |
+          curl --version >/dev/null
+          sqlite3 -version >/dev/null || sudo apt-get update && sudo apt-get install -y sqlite3
+
+      - name: Build (Debug, native)
+        working-directory: zig/hp-server
+        run: zig build -Doptimize=Debug
+
+      - name: Boot + smoke test
+        working-directory: zig/hp-server
+        run: bash ../../scripts/smoke-test.sh zig-out/bin/hp-server
