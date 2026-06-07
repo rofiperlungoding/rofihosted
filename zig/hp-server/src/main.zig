@@ -7951,7 +7951,8 @@ fn apiProjectsDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void
             purged_files = true;
         }
         // Per-project auth/data DB.
-        const db_path = std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ projauth.DBS_DIR, id }) catch null;
+        var dbsbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const db_path = std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ projauth.dbsDir(&dbsbuf), id }) catch null;
         if (db_path) |p| {
             std.fs.deleteFileAbsolute(p) catch |err| switch (err) {
                 error.FileNotFound => {},

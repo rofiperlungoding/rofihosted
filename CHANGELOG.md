@@ -4,6 +4,16 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve project secrets, auth DB, and supervisor paths from $HOME (P1-1, part 7) (2026-06-06)
+
+`projsecrets.zig` (secrets vault), `projauth.zig` (per-project auth DB dir; the
+cross-module `DBS_DIR` constant becomes `projauth.dbsDir(buf)`, updating the
+project-purge path in `main.zig`), and `supervisor.zig` (project work dir, DB,
+pid, and runtime-log paths) now resolve from `$HOME` via `paths.zig`.
+Byte-identical on the phone. Remaining: dbcache, cron, builder, and the
+single-const modules (audit, ai, embeddings, honeypot, geoblock, fingerprint,
+invites, hosted, files) plus inline literals in main.zig.
+
 ### Refactor: resolve the projects registry + working dir from $HOME (P1-1, part 6) (2026-06-06)
 
 `projects.zig` no longer hardcodes the Termux path for the project registry

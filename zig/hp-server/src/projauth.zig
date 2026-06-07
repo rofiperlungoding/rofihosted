@@ -25,8 +25,15 @@
 //! {"sub":<user_id>,"email":<email>,"iat":<unix>,"exp":<unix>}.
 const std = @import("std");
 const dbpool = @import("dbpool.zig");
+const paths = @import("paths.zig");
 
-pub const DBS_DIR = "/data/data/com.termux/files/home/data/dbs";
+const DBS_SUBDIR = "data/dbs";
+
+/// Absolute path to the per-project DB directory, resolved from $HOME.
+/// Caller provides the buffer. Replaces the old hardcoded `DBS_DIR` constant.
+pub fn dbsDir(buf: []u8) []const u8 {
+    return paths.join(buf, DBS_SUBDIR);
+}
 
 pub const Error = error{
     InvalidEmail,
@@ -49,6 +56,8 @@ pub const Service = struct {
     }
 
     fn dbPath(self: *Service, project_id: []const u8) ![]u8 {
+        var dbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const DBS_DIR = paths.join(&dbuf, DBS_SUBDIR);
         std.fs.makeDirAbsolute(DBS_DIR) catch {};
         return std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ DBS_DIR, project_id });
     }

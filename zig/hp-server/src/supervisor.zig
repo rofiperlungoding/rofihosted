@@ -18,8 +18,8 @@
 const std = @import("std");
 const projects = @import("projects.zig");
 const projsecrets = @import("projsecrets.zig");
+const paths = @import("paths.zig");
 
-const HOME = "/data/data/com.termux/files/home";
 const RUNTIME_LOG_MAX: u64 = 1 * 1024 * 1024; // 1 MB before truncation
 
 pub const ProcessState = enum {
@@ -114,7 +114,7 @@ pub const Supervisor = struct {
 
         // Resolve cwd: prefer ~/data/projects/<id>/current/ if symlink exists,
         // else ~/data/projects/<id>/repo/.
-        const work_root = try std.fmt.allocPrint(self.allocator, "{s}/data/projects/{s}", .{ HOME, project_id });
+        const work_root = try std.fmt.allocPrint(self.allocator, "{s}/data/projects/{s}", .{ paths.home(), project_id });
         defer self.allocator.free(work_root);
         const current_dir = try std.fmt.allocPrint(self.allocator, "{s}/current", .{work_root});
         defer self.allocator.free(current_dir);
@@ -155,7 +155,7 @@ pub const Supervisor = struct {
         try env_map.put("HOST", "127.0.0.1");
         // Auto-injected DB path so the project can use a per-tenant SQLite
         // without needing to know about hp-server's storage layout.
-        const db_path = try std.fmt.allocPrint(self.allocator, "{s}/data/dbs/{s}.db", .{ HOME, project_id });
+        const db_path = try std.fmt.allocPrint(self.allocator, "{s}/data/dbs/{s}.db", .{ paths.home(), project_id });
         defer self.allocator.free(db_path);
         try env_map.put("ROFI_DB_PATH", db_path);
 
@@ -527,7 +527,7 @@ fn readRssKb(pid: std.posix.pid_t) u64 {
 }
 
 fn pidFilePath(allocator: std.mem.Allocator, project_id: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}/data/projects/{s}/runtime.pid", .{ HOME, project_id });
+    return std.fmt.allocPrint(allocator, "{s}/data/projects/{s}/runtime.pid", .{ paths.home(), project_id });
 }
 
 fn writePidFile(allocator: std.mem.Allocator, project_id: []const u8, pid: std.posix.pid_t) !void {
@@ -648,7 +648,7 @@ pub fn tailLog(allocator: std.mem.Allocator, project_id: []const u8, max_bytes: 
     const path = try std.fmt.allocPrint(
         allocator,
         "{s}/data/projects/{s}/logs/runtime.log",
-        .{ HOME, project_id },
+        .{ paths.home(), project_id },
     );
     defer allocator.free(path);
     const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
