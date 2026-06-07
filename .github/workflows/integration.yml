@@ -1,0 +1,47 @@
+name: integration-smoke
+
+# Boots the actual server binary and asserts it serves. This is a SEPARATE,
+# non-required workflow: it is not part of the branch-protection gate, so a
+# flaky run can never block a merge. It catches runtime/init/route regressions
+# that the build-only zig-ci cannot.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.14.0
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+
+      - name: Ensure runtime deps (curl, sqlite3)
+        run: |
+          curl --version >/dev/null
+          sqlite3 -version >/dev/null || sudo apt-get update && sudo apt-get install -y sqlite3
+
+      - name: Build (Debug, native)
+        working-directory: zig/hp-server
+        run: zig build -Doptimize=Debug
+
+      # The server currently hardcodes the Termux home path for its state files
+      # (pepper, creds, registries) instead of resolving $HOME everywhere
+      # (tracked as P1-1). Provide that directory layout so the real binary can
+      # boot here. When P1-1 is done this prep step can be dropped.
+      - name: Provision Termux-style home for the fixed paths
+        run: |
+          sudo mkdir -p /data/data/com.termux/files/home/data/projects \
+                        /data/data/com.termux/files/home/data/dbs \
+                        /data/data/com.termux/files/home/logs
+          sudo chmod -R 777 /data/data/com.termux/files
+
+      - name: Boot + smoke test
+        working-directory: zig/hp-server
+        run: bash ../../scripts/smoke-test.sh zig-out/bin/hp-server
