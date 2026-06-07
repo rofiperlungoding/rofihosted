@@ -4,6 +4,18 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve users + api-key store paths from $HOME (P1-1, part 2) (2026-06-06)
+
+`users.zig` (`.hp-server-users.jsonl`) and `apikey.zig` (`.hp-server-apikeys.jsonl`)
+now resolve their store paths from the home directory via `paths.zig` instead of
+a hardcoded Termux literal, using the pattern from part 1 (a local
+`paths.join(buf, FILE)` per file op; `.tmp` atomic-rewrite paths likewise). On
+the phone `$HOME` is the Termux home, so paths are byte-identical — existing
+users and API keys load unchanged (a successful auto-deploy, which authenticates
+with the admin key, confirms the api-key path still resolves). Remaining
+hardcoded paths (projects, webhooks, rules, blocklist, dbcache, data logs) are
+the next increments.
+
 ### Refactor: resolve the pepper path from $HOME, not a hardcoded Termux literal (P1-1, part 1) (2026-06-06)
 
 The integration smoke test (added the same day) revealed the server could not
