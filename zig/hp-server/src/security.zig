@@ -2,6 +2,7 @@
 //! Default stance: untrusted. Only authenticated requests are "self".
 //! Everything else gets scrutinized.
 const std = @import("std");
+const paths = @import("paths.zig");
 
 pub const Classification = enum {
     /// Authenticated as the operator - rofi himself
@@ -104,7 +105,7 @@ pub fn classify(s: RequestSignals) Classification {
 // IP Blocklist (persistent)
 // =================================================================
 
-const BLOCKLIST_PATH = "/data/data/com.termux/files/home/.hp-server-blocklist.txt";
+const BLOCKLIST_FILE = ".hp-server-blocklist.txt";
 
 pub const Blocklist = struct {
     mutex: std.Thread.Mutex,
@@ -219,6 +220,8 @@ pub const Blocklist = struct {
     }
 
     fn loadFromFile(self: *Blocklist) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const BLOCKLIST_PATH = paths.join(&pbuf, BLOCKLIST_FILE);
         const file = std.fs.openFileAbsolute(BLOCKLIST_PATH, .{}) catch |e| switch (e) {
             error.FileNotFound => return,
             else => return e,
@@ -255,7 +258,10 @@ pub const Blocklist = struct {
     }
 
     fn persistLocked(self: *Blocklist) !void {
-        const tmp = BLOCKLIST_PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, BLOCKLIST_FILE);
+        const tmp = paths.join(&tbuf, BLOCKLIST_FILE ++ ".tmp");
         {
             const file = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
             defer file.close();
@@ -271,7 +277,7 @@ pub const Blocklist = struct {
                 });
             }
         }
-        try std.fs.renameAbsolute(tmp, BLOCKLIST_PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 };
 
@@ -407,7 +413,7 @@ pub const LoginAttempt = struct {
     success: bool,
 };
 
-const LOGIN_LOG_PATH = "/data/data/com.termux/files/home/data/logins.jsonl";
+const LOGIN_LOG_FILE = "data/logins.jsonl";
 
 pub const LoginTracker = struct {
     mutex: std.Thread.Mutex,
@@ -452,7 +458,8 @@ pub const LoginTracker = struct {
             .username = username,
             .success = success,
         };
-        appendJsonLine(LOGIN_LOG_PATH, visit) catch {};
+        var login_buf: [std.fs.max_path_bytes]u8 = undefined;
+        appendJsonLine(paths.join(&login_buf, LOGIN_LOG_FILE), visit) catch {};
 
         // Track failures
         if (!success) {
@@ -508,6 +515,8 @@ fn appendJsonLine(path: []const u8, value: anytype) !void {
 }
 
 pub fn readLoginAttempts(allocator: std.mem.Allocator, limit: usize) ![]LoginAttempt {
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const LOGIN_LOG_PATH = paths.join(&pbuf, LOGIN_LOG_FILE);
     const file = std.fs.cwd().openFile(LOGIN_LOG_PATH, .{}) catch |err| switch (err) {
         error.FileNotFound => return try allocator.alloc(LoginAttempt, 0),
         else => return err,
