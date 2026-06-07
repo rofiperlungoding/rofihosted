@@ -4,6 +4,15 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve webhooks + rules store paths from $HOME (P1-1, part 3) (2026-06-06)
+
+`webhook.zig` (`.hp-server-webhooks.jsonl`) and `rules.zig`
+(`.hp-server-rules.jsonl`) now resolve their store paths via `paths.zig`, same
+pattern as parts 1-2. Byte-identical on the phone; no behavior change. Remaining
+hardcoded paths: projects (registry + project dirs, used cross-module),
+security (blocklist/login log), projsecrets, projauth, query, dbcache,
+supervisor, tunnel_health, auth creds, and inline literals in main.zig.
+
 ### Refactor: resolve users + api-key store paths from $HOME (P1-1, part 2) (2026-06-06)
 
 `users.zig` (`.hp-server-users.jsonl`) and `apikey.zig` (`.hp-server-apikeys.jsonl`)

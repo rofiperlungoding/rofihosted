@@ -14,8 +14,9 @@
 //! Reliability: best-effort, no retry queue. Failures logged via std.log only.
 //! For high-stakes alerting, run two webhooks pointing at independent endpoints.
 const std = @import("std");
+const paths = @import("paths.zig");
 
-const PATH = "/data/data/com.termux/files/home/.hp-server-webhooks.jsonl";
+const FILE = ".hp-server-webhooks.jsonl";
 const TIMEOUT_MS: u64 = 5_000;
 
 pub const EventType = enum {
@@ -95,6 +96,8 @@ pub const Manager = struct {
     }
 
     fn loadFromDisk(self: *Manager) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
@@ -135,7 +138,10 @@ pub const Manager = struct {
     }
 
     fn rewriteToDisk(self: *Manager) !void {
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, FILE);
+        const tmp = paths.join(&tbuf, FILE ++ ".tmp");
         var f = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
         defer f.close();
         var buf = std.ArrayList(u8).init(self.allocator);
@@ -165,7 +171,7 @@ pub const Manager = struct {
             try w.writeAll("]}\n");
             try f.writeAll(buf.items);
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 
     pub fn create(self: *Manager, name: []const u8, url: []const u8, events: []const EventType) ![]const u8 {
