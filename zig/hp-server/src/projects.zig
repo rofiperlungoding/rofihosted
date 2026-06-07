@@ -22,9 +22,17 @@
 
 const std = @import("std");
 const pathsafe = @import("pathsafe.zig");
+const paths = @import("paths.zig");
 
-pub const PROJECTS_PATH = "/data/data/com.termux/files/home/.hp-server-projects.jsonl";
-pub const PROJECTS_DIR = "/data/data/com.termux/files/home/data/projects";
+const PROJECTS_REGISTRY_FILE = ".hp-server-projects.jsonl";
+const PROJECTS_SUBDIR = "data/projects";
+
+/// Absolute path to the projects working-tree directory, resolved from $HOME.
+/// Caller provides the buffer (no allocation). Replaces the old hardcoded
+/// `PROJECTS_DIR` constant; used cross-module (main, builder).
+pub fn projectsDir(buf: []u8) []const u8 {
+    return paths.join(buf, PROJECTS_SUBDIR);
+}
 
 pub const Runtime = enum {
     static,
@@ -149,7 +157,8 @@ pub const Manager = struct {
             .projects = std.ArrayList(Project).init(allocator),
             .arena_state = std.heap.ArenaAllocator.init(allocator),
         };
-        std.fs.makeDirAbsolute(PROJECTS_DIR) catch {};
+        var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
+        std.fs.makeDirAbsolute(projectsDir(&pdbuf)) catch {};
         try m.loadFromDisk();
         return m;
     }
@@ -160,6 +169,8 @@ pub const Manager = struct {
     }
 
     fn loadFromDisk(self: *Manager) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PROJECTS_PATH = paths.join(&pbuf, PROJECTS_REGISTRY_FILE);
         const file = std.fs.openFileAbsolute(PROJECTS_PATH, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
@@ -229,7 +240,10 @@ pub const Manager = struct {
     }
 
     fn rewriteToDisk(self: *Manager) !void {
-        const tmp = PROJECTS_PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, PROJECTS_REGISTRY_FILE);
+        const tmp = paths.join(&tbuf, PROJECTS_REGISTRY_FILE ++ ".tmp");
         var f = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
         defer f.close();
         var buf = std.ArrayList(u8).init(self.allocator);
@@ -240,7 +254,7 @@ pub const Manager = struct {
             try buf.append('\n');
             try f.writeAll(buf.items);
         }
-        try std.fs.renameAbsolute(tmp, PROJECTS_PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 
     /// Reserve a free port in [PORT_RANGE_LO, PORT_RANGE_HI] not used by any
@@ -333,7 +347,8 @@ pub const Manager = struct {
         try self.rewriteToDisk();
 
         // Pre-create the project working dir so secrets vault has a place to live.
-        const proj_dir = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ PROJECTS_DIR, project.id });
+        var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const proj_dir = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ projectsDir(&pdbuf), project.id });
         defer self.allocator.free(proj_dir);
         std.fs.makeDirAbsolute(proj_dir) catch {};
         const logs_dir = try std.fmt.allocPrint(self.allocator, "{s}/logs", .{proj_dir});
@@ -456,7 +471,8 @@ pub const Manager = struct {
     }
 
     pub fn workingDir(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
-        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ PROJECTS_DIR, id });
+        var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ projectsDir(&pdbuf), id });
     }
 };
 

@@ -4,6 +4,16 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve the projects registry + working dir from $HOME (P1-1, part 6) (2026-06-06)
+
+`projects.zig` no longer hardcodes the Termux path for the project registry
+(`.hp-server-projects.jsonl`) or the working-tree directory. The cross-module
+`PROJECTS_DIR` constant is replaced by `projects.projectsDir(buf)` (resolves
+`data/projects` from `$HOME`); callers in `main.zig` (static serving, project
+delete) and `builder.zig` updated accordingly. Byte-identical on the phone.
+Remaining: dbcache (`cache.db`, used by dbpool), projsecrets, projauth,
+supervisor, and inline literals in main.zig.
+
 ### Refactor: resolve operator creds + tunnel marker paths from $HOME (P1-1, part 5) (2026-06-06)
 
 `auth.zig` (`.hp-server-creds.txt`, the legacy operator credentials) and
