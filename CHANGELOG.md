@@ -4,6 +4,14 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve cron + builder paths from HOME (P1-1, part 10) (2026-06-08)
+
+`cron.zig` (the `.hp-server-cron.jsonl` store plus the per-task work-root and
+DB paths) and `builder.zig` (project work, release, current, and build-log
+paths) now resolve via `paths.zig` instead of an embedded Termux home literal.
+Byte-identical on the phone. Remaining: dbcache, hosted, and the inline
+literals in main.zig.
+
 ### Refactor: resolve honeypot, geoblock, embeddings, file-browser paths from $HOME (P1-1, part 9) (2026-06-06)
 
 `honeypot.zig`, `geoblock.zig`, `embeddings.zig`, and `files.zig` (the file
