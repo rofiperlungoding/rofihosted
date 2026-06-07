@@ -7099,10 +7099,11 @@ fn tryServeProjectStatic(app: *App, project: projects.Project, req_path: []const
 
     const lookup = if (req_path.len == 1 and req_path[0] == '/') "/index.html" else req_path;
 
+    var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
     const proj_root = try std.fmt.allocPrint(
         res.arena,
         "{s}/{s}/current",
-        .{ projects.PROJECTS_DIR, project.id },
+        .{ projects.projectsDir(&pdbuf), project.id },
     );
 
     // Confirm current/ exists
@@ -7941,7 +7942,8 @@ fn apiProjectsDelete(app: *App, req: *httpz.Request, res: *httpz.Response) !void
     var purged_db = false;
     if (purge) {
         // Working tree (also contains secrets.bin and any logs under the project dir).
-        const proj_dir = std.fmt.allocPrint(res.arena, "{s}/{s}", .{ projects.PROJECTS_DIR, id }) catch null;
+        var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const proj_dir = std.fmt.allocPrint(res.arena, "{s}/{s}", .{ projects.projectsDir(&pdbuf), id }) catch null;
         if (proj_dir) |dir| {
             std.fs.deleteTreeAbsolute(dir) catch |err| {
                 std.log.warn("project_purge: deleteTreeAbsolute({s}) failed: {s}", .{ dir, @errorName(err) });

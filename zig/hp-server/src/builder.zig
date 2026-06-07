@@ -138,7 +138,8 @@ fn deploy(orch: *Orchestrator, project_id: []const u8) !void {
 
     // Ensure the projects parent dir exists. It might have been removed by
     // an operator script between server start and now.
-    std.fs.makeDirAbsolute(projects.PROJECTS_DIR) catch {};
+    var pdbuf: [std.fs.max_path_bytes]u8 = undefined;
+    std.fs.makeDirAbsolute(projects.projectsDir(&pdbuf)) catch {};
 
     const work_dir = try std.fmt.allocPrint(orch.allocator, "{s}/data/projects/{s}", .{ HOME, project_id });
     defer orch.allocator.free(work_dir);
