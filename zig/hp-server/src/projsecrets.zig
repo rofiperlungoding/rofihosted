@@ -14,6 +14,7 @@
 //! Key derivation: HKDF-SHA256 of (pepper || ":secrets:" || project_id) -> 32 bytes.
 
 const std = @import("std");
+const paths = @import("paths.zig");
 
 const MAGIC = "RHS1";
 const NONCE_LEN: usize = 12;
@@ -34,8 +35,8 @@ pub const Error = error{
 pub fn vaultPath(allocator: std.mem.Allocator, project_id: []const u8) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "/data/data/com.termux/files/home/data/projects/{s}/secrets.bin",
-        .{project_id},
+        "{s}/data/projects/{s}/secrets.bin",
+        .{ paths.home(), project_id },
     );
 }
 
