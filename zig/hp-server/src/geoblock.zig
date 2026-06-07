@@ -4,8 +4,9 @@
 //! Persisted to ~/.hp-server-geoblock.txt (single line: "on" or "off",
 //! optional second line with comma-separated country codes to allow).
 const std = @import("std");
+const paths = @import("paths.zig");
 
-pub const PATH = "/data/data/com.termux/files/home/.hp-server-geoblock.txt";
+const FILE = ".hp-server-geoblock.txt";
 
 pub const Config = struct {
     mutex: std.Thread.Mutex,
@@ -72,6 +73,8 @@ pub const Config = struct {
     }
 
     fn loadFromFile(self: *Config) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |e| switch (e) {
             error.FileNotFound => return,
             else => return e,
@@ -95,7 +98,10 @@ pub const Config = struct {
     }
 
     fn persistLocked(self: *Config) !void {
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, FILE);
+        const tmp = paths.join(&tbuf, FILE ++ ".tmp");
         {
             const file = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
             defer file.close();
@@ -107,6 +113,6 @@ pub const Config = struct {
             }
             try w.writeByte('\n');
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 };

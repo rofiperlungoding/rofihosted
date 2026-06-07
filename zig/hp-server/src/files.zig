@@ -2,7 +2,7 @@
 //! returns JSON tree node for given path. Path traversal blocked.
 const std = @import("std");
 
-const root_dir = "/data/data/com.termux/files/home";
+const paths = @import("paths.zig");
 
 pub const Entry = struct {
     name: []const u8,
@@ -16,9 +16,9 @@ pub fn list(allocator: std.mem.Allocator, rel_path: []const u8) ![]Entry {
     if (std.mem.indexOf(u8, rel_path, "..") != null) return error.AccessDenied;
 
     const path = if (rel_path.len == 0 or std.mem.eql(u8, rel_path, "/"))
-        try allocator.dupe(u8, root_dir)
+        try allocator.dupe(u8, paths.home())
     else
-        try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root_dir, std.mem.trimLeft(u8, rel_path, "/") });
+        try std.fmt.allocPrint(allocator, "{s}/{s}", .{ paths.home(), std.mem.trimLeft(u8, rel_path, "/") });
     defer allocator.free(path);
 
     var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
