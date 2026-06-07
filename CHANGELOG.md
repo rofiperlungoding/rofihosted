@@ -4,6 +4,12 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve honeypot, geoblock, embeddings, file-browser paths from $HOME (P1-1, part 9) (2026-06-06)
+
+`honeypot.zig`, `geoblock.zig`, `embeddings.zig`, and `files.zig` (the file
+browser root) now resolve via `paths.zig`. Byte-identical on the phone.
+Remaining: dbcache, cron, builder, hosted, and inline literals in main.zig.
+
 ### Refactor: resolve invites, fingerprints, audit, AI-call log paths from $HOME (P1-1, part 8) (2026-06-06)
 
 `invites.zig`, `fingerprint.zig`, `audit.zig`, and `ai.zig` (call log) now

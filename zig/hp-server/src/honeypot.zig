@@ -7,8 +7,9 @@
 //! do not re-call Mistral for the same probe family.
 const std = @import("std");
 const ai = @import("ai.zig");
+const paths = @import("paths.zig");
 
-pub const PATH = "/data/data/com.termux/files/home/.hp-server-honeypot.txt";
+const FILE = ".hp-server-honeypot.txt";
 
 pub const Config = struct {
     mutex: std.Thread.Mutex,
@@ -48,6 +49,8 @@ pub const Config = struct {
     }
 
     fn loadFromFile(self: *Config) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |e| switch (e) {
             error.FileNotFound => return,
             else => return e,
@@ -62,13 +65,16 @@ pub const Config = struct {
     }
 
     fn persistLocked(self: *Config) !void {
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, FILE);
+        const tmp = paths.join(&tbuf, FILE ++ ".tmp");
         {
             const file = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
             defer file.close();
             try file.writeAll(if (self.enabled) "on\n" else "off\n");
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
     }
 
     /// Lookup or generate a decoy body for the given path. Returns null on AI failure.

@@ -11,8 +11,9 @@
 //! Threadsafe via mutex. Mutations are append-only and persisted lazily.
 const std = @import("std");
 const ai = @import("ai.zig");
+const paths = @import("paths.zig");
 
-pub const PATH = "/data/data/com.termux/files/home/data/embeddings.bin";
+const FILE = "data/embeddings.bin";
 const MAGIC: [4]u8 = .{ 'R', 'E', 'M', 'B' };
 const VERSION: u32 = 1;
 const DIM = ai.EMBED_DIM;
@@ -245,7 +246,10 @@ pub const Store = struct {
         defer self.mutex.unlock();
         if (!self.dirty) return;
 
-        const tmp = PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const real_path = paths.join(&pbuf, FILE);
+        const tmp = paths.join(&tbuf, FILE ++ ".tmp");
         {
             const file = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
             defer file.close();
@@ -266,11 +270,13 @@ pub const Store = struct {
                 }
             }
         }
-        try std.fs.renameAbsolute(tmp, PATH);
+        try std.fs.renameAbsolute(tmp, real_path);
         self.dirty = false;
     }
 
     fn loadFromFile(self: *Store) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const PATH = paths.join(&pbuf, FILE);
         const file = std.fs.openFileAbsolute(PATH, .{}) catch |e| switch (e) {
             error.FileNotFound => return,
             else => return e,
