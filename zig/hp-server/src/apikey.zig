@@ -13,8 +13,9 @@
 //! active keys. With single-digit operator-level keys this is fine.
 const std = @import("std");
 const secret = @import("secret.zig");
+const paths = @import("paths.zig");
 
-const KEYS_PATH = "/data/data/com.termux/files/home/.hp-server-apikeys.jsonl";
+const KEYS_FILE = ".hp-server-apikeys.jsonl";
 
 pub const KEY_PREFIX = "rh_";
 pub const RAW_KEY_BYTES: usize = 24; // -> 48 hex chars
@@ -95,6 +96,8 @@ pub const Manager = struct {
     }
 
     fn loadFromDisk(self: *Manager) !void {
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const KEYS_PATH = paths.join(&pbuf, KEYS_FILE);
         const file = std.fs.openFileAbsolute(KEYS_PATH, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
@@ -153,6 +156,8 @@ pub const Manager = struct {
         defer buf.deinit();
         try writeRecordJsonl(buf.writer(), rec);
 
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const KEYS_PATH = paths.join(&pbuf, KEYS_FILE);
         const f = try std.fs.createFileAbsolute(KEYS_PATH, .{
             .truncate = false,
             .mode = 0o600,
@@ -164,7 +169,10 @@ pub const Manager = struct {
 
     fn rewriteToDisk(self: *Manager) !void {
         // Write everything we currently know to a tmp file, then rename atomically.
-        const tmp = KEYS_PATH ++ ".tmp";
+        var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+        var tbuf: [std.fs.max_path_bytes]u8 = undefined;
+        const KEYS_PATH = paths.join(&pbuf, KEYS_FILE);
+        const tmp = paths.join(&tbuf, KEYS_FILE ++ ".tmp");
         var f = try std.fs.createFileAbsolute(tmp, .{ .truncate = true, .mode = 0o600 });
         defer f.close();
         var buf = std.ArrayList(u8).init(self.allocator);
