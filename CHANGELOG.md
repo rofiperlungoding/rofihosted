@@ -4,6 +4,16 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve project log paths via projects.workingDir (P1-1, part 15) (2026-06-08)
+
+The three remaining project log-path literals in `main.zig` (the MCP
+`read_logs` and `read_build_log` handlers, and the SSE log-stream handler) no
+longer embed a Termux home literal. They now build the path from
+`projects.Manager.workingDir(arena, id)` (which already resolves
+`<home>/data/projects/<id>` via `paths.zig`) plus the `logs/<name>` suffix.
+Byte-identical on the phone. Remaining: the `.tmp-preview` roots and the
+audit/anomalies/scrub jsonl literals in main.zig.
+
 ### Refactor: resolve project SQLite DB paths from HOME (P1-1, part 14) (2026-06-08)
 
 The project SQLite database paths in `main.zig` no longer embed a Termux home

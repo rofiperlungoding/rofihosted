@@ -4998,7 +4998,8 @@ fn mcpToolReadProjectLog(app: *App, res: *httpz.Response, id_json: []const u8, a
     var n: usize = 200;
     if (mcpArgInt(args, "lines")) |v| n = @min(@as(usize, @intCast(@max(v, 1))), 2000);
 
-    const path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/{s}", .{ id, log_name });
+    const work = try projects.Manager.workingDir(res.arena, id);
+    const path = try std.fmt.allocPrint(res.arena, "{s}/logs/{s}", .{ work, log_name });
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         try mcpJsonToolText(res, id_json, "log not found", true);
         return;
@@ -5567,7 +5568,8 @@ fn mcpToolTailBuildLog(app: *App, res: *httpz.Response, id_json: []const u8, arg
             if (n > 0 and n <= 2000) max_lines = @intCast(n);
         }
     }
-    const path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/build.log", .{id});
+    const work = try projects.Manager.workingDir(res.arena, id);
+    const path = try std.fmt.allocPrint(res.arena, "{s}/logs/build.log", .{work});
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         try mcpJsonToolText(res, id_json, "{\"lines\":[],\"complete\":false,\"note\":\"log_not_found\"}", false);
         return;
@@ -9513,7 +9515,8 @@ fn apiProjectsLogStream(app: *App, req: *httpz.Request, res: *httpz.Response) !v
     else
         "build.log";
 
-    const log_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/{s}", .{ id, log_name });
+    const work = try projects.Manager.workingDir(res.arena, id);
+    const log_path = try std.fmt.allocPrint(res.arena, "{s}/logs/{s}", .{ work, log_name });
 
     res.header("Content-Type", "text/event-stream");
     res.header("Cache-Control", "no-cache");
