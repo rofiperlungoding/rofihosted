@@ -113,6 +113,13 @@ pub const Cache = struct {
             .allocator = allocator,
             .visits_jsonl_path = visits_jsonl_path,
         };
+        // Ensure the parent directory of the DB exists before sqlite tries to
+        // create the file. dbPath() resolves under $HOME, which may differ from
+        // the Termux default (CI, recovery onto a fresh device, test harness),
+        // so we cannot assume a caller already created it. Idempotent.
+        if (std.fs.path.dirname(dbPath())) |parent| {
+            std.fs.makeDirAbsolute(parent) catch {};
+        }
         // Apply pragmas + schema. If the DB is old (different schema_version),
         // drop and rebuild.
         const stored_version = cache.getMetaInt("schema_version") catch 0;
