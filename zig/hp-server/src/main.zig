@@ -3366,7 +3366,7 @@ fn apiSystemExec(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     // Resolve cwd. Default to operator $HOME so commands like 'ls' show
     // the home dir. Caller can pass a cwd hint for project work.
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const cwd: []const u8 = cwd_opt orelse home;
 
     var argv = [_][]const u8{ "sh", "-c", cmd };
@@ -3492,7 +3492,7 @@ fn apiSystemInfo(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = app;
     _ = req;
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // Battery via Termux:API if available; else null
     var battery_pct: ?i32 = null;
@@ -3668,7 +3668,7 @@ fn apiSystemPower(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 fn apiSystemRecovery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = req;
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const boot_script = try std.fmt.allocPrint(res.arena, "{s}/.termux/boot/01-server.sh", .{home});
     const watchdog_script = try std.fmt.allocPrint(res.arena, "{s}/watchdog.sh", .{home});
     const boot_log = try std.fmt.allocPrint(res.arena, "{s}/logs/boot.log", .{home});
@@ -3746,7 +3746,7 @@ fn apiSystemBackup(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         target = t;
     };
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const script = if (std.mem.eql(u8, target, "local"))
         try std.fmt.allocPrint(res.arena, "{s}/backup-quick.sh", .{home})
     else
@@ -3815,7 +3815,7 @@ fn apiSystemBackup(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 fn apiSystemBackups(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = req;
     _ = app;
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // List local backups: ~/backups/rofihosted-*.tar.gz
     var local = std.ArrayList(struct { name: []const u8, size: u64, mtime: i64 }).init(res.arena);
@@ -3897,7 +3897,7 @@ fn apiSystemBackups(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
 fn apiSystemVersion(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = app;
     _ = req;
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // Local commit (what's been built into the running binary): we can read
     // ~/rofihosted-src/.git/HEAD as the closest proxy.
@@ -3996,7 +3996,7 @@ fn apiSystemVersion(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
 fn apiSystemUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const script = try std.fmt.allocPrint(res.arena, "{s}/self-update.sh", .{home});
 
     var argv = [_][]const u8{ "sh", "-c", script };
@@ -4079,7 +4079,7 @@ fn apiSystemRestoreTest(app: *App, req: *httpz.Request, res: *httpz.Response) !v
     const q = req.query() catch null;
     const source: []const u8 = if (q) |qq| (qq.get("source") orelse "local") else "local";
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // Build the shell script inline. Returns single JSON line on stdout.
     const cmd = try std.fmt.allocPrint(res.arena,
@@ -6816,7 +6816,7 @@ fn hourlyBackupLoop() void {
     // We do not want the first backup running during boot when projects are
     // still respawning.
     std.Thread.sleep(5 * 60 * std.time.ns_per_s);
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     while (true) {
         // Build the script path each loop so it's always fresh
@@ -6880,7 +6880,7 @@ fn watchdogSentinelLoop() void {
     // Wait 60s after boot so the boot script has time to start the watchdog
     // before we check (and avoid double-starting it).
     std.Thread.sleep(60 * std.time.ns_per_s);
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const allocator = std.heap.page_allocator;
     const script = std.fmt.allocPrint(allocator, "{s}/watchdog.sh", .{home}) catch return;
     defer allocator.free(script);

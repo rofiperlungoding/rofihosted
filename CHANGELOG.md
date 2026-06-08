@@ -4,6 +4,18 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve operator HOME fallback via paths.zig (P1-1, part 13) (2026-06-08)
+
+The ten inline `std.posix.getenv("HOME") orelse "<termux literal>"` fallbacks
+in `main.zig` (command cwd, system info, boot/watchdog/backup/self-update
+script paths, and the two background respawn/watchdog loops) now call
+`paths.home()`, which performs the identical resolve-from-`$HOME`-with-Termux-
+fallback once at startup and caches it. Removes ten duplicated home literals;
+byte-identical on the phone, and safe to read from the background threads since
+the value is fixed after `paths.init()`. Remaining: the inline
+`allocPrint`/literal data paths in main.zig (dbs, project logs, .tmp-preview,
+audit/anomalies/scrub jsonl).
+
 ### Refactor: resolve core data-file paths from HOME (P1-1, part 12) (2026-06-08)
 
 The top-level data-file literals in `main.zig` (`visits.jsonl`, `uptime.jsonl`,
