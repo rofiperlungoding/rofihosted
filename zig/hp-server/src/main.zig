@@ -2649,7 +2649,8 @@ fn embedRequestThread(args: *EmbedArgs) void {
             });
 
             // Persist to anomaly log
-            const log_path = "/data/data/com.termux/files/home/data/anomalies.jsonl";
+            var lp_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const log_path = fspaths.join(&lp_buf, "data/anomalies.jsonl");
             store.appendJson(log_path, .{
                 .timestamp = std.time.timestamp(),
                 .pattern = args.key,
@@ -3217,7 +3218,8 @@ fn apiAiScrub(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     });
 
     // Persist to ~/data/scrub.jsonl for history
-    const scrub_path = "/data/data/com.termux/files/home/data/scrub.jsonl";
+    var sp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const scrub_path = fspaths.join(&sp_buf, "data/scrub.jsonl");
     store.appendJson(scrub_path, .{
         .timestamp = std.time.timestamp(),
         .scanner_paths_analysed = path_hits.items.len,
@@ -4743,7 +4745,11 @@ fn mcpToolGetSystemInfo(app: *App, res: *httpz.Response, id_json: []const u8) !v
     try w.print("Uptime: {d}s\n", .{std.time.timestamp() - app.started_at});
 
     // Shell out for /proc info (mem + disk) - cheap and self-contained.
-    const cmd = "free -m | awk '/^Mem:/ {print \"mem_total_mb=\"$2\" mem_avail_mb=\"$7}'; df -h /data/data/com.termux/files/home | awk 'NR==2 {print \"disk_used=\"$3\" disk_avail=\"$4\" disk_pct=\"$5}'";
+    const cmd = try std.mem.concat(res.arena, u8, &.{
+        "free -m | awk '/^Mem:/ {print \"mem_total_mb=\"$2\" mem_avail_mb=\"$7}'; df -h ",
+        fspaths.home(),
+        " | awk 'NR==2 {print \"disk_used=\"$3\" disk_avail=\"$4\" disk_pct=\"$5}'",
+    });
     var argv = [_][]const u8{ "sh", "-c", cmd };
     var child = std.process.Child.init(&argv, app.allocator);
     child.stdout_behavior = .Pipe;
@@ -5246,7 +5252,8 @@ fn mcpToolSearchAudit(app: *App, res: *httpz.Response, id_json: []const u8, args
     if (mcpArgInt(args, "limit")) |v| n = @min(@as(usize, @intCast(@max(v, 1))), 500);
     const filter = mcpArgString(args, "action_contains");
 
-    const path = "/data/data/com.termux/files/home/data/audit.jsonl";
+    var ap_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = fspaths.join(&ap_buf, "data/audit.jsonl");
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         try mcpJsonToolText(res, id_json, "(no audit log yet)", false);
         return;
@@ -9155,7 +9162,8 @@ fn previewRepoCore(
     }
     const eff_branch = if (branch.len == 0) "main" else branch;
 
-    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    var tmp_root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_root = fspaths.join(&tmp_root_buf, ".tmp-preview");
     std.fs.makeDirAbsolute(tmp_root) catch {};
     var rand: [8]u8 = undefined;
     std.crypto.random.bytes(&rand);
@@ -9215,7 +9223,8 @@ fn analyzeRepoCore(
     }
     const eff_branch = if (branch.len == 0) "main" else branch;
 
-    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    var tmp_root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_root = fspaths.join(&tmp_root_buf, ".tmp-preview");
     std.fs.makeDirAbsolute(tmp_root) catch {};
     var rand: [8]u8 = undefined;
     std.crypto.random.bytes(&rand);
