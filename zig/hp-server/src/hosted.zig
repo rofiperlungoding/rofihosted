@@ -27,8 +27,20 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const pathsafe = @import("pathsafe.zig");
+const paths = @import("paths.zig");
 
-pub const HOSTED_ROOT = "/data/data/com.termux/files/home/hosted/sites";
+const HOSTED_REL = "hosted/sites";
+var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+var root_slice: ?[]const u8 = null;
+
+/// Absolute root of the hosted-sites tree, resolved from HOME once and cached.
+/// Benign cross-thread race (identical bytes), same as dbcache.dbPath().
+pub fn hostedRoot() []const u8 {
+    if (root_slice) |p| return p;
+    const p = paths.join(&root_buf, HOSTED_REL);
+    root_slice = p;
+    return p;
+}
 const APEX_DOMAIN = "rofihosted.space";
 
 const CACHE_BODY_MAX: usize = 256 * 1024; // 256 KB per file
@@ -60,7 +72,7 @@ pub const Manager = struct {
         const current_path = std.fmt.allocPrint(
             self.allocator,
             "{s}/{s}/current",
-            .{ HOSTED_ROOT, subdomain },
+            .{ hostedRoot(), subdomain },
         ) catch return null;
         defer self.allocator.free(current_path);
         std.fs.accessAbsolute(current_path, .{}) catch return null;
@@ -135,7 +147,7 @@ pub const Site = struct {
     spa_mode: bool = false,
 
     fn init(allocator: std.mem.Allocator, subdomain: []const u8) !Site {
-        const site_root = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ HOSTED_ROOT, subdomain });
+        const site_root = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ hostedRoot(), subdomain });
         return .{
             .allocator = allocator,
             .subdomain = subdomain,

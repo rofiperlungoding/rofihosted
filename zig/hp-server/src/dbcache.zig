@@ -27,8 +27,21 @@
 //!   - Runs every 5 minutes via background loop
 const std = @import("std");
 const metrics = @import("metrics.zig");
+const paths = @import("paths.zig");
 
-pub const PATH = "/data/data/com.termux/files/home/data/cache.db";
+const CACHE_FILE = "data/cache.db";
+var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var path_slice: ?[]const u8 = null;
+
+/// Absolute path to the SQLite cache DB, resolved from HOME once and cached.
+/// Safe to call from multiple threads: the first resolution writes the same
+/// bytes regardless of caller, so a benign race just rewrites identical data.
+pub fn dbPath() []const u8 {
+    if (path_slice) |p| return p;
+    const p = paths.join(&path_buf, CACHE_FILE);
+    path_slice = p;
+    return p;
+}
 const SQLITE_BIN = "sqlite3";
 const SCHEMA_VERSION: i32 = 1;
 
@@ -100,6 +113,13 @@ pub const Cache = struct {
             .allocator = allocator,
             .visits_jsonl_path = visits_jsonl_path,
         };
+        // Ensure the parent directory of the DB exists before sqlite tries to
+        // create the file. dbPath() resolves under $HOME, which may differ from
+        // the Termux default (CI, recovery onto a fresh device, test harness),
+        // so we cannot assume a caller already created it. Idempotent.
+        if (std.fs.path.dirname(dbPath())) |parent| {
+            std.fs.makeDirAbsolute(parent) catch {};
+        }
         // Apply pragmas + schema. If the DB is old (different schema_version),
         // drop and rebuild.
         const stored_version = cache.getMetaInt("schema_version") catch 0;
@@ -120,7 +140,7 @@ pub const Cache = struct {
     /// Run SQL via `sqlite3 <db> < stdin`. No output captured.
     fn execSql(self: *Cache, sql: []const u8) !void {
         var child = std.process.Child.init(
-            &.{ SQLITE_BIN, PATH },
+            &.{ SQLITE_BIN, dbPath() },
             self.allocator,
         );
         child.stdin_behavior = .Pipe;
@@ -174,7 +194,7 @@ pub const Cache = struct {
             }
         }
         var child = std.process.Child.init(
-            &.{ SQLITE_BIN, PATH },
+            &.{ SQLITE_BIN, dbPath() },
             self.allocator,
         );
         child.stdin_behavior = .Pipe;

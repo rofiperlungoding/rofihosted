@@ -171,7 +171,7 @@ pub fn main() !void {
 
     const db_cache = try dbcache.Cache.init(allocator, visits_path);
     const db_pool = try dbpool.Pool.init(allocator, .{
-        .db_path = dbcache.PATH,
+        .db_path = dbcache.dbPath(),
         .workers = 3,
         .query_timeout_ms = 15_000,
         .max_response_bytes = 8 * 1024 * 1024,
@@ -3199,7 +3199,7 @@ fn apiHostedStats(app: *App, res: *httpz.Response) !void {
 fn apiHostedList(app: *App, res: *httpz.Response) !void {
     _ = app;
     // Walk ~/hosted/sites/ and list every subdomain that has a current/ symlink.
-    var dir = std.fs.openDirAbsolute(hosted.HOSTED_ROOT, .{ .iterate = true }) catch {
+    var dir = std.fs.openDirAbsolute(hosted.hostedRoot(), .{ .iterate = true }) catch {
         try res.json(.{ .ok = true, .sites = &[_]u8{} }, .{});
         return;
     };
@@ -3216,7 +3216,7 @@ fn apiHostedList(app: *App, res: *httpz.Response) !void {
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
 
         // Check if current symlink resolves
-        const current = try std.fmt.allocPrint(res.arena, "{s}/{s}/current", .{ hosted.HOSTED_ROOT, entry.name });
+        const current = try std.fmt.allocPrint(res.arena, "{s}/{s}/current", .{ hosted.hostedRoot(), entry.name });
         var rbuf: [std.fs.max_path_bytes]u8 = undefined;
         const target = std.fs.realpath(current, &rbuf) catch "";
 
@@ -5227,7 +5227,7 @@ fn mcpToolRecentVisits(app: *App, res: *httpz.Response, id_json: []const u8, arg
     }
     try sql_buf.writer().print(" ORDER BY visited_at DESC LIMIT {d};\n", .{n});
 
-    const out = runSqliteQuery(res.arena, dbcache.PATH, sql_buf.items) catch "(query failed)";
+    const out = runSqliteQuery(res.arena, dbcache.dbPath(), sql_buf.items) catch "(query failed)";
     _ = app;
     try mcpJsonToolText(res, id_json, out, false);
 }
