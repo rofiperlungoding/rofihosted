@@ -4,6 +4,17 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve remaining main.zig literals from HOME (P1-1, part 16) (2026-06-08)
+
+Removes the last embedded Termux home literals from `main.zig`: the
+`anomalies.jsonl`, `scrub.jsonl`, and `audit.jsonl` log paths (now resolved via
+`paths.join` into a local buffer), the two `.tmp-preview` clone roots, and the
+home path inside the `df -h` disk-check shell command (built with
+`std.mem.concat` around `paths.home()` to avoid awk-brace escaping). With this,
+`main.zig` no longer contains a hardcoded `/data/data/com.termux/...` path; the
+only remaining literal in the tree is the single intentional fallback constant
+in `paths.zig`. Byte-identical on the phone.
+
 ### Refactor: resolve project log paths via projects.workingDir (P1-1, part 15) (2026-06-08)
 
 The three remaining project log-path literals in `main.zig` (the MCP
