@@ -4,6 +4,17 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve project SQLite DB paths from HOME (P1-1, part 14) (2026-06-08)
+
+The project SQLite database paths in `main.zig` no longer embed a Termux home
+literal. The `SQL_DB_ROOT` const becomes the accessor `sqlDbRoot()`, which
+resolves `data/dbs` from HOME once via `paths.zig` and caches it. All callers
+now build per-project DB paths from it: the MCP `query_db`/`list_tables`
+handlers, the V1 SQL endpoint (dir creation + path), the MCP `db_info` `file:`
+URL, the project SQL query handler, and the two table/preview handlers. Byte-
+identical on the phone. Remaining: project log paths, `.tmp-preview`, and the
+audit/anomalies/scrub jsonl literals in main.zig.
+
 ### Refactor: resolve operator HOME fallback via paths.zig (P1-1, part 13) (2026-06-08)
 
 The ten inline `std.posix.getenv("HOME") orelse "<termux literal>"` fallbacks

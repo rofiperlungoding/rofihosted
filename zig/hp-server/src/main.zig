@@ -4256,7 +4256,17 @@ fn apiDbPoolStats(app: *App, res: *httpz.Response) !void {
 // =================================================================
 // V1 PUBLIC API (X-API-Key auth, used by external scripts)
 // =================================================================
-const SQL_DB_ROOT = "/data/data/com.termux/files/home/data/dbs";
+// Project SQLite DB root, resolved from HOME once via paths.zig (P1-1).
+const sql_db_root_rel = "data/dbs";
+var sql_db_root_buf: [std.fs.max_path_bytes]u8 = undefined;
+var sql_db_root_slice: ?[]const u8 = null;
+
+fn sqlDbRoot() []const u8 {
+    if (sql_db_root_slice) |p| return p;
+    const p = fspaths.join(&sql_db_root_buf, sql_db_root_rel);
+    sql_db_root_slice = p;
+    return p;
+}
 
 fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
     // GitHub webhook is unauthenticated at the X-API-Key layer - it's HMAC-verified per project.
@@ -5127,7 +5137,7 @@ fn mcpToolDbQuery(app: *App, res: *httpz.Response, id_json: []const u8, args: st
             return;
         }
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, pid });
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), pid });
     const out = try runSqliteQuery(res.arena, db_path, sql);
     try mcpJsonToolText(res, id_json, out, false);
 }
@@ -5142,7 +5152,7 @@ fn mcpToolDbListTables(app: *App, res: *httpz.Response, id_json: []const u8, arg
         try mcpJsonToolText(res, id_json, "invalid project_id", true);
         return;
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, pid });
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), pid });
     const sql = "SELECT name, (SELECT COUNT(*) FROM pragma_table_info(m.name)) AS col_count FROM sqlite_master m WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
     const out = try runSqliteQuery(res.arena, db_path, sql);
     try mcpJsonToolText(res, id_json, out, false);
@@ -5631,8 +5641,8 @@ fn mcpToolGetDbUrl(app: *App, res: *httpz.Response, id_json: []const u8, args: s
     const w = out.writer();
     if (proj.db_mode == .sqlite) {
         try w.print(
-            \\{{"db_mode":"sqlite","url":"file:/data/data/com.termux/files/home/data/dbs/{s}.db"}}
-        , .{pid});
+            \\{{"db_mode":"sqlite","url":"file:{s}/{s}.db"}}
+        , .{ sqlDbRoot(), pid });
         try mcpJsonToolText(res, id_json, out.items, false);
         return;
     }
@@ -6603,11 +6613,11 @@ fn v1Execute(app: *App, req: *httpz.Request, res: *httpz.Response, rec: apikey.R
         return;
     }
 
-    // Build absolute path under SQL_DB_ROOT
-    std.fs.makeDirAbsolute(SQL_DB_ROOT) catch {};
-    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, p.db });
+    // Build absolute path under sqlDbRoot()
+    std.fs.makeDirAbsolute(sqlDbRoot()) catch {};
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), p.db });
     // p.db has already passed the [a-z0-9_-] regex above, so it cannot escape
-    // SQL_DB_ROOT via traversal or symlinks. No further pathsafe check needed.
+    // sqlDbRoot() via traversal or symlinks. No further pathsafe check needed.
 
     // Use a one-shot subprocess against the requested DB (the pool is bound to
     // cache.db only). Output as JSON via .mode json so the client gets a
@@ -8863,8 +8873,8 @@ fn apiProjectsSql(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     // Run via one-shot sqlite3 against ~/data/dbs/<project_id>.db with
     // .mode json so the result comes back as JSON rows.
-    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{p.project_id});
-    std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data/dbs") catch {};
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), p.project_id });
+    std.fs.makeDirAbsolute(sqlDbRoot()) catch {};
 
     var script = std.ArrayList(u8).init(res.arena);
     try script.appendSlice(".mode json\n");
@@ -9373,7 +9383,7 @@ fn apiProjectsUsers(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{id});
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), id });
     // Check db file exists
     std.fs.accessAbsolute(db_path, .{}) catch {
         try res.json(.{ .ok = true, .users = &[_]u8{} }, .{});
@@ -9434,7 +9444,7 @@ fn apiProjectsTables(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{id});
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), id });
     std.fs.accessAbsolute(db_path, .{}) catch {
         try res.json(.{ .ok = true, .tables = &[_]u8{} }, .{});
         return;
