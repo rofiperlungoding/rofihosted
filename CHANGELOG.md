@@ -4,6 +4,17 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve core data-file paths from HOME (P1-1, part 12) (2026-06-08)
+
+The top-level data-file literals in `main.zig` (`visits.jsonl`, `uptime.jsonl`,
+`digests.jsonl`, `policy.jsonl`) plus the `data/` directory creation no longer
+embed a Termux home literal. The `const` strings become the accessors
+`visits_path()`, `uptime_path()`, `digests_path()`, `policy_path()`, and
+`dataDir()`, each resolving once from HOME via `paths.zig` and caching the
+result in a dedicated static buffer. Resolution happens after `paths.init()`
+at startup and before any worker thread is spawned, so it is byte-identical on
+the phone. Remaining: the inline `allocPrint`/literal paths in main.zig.
+
 ### Refactor: resolve dbcache + hosted-sites roots from HOME (P1-1, part 11) (2026-06-08)
 
 `dbcache.zig` (the SQLite visits-cache DB) and `hosted.zig` (the static-site

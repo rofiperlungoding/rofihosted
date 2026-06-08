@@ -48,12 +48,62 @@ const procguard = @import("procguard.zig");
 const cap = @import("cap.zig");
 const workerpool = @import("workerpool.zig");
 
-// Data paths: hardcoded for now, but documented for future portability work
-// TODO: Refactor to use HOME env var throughout the codebase
-const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
-const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
-const digests_path = "/data/data/com.termux/files/home/data/digests.jsonl";
-const policy_path = "/data/data/com.termux/files/home/data/policy.jsonl";
+// Data paths: resolved from $HOME once at startup via fspaths.join (P1-1).
+// fspaths.init() runs at the top of main() before any thread is spawned, and
+// each path is cached in a dedicated static buffer on first access, so these
+// helpers are safe to read from the worker threads that consume them.
+const visits_rel = "data/visits.jsonl";
+const uptime_rel = "data/uptime.jsonl";
+const digests_rel = "data/digests.jsonl";
+const policy_rel = "data/policy.jsonl";
+const data_dir_rel = "data";
+
+var visits_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var uptime_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var digests_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var policy_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+var visits_path_slice: ?[]const u8 = null;
+var uptime_path_slice: ?[]const u8 = null;
+var digests_path_slice: ?[]const u8 = null;
+var policy_path_slice: ?[]const u8 = null;
+var data_dir_slice: ?[]const u8 = null;
+
+fn visits_path() []const u8 {
+    if (visits_path_slice) |p| return p;
+    const p = fspaths.join(&visits_path_buf, visits_rel);
+    visits_path_slice = p;
+    return p;
+}
+
+fn uptime_path() []const u8 {
+    if (uptime_path_slice) |p| return p;
+    const p = fspaths.join(&uptime_path_buf, uptime_rel);
+    uptime_path_slice = p;
+    return p;
+}
+
+fn digests_path() []const u8 {
+    if (digests_path_slice) |p| return p;
+    const p = fspaths.join(&digests_path_buf, digests_rel);
+    digests_path_slice = p;
+    return p;
+}
+
+fn policy_path() []const u8 {
+    if (policy_path_slice) |p| return p;
+    const p = fspaths.join(&policy_path_buf, policy_rel);
+    policy_path_slice = p;
+    return p;
+}
+
+fn dataDir() []const u8 {
+    if (data_dir_slice) |p| return p;
+    const p = fspaths.join(&data_dir_buf, data_dir_rel);
+    data_dir_slice = p;
+    return p;
+}
 
 const App = struct {
     allocator: std.mem.Allocator,
@@ -133,7 +183,7 @@ pub fn main() !void {
     // before the dependent subsystems fail in confusing ways.
     cap.check(allocator);
 
-    std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data") catch {};
+    std.fs.makeDirAbsolute(dataDir()) catch {};
 
     var store_mutex = std.Thread.Mutex{};
     var rl = ratelimit.Limiter.init(allocator, 1.0, 60.0);
@@ -160,7 +210,7 @@ pub fn main() !void {
     const emb_store = try embeddings.Store.init(allocator);
     const honey_cfg = try honeypot.Config.init(allocator);
     const visit_buf = try allocator.create(writebuf.Buffer);
-    visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
+    visit_buf.* = writebuf.Buffer.init(allocator, visits_path());
     const rules_engine = try rules.Engine.init(allocator, blocklist);
     // Metrics hub for cache observability
     const metrics_hub = metrics.MetricsHub.init(allocator);
@@ -169,7 +219,7 @@ pub fn main() !void {
     // absorb normal bursts, small enough to bound thread + subprocess churn.
     const worker_pool = try workerpool.Pool.init(allocator, 2, 64);
 
-    const db_cache = try dbcache.Cache.init(allocator, visits_path);
+    const db_cache = try dbcache.Cache.init(allocator, visits_path());
     const db_pool = try dbpool.Pool.init(allocator, .{
         .db_path = dbcache.dbPath(),
         .workers = 3,
@@ -267,7 +317,7 @@ pub fn main() !void {
     const stats_tick = try std.Thread.spawn(.{}, statsTickLoop, .{ bus, app.started_at });
     stats_tick.detach();
 
-    const checker = try std.Thread.spawn(.{}, uptime.checkerLoop, .{ allocator, uptime_path, &store_mutex, tg_cfg, bus });
+    const checker = try std.Thread.spawn(.{}, uptime.checkerLoop, .{ allocator, uptime_path(), &store_mutex, tg_cfg, bus });
     checker.detach();
 
     // Power monitor: alerts on charger disconnect (this device bootloops on
@@ -287,7 +337,7 @@ pub fn main() !void {
     const wd_sentinel = try std.Thread.spawn(.{}, watchdogSentinelLoop, .{});
     wd_sentinel.detach();
 
-    const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path, uptime_path, &store_mutex });
+    const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path(), uptime_path(), &store_mutex });
     rotator.detach();
 
     // Rate-limiter idle-bucket sweep (every 10 min, off the request hot path).
@@ -754,7 +804,7 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
 
     var records: []const store.UptimeRecord = &.{};
     app.store_mutex.lock();
-    if (store.readLatestUptime(res.arena, uptime_path)) |recs| {
+    if (store.readLatestUptime(res.arena, uptime_path())) |recs| {
         records = recs;
     } else |_| {}
     app.store_mutex.unlock();
@@ -780,7 +830,7 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
     // Recent uptime history from the self-health probe (real buckets). The
     // store is bounded, so this is honestly "recent" rather than 90 calendar
     // days; slots without data render as no-data.
-    const uh: store.UptimeHistory = store.readUptimeHistory(res.arena, uptime_path, "self-health", 90) catch
+    const uh: store.UptimeHistory = store.readUptimeHistory(res.arena, uptime_path(), "self-health", 90) catch
         store.UptimeHistory{ .states = &[_]u8{}, .lat = &[_]i64{}, .from = 0, .to = 0 };
     const hist = uh.states;
     var up_n: usize = 0;
@@ -1406,7 +1456,7 @@ fn readVisitsFresh(app: *App, allocator: std.mem.Allocator, limit: usize) ![]sto
     app.visit_buf.flush() catch |e| {
         std.log.warn("readVisitsFresh: pre-flush failed: {}", .{e});
     };
-    return store.readVisits(allocator, visits_path, limit);
+    return store.readVisits(allocator, visits_path(), limit);
 }
 
 // =================================================================
@@ -1812,7 +1862,7 @@ fn apiVisits(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
 fn apiUptime(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
     app.store_mutex.lock();
     defer app.store_mutex.unlock();
-    const records = store.readLatestUptime(res.arena, uptime_path) catch {
+    const records = store.readLatestUptime(res.arena, uptime_path()) catch {
         res.status = 500;
         res.content_type = .JSON;
         res.body = "{\"error\":\"store error\"}";
@@ -1836,7 +1886,7 @@ fn apiFilesList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
 fn apiBadge(app: *App, _: *httpz.Request, res: *httpz.Response, target_name: []const u8) !void {
     app.store_mutex.lock();
-    const records = store.readLatestUptime(res.arena, uptime_path) catch {
+    const records = store.readLatestUptime(res.arena, uptime_path()) catch {
         app.store_mutex.unlock();
         res.status = 500;
         return;
@@ -2262,7 +2312,7 @@ fn runDigest(app: *App) !void {
         app.store_mutex.unlock();
         return;
     };
-    const uptime_records = store.readLatestUptime(a, uptime_path) catch &.{};
+    const uptime_records = store.readLatestUptime(a, uptime_path()) catch &.{};
     app.store_mutex.unlock();
 
     const window_hours: u32 = 24;
@@ -2349,7 +2399,7 @@ fn runDigest(app: *App) !void {
         .summary = summary,
         .metrics = dm,
     };
-    store.appendJson(digests_path, rec) catch {};
+    store.appendJson(digests_path(), rec) catch {};
     app.bus.publish(.digest_ready, .{ .timestamp = rec.generated_at, .summary = rec.summary });
 }
 
@@ -2372,7 +2422,7 @@ fn topN(allocator: std.mem.Allocator, map: *std.StringHashMap(u32), n: usize) []
 }
 
 fn apiDigestLatest(_: *App, res: *httpz.Response) !void {
-    const file = std.fs.cwd().openFile(digests_path, .{}) catch |err| switch (err) {
+    const file = std.fs.cwd().openFile(digests_path(), .{}) catch |err| switch (err) {
         error.FileNotFound => {
             try res.json(.{ .ok = true, .latest = null }, .{});
             return;
@@ -2813,11 +2863,11 @@ fn runPolicyReview(app: *App) !void {
         .overall_summary = parsed.value.overall_summary,
         .suggestions = parsed.value.suggestions,
     };
-    store.appendJson(policy_path, rec) catch {};
+    store.appendJson(policy_path(), rec) catch {};
 }
 
 fn apiPolicyLatest(_: *App, res: *httpz.Response) !void {
-    const file = std.fs.cwd().openFile(policy_path, .{}) catch |err| switch (err) {
+    const file = std.fs.cwd().openFile(policy_path(), .{}) catch |err| switch (err) {
         error.FileNotFound => {
             try res.json(.{ .ok = true, .latest = null }, .{});
             return;
