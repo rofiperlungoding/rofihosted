@@ -4,6 +4,61 @@ All notable changes to this project. Newest first.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/) for tagged releases.
 
+### Refactor: resolve remaining main.zig literals from HOME (P1-1, part 16) (2026-06-08)
+
+Removes the last embedded Termux home literals from `main.zig`: the
+`anomalies.jsonl`, `scrub.jsonl`, and `audit.jsonl` log paths (now resolved via
+`paths.join` into a local buffer), the two `.tmp-preview` clone roots, and the
+home path inside the `df -h` disk-check shell command (built with
+`std.mem.concat` around `paths.home()` to avoid awk-brace escaping). With this,
+`main.zig` no longer contains a hardcoded `/data/data/com.termux/...` path; the
+only remaining literal in the tree is the single intentional fallback constant
+in `paths.zig`. Byte-identical on the phone.
+
+### Refactor: resolve project log paths via projects.workingDir (P1-1, part 15) (2026-06-08)
+
+The three remaining project log-path literals in `main.zig` (the MCP
+`read_logs` and `read_build_log` handlers, and the SSE log-stream handler) no
+longer embed a Termux home literal. They now build the path from
+`projects.Manager.workingDir(arena, id)` (which already resolves
+`<home>/data/projects/<id>` via `paths.zig`) plus the `logs/<name>` suffix.
+Byte-identical on the phone. Remaining: the `.tmp-preview` roots and the
+audit/anomalies/scrub jsonl literals in main.zig.
+
+### Refactor: resolve project SQLite DB paths from HOME (P1-1, part 14) (2026-06-08)
+
+The project SQLite database paths in `main.zig` no longer embed a Termux home
+literal. The `SQL_DB_ROOT` const becomes the accessor `sqlDbRoot()`, which
+resolves `data/dbs` from HOME once via `paths.zig` and caches it. All callers
+now build per-project DB paths from it: the MCP `query_db`/`list_tables`
+handlers, the V1 SQL endpoint (dir creation + path), the MCP `db_info` `file:`
+URL, the project SQL query handler, and the two table/preview handlers. Byte-
+identical on the phone. Remaining: project log paths, `.tmp-preview`, and the
+audit/anomalies/scrub jsonl literals in main.zig.
+
+### Refactor: resolve operator HOME fallback via paths.zig (P1-1, part 13) (2026-06-08)
+
+The ten inline `std.posix.getenv("HOME") orelse "<termux literal>"` fallbacks
+in `main.zig` (command cwd, system info, boot/watchdog/backup/self-update
+script paths, and the two background respawn/watchdog loops) now call
+`paths.home()`, which performs the identical resolve-from-`$HOME`-with-Termux-
+fallback once at startup and caches it. Removes ten duplicated home literals;
+byte-identical on the phone, and safe to read from the background threads since
+the value is fixed after `paths.init()`. Remaining: the inline
+`allocPrint`/literal data paths in main.zig (dbs, project logs, .tmp-preview,
+audit/anomalies/scrub jsonl).
+
+### Refactor: resolve core data-file paths from HOME (P1-1, part 12) (2026-06-08)
+
+The top-level data-file literals in `main.zig` (`visits.jsonl`, `uptime.jsonl`,
+`digests.jsonl`, `policy.jsonl`) plus the `data/` directory creation no longer
+embed a Termux home literal. The `const` strings become the accessors
+`visits_path()`, `uptime_path()`, `digests_path()`, `policy_path()`, and
+`dataDir()`, each resolving once from HOME via `paths.zig` and caching the
+result in a dedicated static buffer. Resolution happens after `paths.init()`
+at startup and before any worker thread is spawned, so it is byte-identical on
+the phone. Remaining: the inline `allocPrint`/literal paths in main.zig.
+
 ### Refactor: resolve dbcache + hosted-sites roots from HOME (P1-1, part 11) (2026-06-08)
 
 `dbcache.zig` (the SQLite visits-cache DB) and `hosted.zig` (the static-site

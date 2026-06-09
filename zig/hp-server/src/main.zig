@@ -48,12 +48,62 @@ const procguard = @import("procguard.zig");
 const cap = @import("cap.zig");
 const workerpool = @import("workerpool.zig");
 
-// Data paths: hardcoded for now, but documented for future portability work
-// TODO: Refactor to use HOME env var throughout the codebase
-const visits_path = "/data/data/com.termux/files/home/data/visits.jsonl";
-const uptime_path = "/data/data/com.termux/files/home/data/uptime.jsonl";
-const digests_path = "/data/data/com.termux/files/home/data/digests.jsonl";
-const policy_path = "/data/data/com.termux/files/home/data/policy.jsonl";
+// Data paths: resolved from $HOME once at startup via fspaths.join (P1-1).
+// fspaths.init() runs at the top of main() before any thread is spawned, and
+// each path is cached in a dedicated static buffer on first access, so these
+// helpers are safe to read from the worker threads that consume them.
+const visits_rel = "data/visits.jsonl";
+const uptime_rel = "data/uptime.jsonl";
+const digests_rel = "data/digests.jsonl";
+const policy_rel = "data/policy.jsonl";
+const data_dir_rel = "data";
+
+var visits_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var uptime_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var digests_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var policy_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+var visits_path_slice: ?[]const u8 = null;
+var uptime_path_slice: ?[]const u8 = null;
+var digests_path_slice: ?[]const u8 = null;
+var policy_path_slice: ?[]const u8 = null;
+var data_dir_slice: ?[]const u8 = null;
+
+fn visits_path() []const u8 {
+    if (visits_path_slice) |p| return p;
+    const p = fspaths.join(&visits_path_buf, visits_rel);
+    visits_path_slice = p;
+    return p;
+}
+
+fn uptime_path() []const u8 {
+    if (uptime_path_slice) |p| return p;
+    const p = fspaths.join(&uptime_path_buf, uptime_rel);
+    uptime_path_slice = p;
+    return p;
+}
+
+fn digests_path() []const u8 {
+    if (digests_path_slice) |p| return p;
+    const p = fspaths.join(&digests_path_buf, digests_rel);
+    digests_path_slice = p;
+    return p;
+}
+
+fn policy_path() []const u8 {
+    if (policy_path_slice) |p| return p;
+    const p = fspaths.join(&policy_path_buf, policy_rel);
+    policy_path_slice = p;
+    return p;
+}
+
+fn dataDir() []const u8 {
+    if (data_dir_slice) |p| return p;
+    const p = fspaths.join(&data_dir_buf, data_dir_rel);
+    data_dir_slice = p;
+    return p;
+}
 
 const App = struct {
     allocator: std.mem.Allocator,
@@ -133,7 +183,7 @@ pub fn main() !void {
     // before the dependent subsystems fail in confusing ways.
     cap.check(allocator);
 
-    std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data") catch {};
+    std.fs.makeDirAbsolute(dataDir()) catch {};
 
     var store_mutex = std.Thread.Mutex{};
     var rl = ratelimit.Limiter.init(allocator, 1.0, 60.0);
@@ -160,7 +210,7 @@ pub fn main() !void {
     const emb_store = try embeddings.Store.init(allocator);
     const honey_cfg = try honeypot.Config.init(allocator);
     const visit_buf = try allocator.create(writebuf.Buffer);
-    visit_buf.* = writebuf.Buffer.init(allocator, visits_path);
+    visit_buf.* = writebuf.Buffer.init(allocator, visits_path());
     const rules_engine = try rules.Engine.init(allocator, blocklist);
     // Metrics hub for cache observability
     const metrics_hub = metrics.MetricsHub.init(allocator);
@@ -169,7 +219,7 @@ pub fn main() !void {
     // absorb normal bursts, small enough to bound thread + subprocess churn.
     const worker_pool = try workerpool.Pool.init(allocator, 2, 64);
 
-    const db_cache = try dbcache.Cache.init(allocator, visits_path);
+    const db_cache = try dbcache.Cache.init(allocator, visits_path());
     const db_pool = try dbpool.Pool.init(allocator, .{
         .db_path = dbcache.dbPath(),
         .workers = 3,
@@ -267,7 +317,7 @@ pub fn main() !void {
     const stats_tick = try std.Thread.spawn(.{}, statsTickLoop, .{ bus, app.started_at });
     stats_tick.detach();
 
-    const checker = try std.Thread.spawn(.{}, uptime.checkerLoop, .{ allocator, uptime_path, &store_mutex, tg_cfg, bus });
+    const checker = try std.Thread.spawn(.{}, uptime.checkerLoop, .{ allocator, uptime_path(), &store_mutex, tg_cfg, bus });
     checker.detach();
 
     // Power monitor: alerts on charger disconnect (this device bootloops on
@@ -287,7 +337,7 @@ pub fn main() !void {
     const wd_sentinel = try std.Thread.spawn(.{}, watchdogSentinelLoop, .{});
     wd_sentinel.detach();
 
-    const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path, uptime_path, &store_mutex });
+    const rotator = try std.Thread.spawn(.{}, store.rotatorLoop, .{ allocator, visits_path(), uptime_path(), &store_mutex });
     rotator.detach();
 
     // Rate-limiter idle-bucket sweep (every 10 min, off the request hot path).
@@ -754,7 +804,7 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
 
     var records: []const store.UptimeRecord = &.{};
     app.store_mutex.lock();
-    if (store.readLatestUptime(res.arena, uptime_path)) |recs| {
+    if (store.readLatestUptime(res.arena, uptime_path())) |recs| {
         records = recs;
     } else |_| {}
     app.store_mutex.unlock();
@@ -780,7 +830,7 @@ fn apiStatus(app: *App, res: *httpz.Response) !void {
     // Recent uptime history from the self-health probe (real buckets). The
     // store is bounded, so this is honestly "recent" rather than 90 calendar
     // days; slots without data render as no-data.
-    const uh: store.UptimeHistory = store.readUptimeHistory(res.arena, uptime_path, "self-health", 90) catch
+    const uh: store.UptimeHistory = store.readUptimeHistory(res.arena, uptime_path(), "self-health", 90) catch
         store.UptimeHistory{ .states = &[_]u8{}, .lat = &[_]i64{}, .from = 0, .to = 0 };
     const hist = uh.states;
     var up_n: usize = 0;
@@ -1406,7 +1456,7 @@ fn readVisitsFresh(app: *App, allocator: std.mem.Allocator, limit: usize) ![]sto
     app.visit_buf.flush() catch |e| {
         std.log.warn("readVisitsFresh: pre-flush failed: {}", .{e});
     };
-    return store.readVisits(allocator, visits_path, limit);
+    return store.readVisits(allocator, visits_path(), limit);
 }
 
 // =================================================================
@@ -1812,7 +1862,7 @@ fn apiVisits(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
 fn apiUptime(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
     app.store_mutex.lock();
     defer app.store_mutex.unlock();
-    const records = store.readLatestUptime(res.arena, uptime_path) catch {
+    const records = store.readLatestUptime(res.arena, uptime_path()) catch {
         res.status = 500;
         res.content_type = .JSON;
         res.body = "{\"error\":\"store error\"}";
@@ -1836,7 +1886,7 @@ fn apiFilesList(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
 fn apiBadge(app: *App, _: *httpz.Request, res: *httpz.Response, target_name: []const u8) !void {
     app.store_mutex.lock();
-    const records = store.readLatestUptime(res.arena, uptime_path) catch {
+    const records = store.readLatestUptime(res.arena, uptime_path()) catch {
         app.store_mutex.unlock();
         res.status = 500;
         return;
@@ -2262,7 +2312,7 @@ fn runDigest(app: *App) !void {
         app.store_mutex.unlock();
         return;
     };
-    const uptime_records = store.readLatestUptime(a, uptime_path) catch &.{};
+    const uptime_records = store.readLatestUptime(a, uptime_path()) catch &.{};
     app.store_mutex.unlock();
 
     const window_hours: u32 = 24;
@@ -2349,7 +2399,7 @@ fn runDigest(app: *App) !void {
         .summary = summary,
         .metrics = dm,
     };
-    store.appendJson(digests_path, rec) catch {};
+    store.appendJson(digests_path(), rec) catch {};
     app.bus.publish(.digest_ready, .{ .timestamp = rec.generated_at, .summary = rec.summary });
 }
 
@@ -2372,7 +2422,7 @@ fn topN(allocator: std.mem.Allocator, map: *std.StringHashMap(u32), n: usize) []
 }
 
 fn apiDigestLatest(_: *App, res: *httpz.Response) !void {
-    const file = std.fs.cwd().openFile(digests_path, .{}) catch |err| switch (err) {
+    const file = std.fs.cwd().openFile(digests_path(), .{}) catch |err| switch (err) {
         error.FileNotFound => {
             try res.json(.{ .ok = true, .latest = null }, .{});
             return;
@@ -2599,7 +2649,8 @@ fn embedRequestThread(args: *EmbedArgs) void {
             });
 
             // Persist to anomaly log
-            const log_path = "/data/data/com.termux/files/home/data/anomalies.jsonl";
+            var lp_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const log_path = fspaths.join(&lp_buf, "data/anomalies.jsonl");
             store.appendJson(log_path, .{
                 .timestamp = std.time.timestamp(),
                 .pattern = args.key,
@@ -2813,11 +2864,11 @@ fn runPolicyReview(app: *App) !void {
         .overall_summary = parsed.value.overall_summary,
         .suggestions = parsed.value.suggestions,
     };
-    store.appendJson(policy_path, rec) catch {};
+    store.appendJson(policy_path(), rec) catch {};
 }
 
 fn apiPolicyLatest(_: *App, res: *httpz.Response) !void {
-    const file = std.fs.cwd().openFile(policy_path, .{}) catch |err| switch (err) {
+    const file = std.fs.cwd().openFile(policy_path(), .{}) catch |err| switch (err) {
         error.FileNotFound => {
             try res.json(.{ .ok = true, .latest = null }, .{});
             return;
@@ -3167,7 +3218,8 @@ fn apiAiScrub(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     });
 
     // Persist to ~/data/scrub.jsonl for history
-    const scrub_path = "/data/data/com.termux/files/home/data/scrub.jsonl";
+    var sp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const scrub_path = fspaths.join(&sp_buf, "data/scrub.jsonl");
     store.appendJson(scrub_path, .{
         .timestamp = std.time.timestamp(),
         .scanner_paths_analysed = path_hits.items.len,
@@ -3316,7 +3368,7 @@ fn apiSystemExec(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     // Resolve cwd. Default to operator $HOME so commands like 'ls' show
     // the home dir. Caller can pass a cwd hint for project work.
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const cwd: []const u8 = cwd_opt orelse home;
 
     var argv = [_][]const u8{ "sh", "-c", cmd };
@@ -3442,7 +3494,7 @@ fn apiSystemInfo(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = app;
     _ = req;
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // Battery via Termux:API if available; else null
     var battery_pct: ?i32 = null;
@@ -3618,7 +3670,7 @@ fn apiSystemPower(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 fn apiSystemRecovery(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = req;
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const boot_script = try std.fmt.allocPrint(res.arena, "{s}/.termux/boot/01-server.sh", .{home});
     const watchdog_script = try std.fmt.allocPrint(res.arena, "{s}/watchdog.sh", .{home});
     const boot_log = try std.fmt.allocPrint(res.arena, "{s}/logs/boot.log", .{home});
@@ -3696,7 +3748,7 @@ fn apiSystemBackup(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         target = t;
     };
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const script = if (std.mem.eql(u8, target, "local"))
         try std.fmt.allocPrint(res.arena, "{s}/backup-quick.sh", .{home})
     else
@@ -3765,7 +3817,7 @@ fn apiSystemBackup(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 fn apiSystemBackups(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = req;
     _ = app;
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // List local backups: ~/backups/rofihosted-*.tar.gz
     var local = std.ArrayList(struct { name: []const u8, size: u64, mtime: i64 }).init(res.arena);
@@ -3847,7 +3899,7 @@ fn apiSystemBackups(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
 fn apiSystemVersion(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     _ = app;
     _ = req;
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // Local commit (what's been built into the running binary): we can read
     // ~/rofihosted-src/.git/HEAD as the closest proxy.
@@ -3946,7 +3998,7 @@ fn apiSystemVersion(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
 fn apiSystemUpdate(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     const actor = auth.currentUser(app.auth_cfg, app.allocator, req) orelse "unknown";
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const script = try std.fmt.allocPrint(res.arena, "{s}/self-update.sh", .{home});
 
     var argv = [_][]const u8{ "sh", "-c", script };
@@ -4029,7 +4081,7 @@ fn apiSystemRestoreTest(app: *App, req: *httpz.Request, res: *httpz.Response) !v
     const q = req.query() catch null;
     const source: []const u8 = if (q) |qq| (qq.get("source") orelse "local") else "local";
 
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     // Build the shell script inline. Returns single JSON line on stdout.
     const cmd = try std.fmt.allocPrint(res.arena,
@@ -4206,7 +4258,17 @@ fn apiDbPoolStats(app: *App, res: *httpz.Response) !void {
 // =================================================================
 // V1 PUBLIC API (X-API-Key auth, used by external scripts)
 // =================================================================
-const SQL_DB_ROOT = "/data/data/com.termux/files/home/data/dbs";
+// Project SQLite DB root, resolved from HOME once via paths.zig (P1-1).
+const sql_db_root_rel = "data/dbs";
+var sql_db_root_buf: [std.fs.max_path_bytes]u8 = undefined;
+var sql_db_root_slice: ?[]const u8 = null;
+
+fn sqlDbRoot() []const u8 {
+    if (sql_db_root_slice) |p| return p;
+    const p = fspaths.join(&sql_db_root_buf, sql_db_root_rel);
+    sql_db_root_slice = p;
+    return p;
+}
 
 fn handleV1(app: *App, req: *httpz.Request, res: *httpz.Response, path: []const u8) !void {
     // GitHub webhook is unauthenticated at the X-API-Key layer - it's HMAC-verified per project.
@@ -4683,7 +4745,11 @@ fn mcpToolGetSystemInfo(app: *App, res: *httpz.Response, id_json: []const u8) !v
     try w.print("Uptime: {d}s\n", .{std.time.timestamp() - app.started_at});
 
     // Shell out for /proc info (mem + disk) - cheap and self-contained.
-    const cmd = "free -m | awk '/^Mem:/ {print \"mem_total_mb=\"$2\" mem_avail_mb=\"$7}'; df -h /data/data/com.termux/files/home | awk 'NR==2 {print \"disk_used=\"$3\" disk_avail=\"$4\" disk_pct=\"$5}'";
+    const cmd = try std.mem.concat(res.arena, u8, &.{
+        "free -m | awk '/^Mem:/ {print \"mem_total_mb=\"$2\" mem_avail_mb=\"$7}'; df -h ",
+        fspaths.home(),
+        " | awk 'NR==2 {print \"disk_used=\"$3\" disk_avail=\"$4\" disk_pct=\"$5}'",
+    });
     var argv = [_][]const u8{ "sh", "-c", cmd };
     var child = std.process.Child.init(&argv, app.allocator);
     child.stdout_behavior = .Pipe;
@@ -4938,7 +5004,8 @@ fn mcpToolReadProjectLog(app: *App, res: *httpz.Response, id_json: []const u8, a
     var n: usize = 200;
     if (mcpArgInt(args, "lines")) |v| n = @min(@as(usize, @intCast(@max(v, 1))), 2000);
 
-    const path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/{s}", .{ id, log_name });
+    const work = try projects.Manager.workingDir(res.arena, id);
+    const path = try std.fmt.allocPrint(res.arena, "{s}/logs/{s}", .{ work, log_name });
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         try mcpJsonToolText(res, id_json, "log not found", true);
         return;
@@ -5077,7 +5144,7 @@ fn mcpToolDbQuery(app: *App, res: *httpz.Response, id_json: []const u8, args: st
             return;
         }
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, pid });
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), pid });
     const out = try runSqliteQuery(res.arena, db_path, sql);
     try mcpJsonToolText(res, id_json, out, false);
 }
@@ -5092,7 +5159,7 @@ fn mcpToolDbListTables(app: *App, res: *httpz.Response, id_json: []const u8, arg
         try mcpJsonToolText(res, id_json, "invalid project_id", true);
         return;
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, pid });
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), pid });
     const sql = "SELECT name, (SELECT COUNT(*) FROM pragma_table_info(m.name)) AS col_count FROM sqlite_master m WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
     const out = try runSqliteQuery(res.arena, db_path, sql);
     try mcpJsonToolText(res, id_json, out, false);
@@ -5185,7 +5252,8 @@ fn mcpToolSearchAudit(app: *App, res: *httpz.Response, id_json: []const u8, args
     if (mcpArgInt(args, "limit")) |v| n = @min(@as(usize, @intCast(@max(v, 1))), 500);
     const filter = mcpArgString(args, "action_contains");
 
-    const path = "/data/data/com.termux/files/home/data/audit.jsonl";
+    var ap_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = fspaths.join(&ap_buf, "data/audit.jsonl");
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         try mcpJsonToolText(res, id_json, "(no audit log yet)", false);
         return;
@@ -5507,7 +5575,8 @@ fn mcpToolTailBuildLog(app: *App, res: *httpz.Response, id_json: []const u8, arg
             if (n > 0 and n <= 2000) max_lines = @intCast(n);
         }
     }
-    const path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/build.log", .{id});
+    const work = try projects.Manager.workingDir(res.arena, id);
+    const path = try std.fmt.allocPrint(res.arena, "{s}/logs/build.log", .{work});
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         try mcpJsonToolText(res, id_json, "{\"lines\":[],\"complete\":false,\"note\":\"log_not_found\"}", false);
         return;
@@ -5581,8 +5650,8 @@ fn mcpToolGetDbUrl(app: *App, res: *httpz.Response, id_json: []const u8, args: s
     const w = out.writer();
     if (proj.db_mode == .sqlite) {
         try w.print(
-            \\{{"db_mode":"sqlite","url":"file:/data/data/com.termux/files/home/data/dbs/{s}.db"}}
-        , .{pid});
+            \\{{"db_mode":"sqlite","url":"file:{s}/{s}.db"}}
+        , .{ sqlDbRoot(), pid });
         try mcpJsonToolText(res, id_json, out.items, false);
         return;
     }
@@ -6553,11 +6622,11 @@ fn v1Execute(app: *App, req: *httpz.Request, res: *httpz.Response, rec: apikey.R
         return;
     }
 
-    // Build absolute path under SQL_DB_ROOT
-    std.fs.makeDirAbsolute(SQL_DB_ROOT) catch {};
-    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ SQL_DB_ROOT, p.db });
+    // Build absolute path under sqlDbRoot()
+    std.fs.makeDirAbsolute(sqlDbRoot()) catch {};
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), p.db });
     // p.db has already passed the [a-z0-9_-] regex above, so it cannot escape
-    // SQL_DB_ROOT via traversal or symlinks. No further pathsafe check needed.
+    // sqlDbRoot() via traversal or symlinks. No further pathsafe check needed.
 
     // Use a one-shot subprocess against the requested DB (the pool is bound to
     // cache.db only). Output as JSON via .mode json so the client gets a
@@ -6766,7 +6835,7 @@ fn hourlyBackupLoop() void {
     // We do not want the first backup running during boot when projects are
     // still respawning.
     std.Thread.sleep(5 * 60 * std.time.ns_per_s);
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
 
     while (true) {
         // Build the script path each loop so it's always fresh
@@ -6830,7 +6899,7 @@ fn watchdogSentinelLoop() void {
     // Wait 60s after boot so the boot script has time to start the watchdog
     // before we check (and avoid double-starting it).
     std.Thread.sleep(60 * std.time.ns_per_s);
-    const home = std.posix.getenv("HOME") orelse "/data/data/com.termux/files/home";
+    const home = fspaths.home();
     const allocator = std.heap.page_allocator;
     const script = std.fmt.allocPrint(allocator, "{s}/watchdog.sh", .{home}) catch return;
     defer allocator.free(script);
@@ -8813,8 +8882,8 @@ fn apiProjectsSql(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     // Run via one-shot sqlite3 against ~/data/dbs/<project_id>.db with
     // .mode json so the result comes back as JSON rows.
-    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{p.project_id});
-    std.fs.makeDirAbsolute("/data/data/com.termux/files/home/data/dbs") catch {};
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), p.project_id });
+    std.fs.makeDirAbsolute(sqlDbRoot()) catch {};
 
     var script = std.ArrayList(u8).init(res.arena);
     try script.appendSlice(".mode json\n");
@@ -9093,7 +9162,8 @@ fn previewRepoCore(
     }
     const eff_branch = if (branch.len == 0) "main" else branch;
 
-    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    var tmp_root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_root = fspaths.join(&tmp_root_buf, ".tmp-preview");
     std.fs.makeDirAbsolute(tmp_root) catch {};
     var rand: [8]u8 = undefined;
     std.crypto.random.bytes(&rand);
@@ -9153,7 +9223,8 @@ fn analyzeRepoCore(
     }
     const eff_branch = if (branch.len == 0) "main" else branch;
 
-    const tmp_root = "/data/data/com.termux/files/home/.tmp-preview";
+    var tmp_root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_root = fspaths.join(&tmp_root_buf, ".tmp-preview");
     std.fs.makeDirAbsolute(tmp_root) catch {};
     var rand: [8]u8 = undefined;
     std.crypto.random.bytes(&rand);
@@ -9323,7 +9394,7 @@ fn apiProjectsUsers(app: *App, req: *httpz.Request, res: *httpz.Response) !void 
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{id});
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), id });
     // Check db file exists
     std.fs.accessAbsolute(db_path, .{}) catch {
         try res.json(.{ .ok = true, .users = &[_]u8{} }, .{});
@@ -9384,7 +9455,7 @@ fn apiProjectsTables(app: *App, req: *httpz.Request, res: *httpz.Response) !void
         try res.json(.{ .ok = false, .err = "invalid_id" }, .{});
         return;
     }
-    const db_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/dbs/{s}.db", .{id});
+    const db_path = try std.fmt.allocPrint(res.arena, "{s}/{s}.db", .{ sqlDbRoot(), id });
     std.fs.accessAbsolute(db_path, .{}) catch {
         try res.json(.{ .ok = true, .tables = &[_]u8{} }, .{});
         return;
@@ -9453,7 +9524,8 @@ fn apiProjectsLogStream(app: *App, req: *httpz.Request, res: *httpz.Response) !v
     else
         "build.log";
 
-    const log_path = try std.fmt.allocPrint(res.arena, "/data/data/com.termux/files/home/data/projects/{s}/logs/{s}", .{ id, log_name });
+    const work = try projects.Manager.workingDir(res.arena, id);
+    const log_path = try std.fmt.allocPrint(res.arena, "{s}/logs/{s}", .{ work, log_name });
 
     res.header("Content-Type", "text/event-stream");
     res.header("Cache-Control", "no-cache");
