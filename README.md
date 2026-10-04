@@ -1,3 +1,5 @@
+> **Discontinued.** This repository is archived and no longer maintained. The Zig single-binary version of rofihosted was replaced by a server on a Samsung Galaxy Tab A8 (Ubuntu in proot, a private AI assistant per person), which lives in the repository rofiperlungoding/gtawifi-vps (private). The domain rofihosted.space now serves that version. Earlier ancestor: aquos-panel.
+
 # rofihosted
 
 A self-hosted personal cloud platform that runs on a single Android handset and
